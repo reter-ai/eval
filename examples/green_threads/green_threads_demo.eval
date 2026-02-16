@@ -1,0 +1,37 @@
+// green_threads_demo.eval — Cooperative green threads with checkpointing
+//
+// This file defines the scheduler and runs several thread demos.
+// Serialization/deserialization is handled by the Python loader
+// (run_demo.py) since continuation calls are non-local jumps that
+// require orchestration from outside the Eval compilation unit.
+
+// ─────────────────────────────────────────────────────────────────
+// Scheduler (trampoline — yield jumps back to sched_k)
+// ─────────────────────────────────────────────────────────────────
+
+threads := [];
+sched_k := false;
+
+spawn := function(name, thunk) {
+    threads = append(threads, [thunk]);
+};
+
+run := function() {
+    callcc(function(sk) { sched_k = sk; });
+    while(length(threads) > 0) {
+        t := car(threads);
+        threads = cdr(threads);
+        t();
+    };
+};
+
+yield := function(name) {
+    callcc(function(k) {
+        spawn(name, function() k(false));
+        sched_k(false);
+    });
+};
+
+freeze := function() {
+    callcc(function(k) k);
+};

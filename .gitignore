@@ -1,0 +1,33 @@
+# Build artifacts
+build/
+dist/
+*.egg-info/
+_skbuild/
+
+# Compiled extensions
+*.so
+*.pyd
+*.dll
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Generated at build time
+chibi_eval/_lib/
+chibi_eval/_scheme_lib/
+
+# IDE
+.vscode/
+.idea/
+
+# Test/cache
+.pytest_cache/
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.bak

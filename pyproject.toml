@@ -1,0 +1,29 @@
+[build-system]
+requires = ["scikit-build-core>=0.10"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "chibi-eval"
+version = "0.1.0"
+requires-python = ">=3.10"
+description = "Eval language interpreter with Python interop, powered by chibi-scheme"
+license = "MIT"
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Programming Language :: C",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+[tool.scikit-build]
+wheel.packages = ["chibi_eval"]
+cmake.build-type = "Release"

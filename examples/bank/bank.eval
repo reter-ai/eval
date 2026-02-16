@@ -1,0 +1,80 @@
+// bank.eval — Bank manager with portfolio operations
+//
+// Demonstrates: higher-order functions, fold/map/filter,
+//               error handling, delegation, closures over collections
+
+// --- Transfer helper (standalone function) ---
+
+transfer := function(from_acct, to_acct, amount) {
+    from_acct->withdraw(amount);
+    to_acct->deposit(amount);
+    amount;
+};
+
+// --- Bank: manages a collection of accounts ---
+
+Bank := constructor(name) {
+    accounts := [];
+    next_id := 1;
+
+    find_by_id := function(id) {
+        result := filter(function(entry) car(entry) == id, accounts);
+        if(length(result) == 0)
+            error("bank: account not found");
+        car(result);
+    };
+
+    interface(
+        name: function() name,
+
+        // Open a new account, returns its ID
+        open_account: function(acct) {
+            id := next_id;
+            next_id = next_id + 1;
+            accounts = append(accounts, [[id, acct]]);
+            id;
+        },
+
+        // Look up account by ID
+        get_account: function(id) {
+            entry := find_by_id(id);
+            car(cdr(entry));
+        },
+
+        // Number of accounts
+        num_accounts: function() length(accounts),
+
+        // Total assets under management
+        total_assets: function()
+            fold(+, 0, map(function(entry)
+                car(cdr(entry))->balance(), accounts)),
+
+        // Transfer between two accounts by ID
+        transfer: function(from_id, to_id, amount) {
+            from_acct := car(cdr(find_by_id(from_id)));
+            to_acct   := car(cdr(find_by_id(to_id)));
+            transfer(from_acct, to_acct, amount);
+        },
+
+        // All account summaries: [[id, owner, type, balance], ...]
+        summary: function()
+            map(function(entry) {
+                id   := car(entry);
+                acct := car(cdr(entry));
+                [id, acct->owner(), acct->type(), acct->balance()];
+            }, accounts),
+
+        // Find accounts with balance above threshold
+        wealthy_accounts: function(threshold)
+            filter(function(entry)
+                car(cdr(entry))->balance() >= threshold, accounts),
+
+        // Apply interest to all savings accounts
+        accrue_all_interest: function() {
+            savings := filter(function(entry)
+                car(cdr(entry))->type() == "SavingsAccount", accounts);
+            map(function(entry)
+                car(cdr(entry))->accrue_interest(), savings);
+        }
+    );
+};

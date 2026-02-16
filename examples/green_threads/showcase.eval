@@ -1,0 +1,311 @@
+// ================================================================
+// Green Threads & Serialized Continuations -- Pure Eval Demo
+// ================================================================
+//
+// Everything runs in Eval. The Python loader just loads this file.
+//
+// Demonstrates:
+//   1. Cooperative multitasking with round-robin scheduling
+//   2. Producer-transformer-consumer pipeline
+//   3. Freezing a thread and serializing its continuation to bytes
+//   4. Multiple resumes from the same serialized snapshot
+//
+// Usage:  python examples/green_threads/run_showcase.py
+
+// --- Utilities ------------------------------------------------
+
+n2s := `number->string`;
+cat := `string-append`;
+say := function(s) { display(s); newline(); };
+
+// --- Cooperative Scheduler ------------------------------------
+//
+// Trampoline-based round-robin scheduler using continuations.
+// yield(name) suspends the current thread and re-enters the
+// scheduler loop, which picks the next thread from the queue.
+
+threads := [];
+sched_k := false;
+
+spawn := function(name, thunk) {
+    threads = append(threads, [thunk]);
+};
+
+run := function() {
+    callcc(function(sk) { sched_k = sk; });
+    while(length(threads) > 0) {
+        t := car(threads);
+        threads = cdr(threads);
+        t();
+    };
+};
+
+yield := function(name) {
+    callcc(function(k) {
+        spawn(name, function() k(false));
+        sched_k(false);
+    });
+};
+
+freeze := function() {
+    callcc(function(k) k);
+};
+
+reset := function() {
+    threads = [];
+    sched_k = false;
+};
+
+
+// ================================================================
+//  Demo 1 -- Round-Robin Thread Interleaving
+// ================================================================
+
+say("");
+say("==========================================================");
+say("  Demo 1: Round-Robin Thread Interleaving");
+say("==========================================================");
+say("");
+say("  Three threads take turns via yield.");
+say("  Jazz finishes early; Fizz and Buzz continue without it.");
+say("");
+
+log1 := [];
+
+spawn("fizz", function() {
+    i := 1;
+    while(i <= 4) {
+        log1 = append(log1, [cat("    fizz ", n2s(i))]);
+        yield("fizz");
+        i = i + 1;
+    };
+});
+
+spawn("buzz", function() {
+    i := 1;
+    while(i <= 4) {
+        log1 = append(log1, [cat("    buzz ", n2s(i))]);
+        yield("buzz");
+        i = i + 1;
+    };
+});
+
+spawn("jazz", function() {
+    i := 1;
+    while(i <= 2) {
+        log1 = append(log1, [cat("    jazz ", n2s(i))]);
+        yield("jazz");
+        i = i + 1;
+    };
+    log1 = append(log1, ["    jazz done"]);
+});
+
+run();
+
+k := 0;
+while(k < length(log1)) {
+    say(`list-ref`(log1, k));
+    k = k + 1;
+};
+
+
+// ================================================================
+//  Demo 2 -- Producer -> Transformer -> Consumer Pipeline
+// ================================================================
+
+say("");
+say("==========================================================");
+say("  Demo 2: Producer -> Transformer -> Consumer Pipeline");
+say("==========================================================");
+say("");
+say("  Three threads form a data pipeline:");
+say("    producer -> inbox -> transformer -> outbox -> consumer");
+say("");
+
+reset();
+
+inbox := [];
+outbox := [];
+collected := [];
+p_done := false;
+t_done := false;
+
+spawn("producer", function() {
+    items := [1, 2, 3, 4, 5];
+    i := 0;
+    while(i < length(items)) {
+        x := `list-ref`(items, i);
+        inbox = append(inbox, [x]);
+        say(cat("    [producer]    put ", n2s(x)));
+        yield("producer");
+        i = i + 1;
+    };
+    p_done = true;
+    say("    [producer]    done");
+});
+
+spawn("transformer", function() {
+    while(!p_done || length(inbox) > 0) {
+        if(length(inbox) > 0) {
+            x := car(inbox);
+            inbox = cdr(inbox);
+            y := x * 100;
+            outbox = append(outbox, [y]);
+            say(cat("    [transform]   ", n2s(x), " * 100 = ", n2s(y)));
+        };
+        yield("transformer");
+    };
+    t_done = true;
+    say("    [transform]   done");
+});
+
+spawn("consumer", function() {
+    while(!t_done || length(outbox) > 0) {
+        if(length(outbox) > 0) {
+            x := car(outbox);
+            outbox = cdr(outbox);
+            collected = append(collected, [x]);
+            say(cat("    [consumer]    got ", n2s(x)));
+        };
+        yield("consumer");
+    };
+    say("    [consumer]    done");
+});
+
+run();
+
+say("");
+display("    Result: ");
+display(collected);
+newline();
+
+
+// ================================================================
+//  Demo 3 -- Freeze + Serialize + Resume
+// ================================================================
+
+say("");
+say("==========================================================");
+say("  Demo 3: Freeze + Serialize + Resume");
+say("==========================================================");
+say("");
+say("  A worker thread freezes mid-execution. Its continuation");
+say("  is serialized to bytes and resumed -- all from Eval.");
+say("");
+
+reset();
+
+log3 := [];
+frozen3 := false;
+blob3 := false;
+demo3_phase := "run";
+log3_snap := 0;
+
+spawn("worker", function() {
+    log3 = append(log3, ["    [worker]   step 1: computing"]);
+    yield("worker");
+    log3 = append(log3, ["    [worker]   step 2: checkpoint"]);
+
+    frozen3 = freeze();
+
+    if(`procedure?`(frozen3)) {
+        log3 = append(log3, ["    [worker]   ** checkpoint captured **"]);
+    } else {
+        log3 = append(log3, [cat("    [worker]   ** resumed: ", frozen3, " **")]);
+    };
+
+    log3 = append(log3, ["    [worker]   step 3: done"]);
+});
+
+spawn("observer", function() {
+    log3 = append(log3, ["    [observer] watching"]);
+    yield("observer");
+    log3 = append(log3, ["    [observer] done"]);
+});
+
+run();
+
+// First time: serialize and resume. After resume: run() returns
+// here again, but demo3_phase is "resumed" so we skip.
+
+if(demo3_phase == "run") {
+    say("  First run:");
+    k := 0;
+    while(k < length(log3)) {
+        say(`list-ref`(log3, k));
+        k = k + 1;
+    };
+    say("");
+
+    blob3 = serialize_continuation(frozen3);
+    say(cat("  Serialized checkpoint: ",
+            n2s(`bytevector-length`(blob3)), " bytes"));
+
+    log3_snap = length(log3);
+    demo3_phase = "resumed";
+
+    k3 := deserialize_continuation(blob3);
+    say("  Resuming from deserialized continuation...");
+    k3("RESTORED");
+};
+
+if(demo3_phase == "resumed") {
+    say("");
+    say("  New log entries after resume:");
+    k := log3_snap;
+    while(k < length(log3)) {
+        say(`list-ref`(log3, k));
+        k = k + 1;
+    };
+};
+
+
+// ================================================================
+//  Demo 4 -- Multiple Resumes from Same Snapshot
+// ================================================================
+
+say("");
+say("==========================================================");
+say("  Demo 4: Multiple Resumes from Same Snapshot");
+say("==========================================================");
+say("");
+say("  A continuation is serialized once. Each resume doubles");
+say("  the value, producing: 1 -> 2 -> 4 -> 8 -> 16 -> 32");
+say("");
+
+reset();
+
+saved4 := false;
+blob4 := false;
+count4 := 0;
+
+val4 := callcc(function(k) {
+    saved4 = k;
+    1;
+});
+
+count4 = count4 + 1;
+
+if(count4 == 1) {
+    blob4 = serialize_continuation(saved4);
+    say(cat("    Serialized: ",
+            n2s(`bytevector-length`(blob4)), " bytes"));
+    say(cat("    Initial value: ", n2s(val4)));
+    say("");
+    k4 := deserialize_continuation(blob4);
+    k4(val4 * 2);
+} else {
+    if(count4 <= 5) {
+        say(cat("    Resume #", n2s(count4 - 1), ": ", n2s(val4)));
+        k4 := deserialize_continuation(blob4);
+        k4(val4 * 2);
+    } else {
+        say(cat("    Resume #", n2s(count4 - 1),
+                ": ", n2s(val4), "  (final)"));
+    };
+};
+
+say("");
+say("==========================================================");
+say("  All demos complete!");
+say("==========================================================");

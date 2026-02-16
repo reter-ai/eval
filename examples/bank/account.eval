@@ -1,0 +1,116 @@
+// account.eval — Bank account hierarchy
+//
+// Demonstrates: constructor, interface, closures, higher-order functions
+
+// --- Base Account ---
+
+Account := constructor(owner, initial_balance) {
+    bal := initial_balance;
+    log := [];
+
+    push_log := function(kind, amount) {
+        log = append(log, [[kind, amount, bal]]);
+    };
+
+    interface(
+        owner:    function() owner,
+        balance:  function() bal,
+
+        deposit: function(amount) {
+            if(amount <= 0) error("deposit: amount must be positive");
+            bal = bal + amount;
+            push_log("deposit", amount);
+            bal;
+        },
+
+        withdraw: function(amount) {
+            if(amount <= 0) error("withdraw: amount must be positive");
+            if(amount > bal) error("withdraw: insufficient funds");
+            bal = bal - amount;
+            push_log("withdraw", amount);
+            bal;
+        },
+
+        history: function() log,
+        type:    function() "Account"
+    );
+};
+
+// --- Savings Account (earns interest, enforces minimum balance) ---
+
+SavingsAccount := constructor(owner, initial_balance, rate) {
+    base := Account(owner, initial_balance);
+    min_bal := 100;
+
+    interface(
+        owner:   function() base->owner(),
+        balance: function() base->balance(),
+        history: function() base->history(),
+        type:    function() "SavingsAccount",
+
+        deposit: function(amount) base->deposit(amount),
+
+        withdraw: function(amount) {
+            if(base->balance() - amount < min_bal)
+                error("savings: would drop below minimum balance");
+            base->withdraw(amount);
+        },
+
+        rate: function() rate,
+
+        accrue_interest: function() {
+            interest := base->balance() * rate;
+            base->deposit(interest);
+            interest;
+        },
+
+        min_balance: function() min_bal
+    );
+};
+
+// --- Checking Account (allows overdraft) ---
+
+CheckingAccount := constructor(owner, initial_balance, limit) {
+    base := Account(owner, initial_balance);
+    overdraft_used := 0;
+
+    interface(
+        owner:   function() base->owner(),
+        balance: function() base->balance() - overdraft_used,
+        history: function() base->history(),
+        type:    function() "CheckingAccount",
+
+        deposit: function(amount) {
+            if(amount <= 0) error("deposit: amount must be positive");
+            // First repay overdraft, then deposit remainder
+            if(overdraft_used > 0) {
+                repay := if(amount >= overdraft_used) overdraft_used else amount;
+                overdraft_used = overdraft_used - repay;
+                remainder := amount - repay;
+                if(remainder > 0) base->deposit(remainder);
+                base->balance() - overdraft_used;
+            } else {
+                base->deposit(amount);
+            };
+        },
+
+        withdraw: function(amount) {
+            if(amount <= 0) error("withdraw: amount must be positive");
+            available := base->balance() + limit - overdraft_used;
+            if(amount > available) error("checking: exceeds overdraft limit");
+            if(amount <= base->balance()) {
+                base->withdraw(amount);
+                base->balance() - overdraft_used;
+            } else {
+                // Use up real balance first, then overdraft
+                from_balance := base->balance();
+                if(from_balance > 0) base->withdraw(from_balance);
+                overdraft_used = overdraft_used + (amount - from_balance);
+                base->balance() - overdraft_used;
+            };
+        },
+
+        overdraft_limit: function() limit,
+        overdraft_used:  function() overdraft_used
+    );
+};

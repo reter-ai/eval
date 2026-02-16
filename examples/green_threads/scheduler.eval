@@ -1,0 +1,47 @@
+// scheduler.eval — Cooperative green thread scheduler
+//
+// Implements cooperative multitasking using continuations (call/cc).
+// Threads yield control explicitly; the scheduler round-robins between them.
+//
+// Uses a trampoline design: yield jumps directly back to the scheduler
+// loop (via sched_k continuation) instead of recursively calling run().
+
+threads := [];
+
+// The scheduler's own continuation — yield jumps here.
+sched_k := false;
+
+// Add a thunk to the run queue.
+spawn := function(name, thunk) {
+    threads = append(threads, [thunk]);
+};
+
+// Run all threads until the queue is empty.
+// Sets up a re-entry point (sched_k) so yield can jump back here.
+run := function() {
+    callcc(function(sk) { sched_k = sk; });
+    // We land here both on first call and after each yield.
+    while(length(threads) > 0) {
+        t := car(threads);
+        threads = cdr(threads);
+        t();
+    };
+};
+
+// Yield control to the next thread.
+// Saves the current continuation, re-enqueues it, and jumps
+// back to the scheduler loop.
+yield := function(name) {
+    callcc(function(k) {
+        spawn(name, function() k(false));
+        sched_k(false);
+    });
+};
+
+// Capture the current continuation and return it.
+// First call returns the continuation object itself.
+// When that continuation is later invoked with a value, freeze()
+// returns that value instead.
+freeze := function() {
+    callcc(function(k) k);
+};

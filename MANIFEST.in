@@ -1,0 +1,12 @@
+include CMakeLists.txt
+include pyproject.toml
+recursive-include src *.c *.h *.y
+recursive-include chibi_eval *.py *.sld *.scm *.eval *.evld
+recursive-include chibi-scheme *.c *.h *.scm *.sld *.txt
+include chibi-scheme/VERSION
+include chibi-scheme/RELEASE
+include chibi-scheme/include/chibi/install.h.in
+prune chibi-scheme/.git
+prune chibi-scheme/tests
+prune chibi-scheme/benchmarks
+prune chibi-scheme/doc

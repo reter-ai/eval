@@ -1,0 +1,22 @@
+Third-Party Software Notices
+============================
+
+This project includes or depends on the following third-party software:
+
+
+1. chibi-scheme
+   -----------
+   Directory: chibi-scheme/
+   License: BSD-3-Clause
+   Copyright (c) 2009-2021 Alex Shinn
+
+   The full license text is in chibi-scheme/COPYING.
+
+
+2. Lemon Parser Generator
+   -----------------------
+   Files: tools/lemon.c, tools/lempar.c
+   License: Public Domain
+
+   "The author of this program disclaims copyright."
+   "The author disclaims copyright to this source code."
