@@ -677,6 +677,12 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
         "        (else (future-result x))))))",
         -1, self->env);
 
+    /* Reactive runtime: Signal, Computed, Effect, batch, dispose */
+    {
+        extern void eval_reactive_runtime(sexp ctx, sexp env);
+        eval_reactive_runtime(self->ctx, self->env);
+    }
+
     self->initialized = 1;
     return 0;
 }

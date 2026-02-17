@@ -281,6 +281,12 @@ static sexp init_context(const char *extra_module_dir) {
     /* OO wrappers for Pool/Channel/Future (need pool-submit arity 2) */
     eval_oo_wrappers(ctx, env);
 
+    /* Reactive runtime: Signal, Computed, Effect, batch, dispose */
+    {
+        extern void eval_reactive_runtime(sexp ctx, sexp env);
+        eval_reactive_runtime(ctx, env);
+    }
+
     return ctx;
 }
 

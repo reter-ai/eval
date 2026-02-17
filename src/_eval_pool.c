@@ -1386,6 +1386,410 @@ static void eval_oo_wrappers(sexp ctx, sexp env) {
         -1, env);
 }
 
+/* ================================================================
+ * Reactive runtime: Signal, Computed, Effect, batch, dispose
+ * ================================================================ */
+
+void eval_reactive_runtime(sexp ctx, sexp env) {
+
+    /* --- ID generator (no gensym in chibi) --- */
+    sexp_eval_string(ctx,
+        "(define __reactive-id-counter__ 0)", -1, env);
+    sexp_eval_string(ctx,
+        "(define (__reactive-gensym__ prefix)"
+        "  (set! __reactive-id-counter__ (+ __reactive-id-counter__ 1))"
+        "  (string-append prefix (number->string __reactive-id-counter__)))",
+        -1, env);
+
+    /* --- Auto-tracking parameter (thread-local via make-parameter) --- */
+    sexp_eval_string(ctx,
+        "(define __current-observer__ (make-parameter #f))", -1, env);
+
+    /* --- Batch state --- */
+    sexp_eval_string(ctx,
+        "(define __reactive-batch-depth__ 0)", -1, env);
+    sexp_eval_string(ctx,
+        "(define __reactive-batch-queue__ '())", -1, env);
+
+    /* --- Notify: mark downstream dirty and schedule effects --- */
+    sexp_eval_string(ctx,
+        "(define (__reactive-notify__ observers)"
+        "  (for-each"
+        "    (lambda (node)"
+        "      (node '__mark-dirty!__))"
+        "    observers))", -1, env);
+
+    /* --- Schedule an effect for batched flush (dedup by id) --- */
+    sexp_eval_string(ctx,
+        "(define (__reactive-schedule-effect__ node)"
+        "  (let ((nid (node 'id)))"
+        "    (if (not (find (lambda (pair) (equal? (cdr pair) node))"
+        "                   __reactive-batch-queue__))"
+        "      (let ((level (node 'level)))"
+        "        (set! __reactive-batch-queue__"
+        "          (cons (cons level node) __reactive-batch-queue__))))))",
+        -1, env);
+
+    /* --- Flush: sort by level, run each --- */
+    sexp_eval_string(ctx,
+        "(define (__reactive-flush__)"
+        "  (let loop ()"
+        "    (if (null? __reactive-batch-queue__) (if #f #f)"
+        "      (let ((q (sort __reactive-batch-queue__"
+        "                 (lambda (a b) (< (car a) (car b))))))"
+        "        (set! __reactive-batch-queue__ '())"
+        "        (for-each"
+        "          (lambda (pair)"
+        "            (let ((node (cdr pair)))"
+        "              (node '__run!__)))"
+        "          q)"
+        "        (if (not (null? __reactive-batch-queue__))"
+        "            (loop))))))", -1, env);
+
+    /* --- Signal --- */
+    sexp_eval_string(ctx,
+        "(define (Signal initial-value)"
+        "  (let ((value initial-value)"
+        "        (observers (make-hash-table))"
+        "        (id (__reactive-gensym__ \"sig\")))"
+        "    (letrec"
+        "      ((notify!"
+        "        (lambda ()"
+        "          (let ((obs (hash-table-values observers)))"
+        "            (if (null? obs) (if #f #f)"
+        "              (begin"
+        "                (if (= __reactive-batch-depth__ 0)"
+        "                  (begin"
+        "                    (set! __reactive-batch-depth__ 1)"
+        "                    (__reactive-notify__ obs)"
+        "                    (set! __reactive-batch-depth__ 0)"
+        "                    (__reactive-flush__))"
+        "                  (__reactive-notify__ obs)))))))"
+        "       (self"
+        "        (lambda args"
+        "          (if (null? args)"
+        "            (begin"
+        "              (let ((obs (__current-observer__)))"
+        "                (if obs ((obs 'register-source) self)))"
+        "              value)"
+        "            (let ((msg (car args)))"
+        "              (cond"
+        "                ((eq? msg 'set)"
+        "                 (lambda (new-val)"
+        "                   (if (not (equal? value new-val))"
+        "                     (begin (set! value new-val)"
+        "                            (notify!)))))"
+        "                ((eq? msg 'update)"
+        "                 (lambda (fn)"
+        "                   (let ((new-val (fn value)))"
+        "                     (if (not (equal? value new-val))"
+        "                       (begin (set! value new-val)"
+        "                              (notify!))))))"
+        "                ((eq? msg 'peek) value)"
+        "                ((eq? msg 'add-observer)"
+        "                 (lambda (obs-id node)"
+        "                   (hash-table-set! observers obs-id node)))"
+        "                ((eq? msg 'remove-observer)"
+        "                 (lambda (obs-id)"
+        "                   (hash-table-delete! observers obs-id)))"
+        "                ((eq? msg 'observers)"
+        "                 (hash-table-values observers))"
+        "                ((eq? msg 'level) 0)"
+        "                ((eq? msg 'id) id)"
+        "                ((eq? msg '__type__) '__signal__)"
+        "                ((eq? msg 'close) (lambda ()"
+        "                  (for-each (lambda (k) (hash-table-delete! observers k))"
+        "                    (hash-table-keys observers))))"
+        "                ((eq? msg 'dispose) (lambda ()"
+        "                  (for-each (lambda (k) (hash-table-delete! observers k))"
+        "                    (hash-table-keys observers))))"
+        "                (else (error \"Signal: unknown message\" msg))))))))"
+        "      self)))", -1, env);
+
+    /* --- Computed --- */
+    sexp_eval_string(ctx,
+        "(define (Computed fn)"
+        "  (let ((value #f)"
+        "        (dirty #t)"
+        "        (computing #f)"
+        "        (disposed #f)"
+        "        (sources (make-hash-table))"
+        "        (observers (make-hash-table))"
+        "        (id (__reactive-gensym__ \"comp\"))"
+        "        (level 1))"
+        "    (letrec"
+        "      ((unsubscribe-all!"
+        "        (lambda ()"
+        "          (for-each"
+        "            (lambda (src)"
+        "              ((src 'remove-observer) id))"
+        "            (hash-table-values sources))"
+        "          (let ((ht (make-hash-table)))"
+        "            (set! sources ht))))"
+        "       (recompute!"
+        "        (lambda ()"
+        "          (if computing (error \"Computed: circular dependency\" id))"
+        "          (set! computing #t)"
+        "          (unsubscribe-all!)"
+        "          (set! level 1)"
+        "          (let ((new-val"
+        "                 (protect (e (else"
+        "                   (set! computing #f)"
+        "                   (set! dirty #t)"
+        "                   (raise e)))"
+        "                   (parameterize ((__current-observer__ self))"
+        "                     (fn)))))"
+        "            (set! computing #f)"
+        "            (set! dirty #f)"
+        "            (let ((changed (not (equal? value new-val))))"
+        "              (set! value new-val)"
+        "              changed))))"
+        "       (self"
+        "        (lambda args"
+        "          (if (null? args)"
+        "            (begin"
+        "              (if (and dirty (not disposed))"
+        "                (recompute!))"
+        "              (let ((obs (__current-observer__)))"
+        "                (if obs ((obs 'register-source) self)))"
+        "              value)"
+        "            (let ((msg (car args)))"
+        "              (cond"
+        "                ((eq? msg 'register-source)"
+        "                 (lambda (src)"
+        "                   (let ((src-id (src 'id)))"
+        "                     (if (not (hash-table-exists? sources src-id))"
+        "                       (begin"
+        "                         (hash-table-set! sources src-id src)"
+        "                         ((src 'add-observer) id self)"
+        "                         (let ((sl (src 'level)))"
+        "                           (if (>= sl level)"
+        "                             (set! level (+ sl 1)))))))))"
+        "                ((eq? msg '__mark-dirty!__)"
+        "                 (if (not dirty)"
+        "                   (begin"
+        "                     (set! dirty #t)"
+        "                     (__reactive-notify__"
+        "                       (hash-table-values observers)))))"
+        "                ((eq? msg '__run!__)"
+        "                 (if (and dirty (not disposed))"
+        "                   (let ((changed (recompute!)))"
+        "                     (if changed"
+        "                       (__reactive-notify__"
+        "                         (hash-table-values observers))))))"
+        "                ((eq? msg 'add-observer)"
+        "                 (lambda (obs-id node)"
+        "                   (hash-table-set! observers obs-id node)))"
+        "                ((eq? msg 'remove-observer)"
+        "                 (lambda (obs-id)"
+        "                   (hash-table-delete! observers obs-id)))"
+        "                ((eq? msg 'level) level)"
+        "                ((eq? msg 'id) id)"
+        "                ((eq? msg '__type__) '__computed__)"
+        "                ((eq? msg 'peek)"
+        "                 (if (and dirty (not disposed))"
+        "                   (recompute!))"
+        "                 value)"
+        "                ((eq? msg 'dirty?) dirty)"
+        "                ((eq? msg 'close) (lambda ()"
+        "                  (set! disposed #t)"
+        "                  (unsubscribe-all!)))"
+        "                ((eq? msg 'dispose) (lambda ()"
+        "                  (set! disposed #t)"
+        "                  (unsubscribe-all!)))"
+        "                (else"
+        "                  (error \"Computed: unknown message\" msg))))))))"
+        "      (protect (e (else (set! computing #f) (set! dirty #t)))"
+        "        (recompute!))"
+        "      self)))", -1, env);
+
+    /* --- Effect --- */
+    sexp_eval_string(ctx,
+        "(define (Effect fn)"
+        "  (let ((cleanup #f)"
+        "        (disposed #f)"
+        "        (sources (make-hash-table))"
+        "        (id (__reactive-gensym__ \"eff\"))"
+        "        (level 1))"
+        "    (letrec"
+        "      ((unsubscribe-all!"
+        "        (lambda ()"
+        "          (for-each"
+        "            (lambda (src)"
+        "              ((src 'remove-observer) id))"
+        "            (hash-table-values sources))"
+        "          (let ((ht (make-hash-table)))"
+        "            (set! sources ht))))"
+        "       (run!"
+        "        (lambda ()"
+        "          (if disposed (if #f #f)"
+        "            (begin"
+        "              (if (procedure? cleanup)"
+        "                (protect (e (else (if #f #f))) (cleanup)))"
+        "              (set! cleanup #f)"
+        "              (unsubscribe-all!)"
+        "              (set! level 1)"
+        "              (let ((result"
+        "                     (parameterize ((__current-observer__ self))"
+        "                       (fn))))"
+        "                (if (procedure? result)"
+        "                  (set! cleanup result)))))))"
+        "       (self"
+        "        (lambda args"
+        "          (if (null? args)"
+        "            (if #f #f)"
+        "            (let ((msg (car args)))"
+        "              (cond"
+        "                ((eq? msg 'register-source)"
+        "                 (lambda (src)"
+        "                   (let ((src-id (src 'id)))"
+        "                     (if (not (hash-table-exists? sources src-id))"
+        "                       (begin"
+        "                         (hash-table-set! sources src-id src)"
+        "                         ((src 'add-observer) id self)"
+        "                         (let ((sl (src 'level)))"
+        "                           (if (>= sl level)"
+        "                             (set! level (+ sl 1)))))))))"
+        "                ((eq? msg '__mark-dirty!__)"
+        "                 (__reactive-schedule-effect__ self))"
+        "                ((eq? msg '__run!__)"
+        "                 (if (not disposed) (run!)))"
+        "                ((eq? msg 'level) level)"
+        "                ((eq? msg 'id) id)"
+        "                ((eq? msg '__type__) '__effect__)"
+        "                ((eq? msg 'close) (lambda ()"
+        "                  (set! disposed #t)"
+        "                  (if (procedure? cleanup)"
+        "                    (protect (e (else (if #f #f))) (cleanup)))"
+        "                  (set! cleanup #f)"
+        "                  (unsubscribe-all!)))"
+        "                ((eq? msg 'dispose) (lambda ()"
+        "                  (set! disposed #t)"
+        "                  (if (procedure? cleanup)"
+        "                    (protect (e (else (if #f #f))) (cleanup)))"
+        "                  (set! cleanup #f)"
+        "                  (unsubscribe-all!)))"
+        "                (else"
+        "                  (error \"Effect: unknown message\" msg))))))))"
+        "      (run!)"
+        "      self)))", -1, env);
+
+    /* --- batch --- */
+    sexp_eval_string(ctx,
+        "(define (batch fn)"
+        "  (set! __reactive-batch-depth__"
+        "    (+ __reactive-batch-depth__ 1))"
+        "  (let ((result"
+        "         (protect (e (else"
+        "           (set! __reactive-batch-depth__"
+        "             (- __reactive-batch-depth__ 1))"
+        "           (if (= __reactive-batch-depth__ 0)"
+        "             (__reactive-flush__))"
+        "           (raise e)))"
+        "           (fn))))"
+        "    (set! __reactive-batch-depth__"
+        "      (- __reactive-batch-depth__ 1))"
+        "    (if (= __reactive-batch-depth__ 0)"
+        "      (__reactive-flush__))"
+        "    result))", -1, env);
+
+    /* --- dispose --- */
+    sexp_eval_string(ctx,
+        "(define (dispose node)"
+        "  ((node 'dispose)))", -1, env);
+
+    /* --- Type predicates --- */
+    sexp_eval_string(ctx,
+        "(define (signal? v)"
+        "  (and (procedure? v)"
+        "       (protect (e (else #f))"
+        "         (eq? (v '__type__) '__signal__))))", -1, env);
+    sexp_eval_string(ctx,
+        "(define (computed? v)"
+        "  (and (procedure? v)"
+        "       (protect (e (else #f))"
+        "         (eq? (v '__type__) '__computed__))))", -1, env);
+    sexp_eval_string(ctx,
+        "(define (effect? v)"
+        "  (and (procedure? v)"
+        "       (protect (e (else #f))"
+        "         (eq? (v '__type__) '__effect__))))", -1, env);
+
+    /* --- untracked: suppress dependency tracking --- */
+    sexp_eval_string(ctx,
+        "(define (untracked fn)"
+        "  (parameterize ((__current-observer__ #f))"
+        "    (fn)))", -1, env);
+
+    /* --- derived: shorthand computed from one signal --- */
+    sexp_eval_string(ctx,
+        "(define (derived src fn)"
+        "  (Computed (lambda () (fn (src)))))", -1, env);
+
+    /* --- readonly: read-only view of a signal/computed --- */
+    sexp_eval_string(ctx,
+        "(define (readonly src)"
+        "  (let ((id (__reactive-gensym__ \"ro\")))"
+        "    (lambda args"
+        "      (if (null? args)"
+        "        (src)"
+        "        (let ((msg (car args)))"
+        "          (cond"
+        "            ((eq? msg 'peek) (src 'peek))"
+        "            ((eq? msg 'level) (src 'level))"
+        "            ((eq? msg 'id) (src 'id))"
+        "            ((eq? msg 'add-observer)"
+        "             (lambda (obs-id node)"
+        "               ((src 'add-observer) obs-id node)))"
+        "            ((eq? msg 'remove-observer)"
+        "             (lambda (obs-id)"
+        "               ((src 'remove-observer) obs-id)))"
+        "            ((eq? msg '__type__) '__readonly__)"
+        "            ((eq? msg 'set) (error \"readonly: cannot set\"))"
+        "            ((eq? msg 'update) (error \"readonly: cannot update\"))"
+        "            ((eq? msg 'dispose) (error \"readonly: cannot dispose\"))"
+        "            ((eq? msg 'close) (error \"readonly: cannot close\"))"
+        "            (else (error \"readonly: unknown message\" msg))))))))",
+        -1, env);
+
+    /* --- readonly? predicate --- */
+    sexp_eval_string(ctx,
+        "(define (readonly? v)"
+        "  (and (procedure? v)"
+        "       (protect (e (else #f))"
+        "         (eq? (v '__type__) '__readonly__))))", -1, env);
+
+    /* --- watch: run fn(new, old) on changes --- */
+    sexp_eval_string(ctx,
+        "(define (watch src fn)"
+        "  (let ((prev (src 'peek))"
+        "        (first #t))"
+        "    (Effect (lambda ()"
+        "      (let ((curr (src)))"
+        "        (if first"
+        "          (set! first #f)"
+        "          (let ((old prev))"
+        "            (set! prev curr)"
+        "            (fn curr old))))))))", -1, env);
+
+    /* --- on: effect with explicit dependency list --- */
+    sexp_eval_string(ctx,
+        "(define (on deps fn)"
+        "  (Effect (lambda ()"
+        "    (let ((vals (map (lambda (d) (d)) deps)))"
+        "      (parameterize ((__current-observer__ #f))"
+        "        (apply fn vals))))))", -1, env);
+
+    /* --- reduce: fold over signal changes --- */
+    sexp_eval_string(ctx,
+        "(define (reduce src fn initial)"
+        "  (let ((acc (Signal initial)))"
+        "    (watch src (lambda (new-val old-val)"
+        "      ((acc 'set) (fn (acc 'peek) new-val))))"
+        "    acc))", -1, env);
+
+}
+
 /* Parse and evaluate Eval code in a worker context */
 static sexp eval_parse_and_run(sexp ctx, sexp env, const char *code) {
     char *error_msg = NULL;

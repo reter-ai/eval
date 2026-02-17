@@ -1,0 +1,405 @@
+test_begin("Reactive");
+
+// === Signal basics ===
+define s = Signal(0);
+test("signal read", 0, s());
+s->set(10);
+test("signal set", 10, s());
+s->set(10);  // same value, no-op
+test("signal set same", 10, s());
+
+// update
+s->update(function(v) v + 5);
+test("signal update", 15, s());
+
+// peek (no tracking)
+test("signal peek", 15, s->peek);
+
+// === Type predicates ===
+test("signal?", true, signal?(s));
+test("signal? not computed", false, computed?(s));
+test("signal? not effect", false, effect?(s));
+
+// === Computed basics ===
+define a = Signal(2);
+define b = Signal(3);
+define sum = Computed(function() a() + b());
+test("computed initial", 5, sum());
+
+a->set(10);
+test("computed after update", 13, sum());
+
+b->set(7);
+test("computed after update b", 17, sum());
+
+test("computed?", true, computed?(sum));
+test("computed? not signal", false, signal?(sum));
+
+// === Computed caching (lazy, no recompute if clean) ===
+define count = Signal(0);
+define calls = 0;
+define cached = Computed(function() {
+    calls = calls + 1;
+    count() * 2;
+});
+test("cached initial", 0, cached());
+define c1 = calls;
+cached();  // should not recompute
+cached();  // should not recompute
+test("cached no extra recompute", c1, calls);
+
+count->set(5);
+test("cached after update", 10, cached());
+test("cached recomputed once", c1 + 1, calls);
+
+// === Computed chain ===
+define x = Signal(1);
+define doubled = Computed(function() x() * 2);
+define quadrupled = Computed(function() doubled() * 2);
+test("chain initial", 4, quadrupled());
+
+x->set(3);
+test("chain propagated", 12, quadrupled());
+
+// === Effect basics ===
+define log = [];
+define es = Signal(0);
+define eff = Effect(function() {
+    define v = es();
+    log = cons(v, log);
+});
+test("effect initial run", [0], log);
+
+es->set(1);
+test("effect re-run", [1, 0], log);
+
+es->set(2);
+test("effect re-run 2", [2, 1, 0], log);
+
+test("effect?", true, effect?(eff));
+
+// === Effect cleanup ===
+define cleanup_log = [];
+define cs = Signal(0);
+define ceff = Effect(function() {
+    define v = cs();
+    cleanup_log = cons(`string-append`("run:", `number->string`(v)), cleanup_log);
+    function() {
+        cleanup_log = cons(`string-append`("cleanup:", `number->string`(v)), cleanup_log);
+    };
+});
+test("cleanup initial", ["run:0"], cleanup_log);
+
+cs->set(1);
+// cleanup of previous run should fire, then new run
+test("cleanup on re-run",
+     ["run:1", "cleanup:0", "run:0"],
+     cleanup_log);
+
+// === Dispose stops updates ===
+define ds = Signal(0);
+define dlog = [];
+define deff = Effect(function() {
+    dlog = cons(ds(), dlog);
+});
+test("dispose initial", [0], dlog);
+
+dispose(deff);
+ds->set(99);
+test("dispose stops updates", [0], dlog);
+
+// === Dispose runs cleanup ===
+define ds2 = Signal(0);
+define dlog2 = [];
+define deff2 = Effect(function() {
+    ds2();
+    function() { dlog2 = cons("cleaned", dlog2); };
+});
+dispose(deff2);
+test("dispose runs cleanup", ["cleaned"], dlog2);
+
+// === batch: multiple updates, single flush ===
+define bs = Signal(0);
+define blog = [];
+define beff = Effect(function() {
+    blog = cons(bs(), blog);
+});
+// Clear initial run
+blog = [];
+
+batch(function() {
+    bs->set(1);
+    bs->set(2);
+    bs->set(3);
+});
+// Only final value should have triggered
+test("batch single flush", [3], blog);
+
+// === Diamond problem ===
+//   A
+//  / \
+// B   C
+//  \ /
+//   D (effect)
+define A = Signal(1);
+define B = Computed(function() A() * 2);
+define C = Computed(function() A() + 10);
+define diamond_log = [];
+define D = Effect(function() {
+    diamond_log = cons(`list`(B(), C()), diamond_log);
+});
+// Initial: B=2, C=11
+test("diamond initial", [[2, 11]], diamond_log);
+
+diamond_log = [];
+A->set(5);
+// B=10, C=15 — effect should fire once with consistent values
+test("diamond single fire", [[10, 15]], diamond_log);
+
+// === Nested batch ===
+define ns = Signal(0);
+define nlog = [];
+define neff = Effect(function() {
+    nlog = cons(ns(), nlog);
+});
+nlog = [];
+
+batch(function() {
+    ns->set(1);
+    batch(function() {
+        ns->set(2);
+        ns->set(3);
+    });
+    // inner batch should not flush yet
+    ns->set(4);
+});
+// Only outermost batch flushes
+test("nested batch", [4], nlog);
+
+// === Auto-tracking: conditional deps ===
+define flag = Signal(true);
+define left = Signal("L");
+define right = Signal("R");
+define cond_comp = Computed(function()
+    if(flag()) left() else right()
+);
+test("cond initial", "L", cond_comp());
+
+// Changing right should NOT trigger recompute since flag is true
+define cond_calls = 0;
+define cond_watch = Computed(function() {
+    cond_calls = cond_calls + 1;
+    cond_comp();
+});
+cond_watch();
+define cc_before = cond_calls;
+right->set("R2");
+cond_watch();
+test("cond no recompute on unused dep", cc_before, cond_calls);
+
+// Now switch flag — should pick up right
+flag->set(false);
+test("cond switched", "R2", cond_comp());
+
+// === RAII: with(e = Effect(...)) auto-disposes ===
+define ws = Signal(0);
+define wlog = [];
+with(e = Effect(function() {
+    wlog = cons(ws(), wlog);
+})) {
+    ws->set(1);
+};
+// After with block, effect is disposed
+define wlog_after_with = wlog;
+ws->set(99);
+test("raii effect disposed", wlog_after_with, wlog);
+
+// === Error in computed: recovery on re-read ===
+define err_s = Signal(0);
+define err_c = Computed(function() {
+    if(err_s() == 0) error("bad value");
+    err_s() * 10;
+});
+define err_result = try { err_c(); } catch(e) "error";
+test("computed error", "error", err_result);
+
+err_s->set(5);
+test("computed recovery", 50, err_c());
+
+// === Dispose signal clears observers ===
+define sig_d = Signal(0);
+define sig_log = [];
+define sig_eff = Effect(function() {
+    sig_log = cons(sig_d(), sig_log);
+});
+sig_log = [];
+dispose(sig_d);
+// Signal has no observers now, so setting wouldn't notify
+// (but setting a disposed signal still changes its value)
+
+// === Computed peek (read without tracking) ===
+define ps = Signal(42);
+define pc = Computed(function() ps() + 1);
+test("computed peek", 43, pc->peek);
+
+// =============================================
+// Extended Reactive Utilities
+// =============================================
+
+// === untracked: suppress dependency tracking ===
+define ut_a = Signal(1);
+define ut_b = Signal(2);
+define ut_c = Computed(function() ut_a() + untracked(function() ut_b()));
+test("untracked initial", 3, ut_c());
+
+ut_a->set(10);
+test("untracked tracks a", 12, ut_c());
+
+// Change b — c should NOT recompute since b was untracked
+define ut_calls = 0;
+define ut_watch = Computed(function() {
+    ut_calls = ut_calls + 1;
+    ut_c();
+});
+ut_watch();
+define ut_before = ut_calls;
+ut_b->set(100);
+ut_watch();
+test("untracked ignores b", ut_before, ut_calls);
+
+// But the value read when a changes should reflect current b
+ut_a->set(5);
+test("untracked reads current b", 105, ut_c());
+
+// === derived: shorthand computed from one signal ===
+define dr_count = Signal(0);
+define dr_doubled = derived(dr_count, function(v) v * 2);
+test("derived initial", 0, dr_doubled());
+
+dr_count->set(5);
+test("derived propagation", 10, dr_doubled());
+
+dr_count->set(7);
+test("derived propagation 2", 14, dr_doubled());
+
+test("derived is computed", true, computed?(dr_doubled));
+
+// === readonly: read-only view of a signal ===
+define ro_inner = Signal(42);
+define ro = readonly(ro_inner);
+test("readonly read", 42, ro());
+
+ro_inner->set(99);
+test("readonly tracks source", 99, ro());
+
+test("readonly peek", 99, ro->peek);
+
+// readonly blocks set
+define ro_set_err = try { ro->set(5); } catch(e) "blocked";
+test("readonly blocks set", "blocked", ro_set_err);
+
+// readonly blocks update
+define ro_upd_err = try { ro->update(function(v) v + 1); } catch(e) "blocked";
+test("readonly blocks update", "blocked", ro_upd_err);
+
+// readonly type predicate
+test("readonly?", true, readonly?(ro));
+test("readonly? not signal", false, readonly?(ro_inner));
+test("readonly? not computed", false, readonly?(dr_doubled));
+
+// readonly works as dependency in Computed
+define ro_comp = Computed(function() ro() + 1);
+test("readonly in computed initial", 100, ro_comp());
+
+ro_inner->set(10);
+test("readonly in computed tracks", 11, ro_comp());
+
+// === watch: run fn(new, old) on changes ===
+define w_s = Signal("Alice");
+define w_log = [];
+define w_eff = watch(w_s, function(new_val, old_val) {
+    w_log = cons([new_val, old_val], w_log);
+});
+// Initial run should NOT fire fn
+test("watch skips initial", [], w_log);
+
+w_s->set("Bob");
+test("watch fires on change", [["Bob", "Alice"]], w_log);
+
+w_s->set("Carol");
+test("watch fires again", [["Carol", "Bob"], ["Bob", "Alice"]], w_log);
+
+// Dispose stops watching
+dispose(w_eff);
+w_s->set("Dave");
+test("watch dispose stops", [["Carol", "Bob"], ["Bob", "Alice"]], w_log);
+
+// watch returns an effect
+define w_s2 = Signal(0);
+define w_eff2 = watch(w_s2, function(n, o) n);
+test("watch returns effect", true, effect?(w_eff2));
+dispose(w_eff2);
+
+// === on: effect with explicit dependency list ===
+define on_a = Signal(1);
+define on_b = Signal(2);
+define on_c = Signal(100);
+define on_log = [];
+define on_eff = Effect(function() { on_log = []; });  // clear log
+on_log = [];
+
+define on_eff2 = on([on_a, on_b], function(av, bv) {
+    // c is read inside but should NOT be tracked
+    on_log = cons(av + bv + on_c->peek, on_log);
+});
+// Initial run
+test("on initial", [103], on_log);
+
+on_log = [];
+on_a->set(10);
+test("on tracks listed dep", [112], on_log);
+
+on_log = [];
+on_c->set(999);
+// c is not tracked, so on shouldn't fire
+test("on ignores unlisted dep", [], on_log);
+
+on_log = [];
+on_b->set(5);
+test("on tracks second dep", [1014], on_log);
+dispose(on_eff2);
+dispose(on_eff);
+
+// === reduce: fold over signal changes ===
+define red_clicks = Signal(0);
+define red_total = reduce(red_clicks, function(acc, v) acc + v, 0);
+test("reduce initial", 0, red_total());
+
+red_clicks->set(5);
+test("reduce after first", 5, red_total());
+
+red_clicks->set(3);
+test("reduce after second", 8, red_total());
+
+red_clicks->set(10);
+test("reduce after third", 18, red_total());
+
+// reduce returns a signal
+test("reduce is signal", true, signal?(red_total));
+
+// reduce with different fn (max tracker)
+define red_vals = Signal(0);
+define red_max = reduce(red_vals, function(acc, v)
+    if(v > acc) v else acc, 0);
+test("reduce max initial", 0, red_max());
+
+red_vals->set(5);
+test("reduce max 5", 5, red_max());
+
+red_vals->set(3);
+test("reduce max still 5", 5, red_max());
+
+red_vals->set(8);
+test("reduce max 8", 8, red_max());
+
+test_end();

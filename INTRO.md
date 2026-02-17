@@ -893,33 +893,402 @@ pool_shutdown(pool);
 
 ## Thread Pool
 
-For true OS-level parallelism using worker threads:
+For true OS-level parallelism using worker threads. `Pool(n)` creates an OO pool
+with `n` worker threads that supports `with` (RAII) for automatic shutdown:
 
 ```
-define pool = make_pool(4);    // 4 worker threads
+// Pool with RAII — auto-shutdown on scope exit
+define result = with(pool = Pool(4)) {
+    define f1 = pool->submit("10 * 10;");
+    define f2 = pool->submit("20 + 5;");
+    await(f1) + await(f2);   // => 125
+};
 
-// Submit a closure for async execution
-define f = pool_submit(function() {
-    fold(+, 0, map(function(x) x * x, [1, 2, 3, 4, 5]));
-});
+// Statement-form RAII
+{
+    with(pool = Pool(2));
+    define f = pool->submit("6 * 7;");
+    f->result();              // => 42 (blocks until done)
+    f->ready?;                // => true (non-blocking check)
+};                            // pool auto-shutdown here
 
-future_result(f);   // => 55 (blocks until done)
-future_ready?(f);   // => true (non-blocking check)
-
-pool_shutdown(pool);
+// Manual lifecycle
+define p = Pool(2);
+define f = p->submit("1 + 2;");
+await(f);                     // => 3
+p->shutdown();                // explicit shutdown
+p->shutdown();                // safe to call twice
 ```
+
+### Pool Methods
+
+| Method | Description |
+|---|---|
+| `pool->submit(code)` | Submit code string, returns OO Future |
+| `pool->channel(name)` | Create named channel, returns OO Channel |
+| `pool->shutdown()` | Shutdown pool (idempotent) |
+| `pool->close()` | Alias for shutdown (for `with` RAII) |
+
+### Futures
+
+Futures returned by `pool->submit()` support both `->` methods and `await`:
+
+| Method | Description |
+|---|---|
+| `f->result()` | Block until result (or re-raise error) |
+| `f->ready?` | Non-blocking boolean check |
+| `await(f)` | Unified await (works for both pool futures and async promises) |
 
 ### Channels
 
-Cross-thread communication:
+Cross-thread communication via named channels:
 
 ```
-define ch = make_channel(10);   // buffered channel, capacity 10
-channel_send(ch, "hello");
-channel_recv(ch);               // => "hello"
-channel_try_recv(ch);           // non-blocking, returns false if empty
-channel_close(ch);
+{
+    with(pool = Pool(2));
+    with(ch = pool->channel("data"));
+
+    ch->send("hello");
+    ch->send("world");
+    ch->recv();               // => "hello"
+    ch->recv();               // => "world"
+    ch->try_recv();           // => false (empty)
+};
 ```
+
+| Method | Description |
+|---|---|
+| `ch->send(val)` | Send value to channel |
+| `ch->recv()` | Blocking receive |
+| `ch->try_recv()` | Non-blocking receive, returns `false` if empty |
+| `ch->close()` | Close channel (for `with` RAII) |
+
+### Low-level Pool API
+
+The OO wrappers call these underlying functions:
+
+```
+define pool = make_pool(4);
+define f = pool_submit(pool, "2 + 3;");
+future_result(f);             // => 5
+define ch = pool_channel(pool, "test");
+channel_send(ch, 42);
+channel_recv(ch);             // => 42
+pool_shutdown(pool);
+```
+
+## Reactive Programming
+
+Fine-grained reactivity with automatic dependency tracking, similar to Solid.js or MobX. Signals hold mutable values, Computed values auto-track their dependencies and update lazily, Effects re-run when their dependencies change.
+
+### Signal
+
+A reactive cell that holds a mutable value:
+
+```
+define count = Signal(0);
+count();                  // => 0 (read)
+count->set(5);            // write
+count();                  // => 5
+count->update(function(v) v + 1);   // update via function
+count();                  // => 6
+count->peek;              // => 6 (read without tracking)
+```
+
+| Method | Description |
+|---|---|
+| `sig()` | Read value (auto-tracked) |
+| `sig->set(val)` | Set new value |
+| `sig->update(fn)` | Set to `fn(current)` |
+| `sig->peek` | Read without tracking |
+
+### Computed
+
+A derived value that auto-tracks its dependencies and recomputes lazily when they change:
+
+```
+define a = Signal(2);
+define b = Signal(3);
+define sum = Computed(function() a() + b());
+sum();      // => 5
+
+a->set(10);
+sum();      // => 13 (recomputed on read)
+```
+
+Computed values are cached — reading multiple times without changes doesn't recompute:
+
+```
+define calls = 0;
+define doubled = Computed(function() {
+    calls++;
+    count() * 2;
+});
+doubled();   // computes
+doubled();   // cached, no recompute
+doubled();   // cached, no recompute
+```
+
+Computed chains propagate automatically:
+
+```
+define x = Signal(1);
+define doubled = Computed(function() x() * 2);
+define quadrupled = Computed(function() doubled() * 2);
+quadrupled();   // => 4
+x->set(3);
+quadrupled();   // => 12
+```
+
+### Effect
+
+A side effect that auto-tracks dependencies and re-runs when they change:
+
+```
+define name = Signal("Alice");
+define eff = Effect(function() {
+    print("Hello, " ++ name() ++ "!");
+});
+// prints: Hello, Alice!
+
+name->set("Bob");
+// prints: Hello, Bob!
+```
+
+If the effect function returns a procedure, it becomes the cleanup function that runs before the next execution:
+
+```
+define interval_id = Signal(0);
+define eff = Effect(function() {
+    define id = interval_id();
+    print("started " ++ `number->string`(id));
+    function() print("cleanup " ++ `number->string`(id));
+});
+// prints: started 0
+
+interval_id->set(1);
+// prints: cleanup 0
+// prints: started 1
+```
+
+### batch
+
+Batch multiple signal updates so effects fire only once with the final state:
+
+```
+define a = Signal(0);
+define log = [];
+define eff = Effect(function() {
+    log = cons(a(), log);
+});
+// log = [0]
+
+log = [];
+batch(function() {
+    a->set(1);
+    a->set(2);
+    a->set(3);
+});
+// log = [3] — effect fired once with final value
+```
+
+Batching prevents the diamond problem — when multiple paths lead to the same effect:
+
+```
+define A = Signal(1);
+define B = Computed(function() A() * 2);
+define C = Computed(function() A() + 10);
+define log = [];
+define D = Effect(function() {
+    log = cons([B(), C()], log);
+});
+
+log = [];
+A->set(5);
+// log = [[10, 15]] — single effect run with consistent B and C
+```
+
+### dispose
+
+Clean up a reactive node: unsubscribe from sources, run effect cleanup, stop future updates:
+
+```
+define s = Signal(0);
+define eff = Effect(function() print(s()));
+// prints: 0
+
+dispose(eff);
+s->set(99);
+// nothing printed — effect is disposed
+```
+
+### RAII with `with`
+
+Effects and other reactive nodes support `with` for automatic disposal:
+
+```
+define s = Signal(0);
+with(e = Effect(function() print(s()))) {
+    s->set(1);
+};
+// After with block, effect is automatically disposed
+s->set(99);   // no effect — already disposed
+```
+
+### Type predicates
+
+```
+signal?(Signal(0));       // => true
+computed?(Computed(function() 1));   // => true
+effect?(Effect(function() 1));      // => true
+```
+
+### Auto-tracking
+
+Dependencies are discovered automatically when reactive values are read inside `Computed` or `Effect`:
+
+```
+define flag = Signal(true);
+define left = Signal("L");
+define right = Signal("R");
+define result = Computed(function()
+    if(flag()) left() else right()
+);
+result();   // => "L" (tracks flag and left)
+
+right->set("R2");
+result();   // => "L" (right not tracked, no recompute)
+
+flag->set(false);
+result();   // => "R2" (now tracks flag and right)
+```
+
+### untracked
+
+Suppress dependency tracking inside a function. Any signal reads within `untracked` are invisible to the enclosing Computed or Effect:
+
+```
+define a = Signal(1);
+define b = Signal(2);
+define c = Computed(function() a() + untracked(function() b()));
+c();            // => 3
+
+a->set(10);
+c();            // => 12 (recomputed — a is tracked)
+
+b->set(100);
+c();            // => 12 (NOT recomputed — b is untracked)
+```
+
+### derived
+
+Shorthand for creating a Computed from a single signal with a transform function:
+
+```
+define count = Signal(0);
+define doubled = derived(count, function(v) v * 2);
+doubled();          // => 0
+
+count->set(5);
+doubled();          // => 10
+```
+
+Equivalent to `Computed(function() fn(source()))`.
+
+### readonly
+
+Wraps a Signal or Computed to expose only read access. Blocks `set`, `update`, `dispose`, and `close`:
+
+```
+define _count = Signal(0);
+define count = readonly(_count);
+
+count();            // => 0 (reading works)
+_count->set(5);
+count();            // => 5 (tracks underlying signal)
+count->peek;        // => 5 (peek works)
+
+count->set(10);     // ERROR: readonly: cannot set
+```
+
+Readonly views can be used as dependencies in Computed and Effect — they pass through observer registration to the underlying source:
+
+```
+define inner = Signal(42);
+define ro = readonly(inner);
+define c = Computed(function() ro() + 1);
+c();                // => 43
+
+inner->set(10);
+c();                // => 11 (tracked through readonly)
+```
+
+Type predicate: `readonly?(ro)` returns `true`.
+
+### watch
+
+Observe a signal and call a function with `(new_value, old_value)` on each change. Skips the initial value — only fires when the value actually changes:
+
+```
+define name = Signal("Alice");
+define w = watch(name, function(new_val, old_val) {
+    print("changed from " ++ old_val ++ " to " ++ new_val);
+});
+// (nothing printed — initial run is skipped)
+
+name->set("Bob");
+// prints: changed from Alice to Bob
+
+name->set("Carol");
+// prints: changed from Bob to Carol
+
+dispose(w);
+// stops watching
+```
+
+Returns an Effect that can be disposed to stop watching.
+
+### on
+
+Create an effect with an explicit dependency list. Only the listed signals are tracked; all reads inside the callback are untracked:
+
+```
+define a = Signal(1);
+define b = Signal(2);
+define c = Signal(100);
+
+on([a, b], function(av, bv) {
+    print(av + bv + c->peek);
+});
+// prints: 103
+
+a->set(10);
+// prints: 112
+
+c->set(999);
+// (nothing — c is not in the dependency list)
+```
+
+### reduce
+
+Fold over signal changes, accumulating a value. Returns a Signal holding the accumulated result:
+
+```
+define clicks = Signal(0);
+define total = reduce(clicks, function(acc, v) acc + v, 0);
+total();            // => 0
+
+clicks->set(5);
+total();            // => 5  (0 + 5)
+
+clicks->set(3);
+total();            // => 8  (5 + 3)
+
+clicks->set(10);
+total();            // => 18 (8 + 10)
+```
+
+The accumulator starts at the initial value and only updates when the source changes (uses `watch` internally, so the initial value is skipped).
 
 ## Continuation Serialization
 
