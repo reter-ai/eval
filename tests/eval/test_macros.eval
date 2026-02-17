@@ -1,0 +1,15 @@
+test_begin("Macros");
+
+// Simple macro with syntax-rules
+macro my_and syntax_rules() {
+    (my_and): true,
+    (my_and, x): x,
+    (my_and, x, y): if(x) y else false
+};
+
+test("macro my_and tt", 2, my_and(true, 2));
+test("macro my_and tf", false, my_and(false, 2));
+test("macro my_and single", 42, my_and(42));
+test("macro my_and empty", true, my_and());
+
+test_end();

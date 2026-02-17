@@ -19,6 +19,7 @@ extern "C" {
 #include "chibi/install.h"
 
 #ifdef _WIN32
+#include <winsock2.h>
 #include <windows.h>
 #include <errno.h>
 #if SEXP_USE_GREEN_THREADS

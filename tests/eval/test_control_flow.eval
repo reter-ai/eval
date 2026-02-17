@@ -1,0 +1,52 @@
+test_begin("Control Flow");
+
+// if/else
+test("if true", 1, if(true) 1 else 2);
+test("if false", 2, if(false) 1 else 2);
+
+// if without else
+define v = 0;
+if(true) v = 42;
+test("if no else true", 42, v);
+
+v = 0;
+if(false) v = 42;
+test("if no else false", 0, v);
+
+// Nested if/else
+test("nested if", "a",
+    if(true) if(true) "a" else "b" else "c");
+test("nested if 2", "c",
+    if(false) "a" else if(false) "b" else "c");
+
+// if as expression
+define r = if(1 < 2) 10 else 20;
+test("if expression", 10, r);
+
+// when
+define w = 0;
+when(true) w = 1;
+test("when true", 1, w);
+w = 0;
+when(false) w = 1;
+test("when false", 0, w);
+
+// unless
+define u = 0;
+unless(false) u = 2;
+test("unless false", 2, u);
+u = 0;
+unless(true) u = 2;
+test("unless true", 0, u);
+
+// cond
+test("cond first", 1, cond(true: 1, true: 2));
+test("cond second", 2, cond(false: 1, true: 2));
+test("cond else", 3, cond(false: 1, false: 2, else: 3));
+
+// case
+test("case match", "b", case(2, (1): "a", (2): "b", else: "c"));
+test("case else", "c", case(99, (1): "a", (2): "b", else: "c"));
+test("case first", "a", case(1, (1): "a", (2): "b", else: "c"));
+
+test_end();

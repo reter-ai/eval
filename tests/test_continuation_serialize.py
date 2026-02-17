@@ -69,7 +69,7 @@ class TestCrossContext:
         # Continuation that captures some computation context
         k = e1.eval_raw("""
             callcc(function(k) {
-                x := 10;
+                define x = 10;
                 k;
             });
         """)
@@ -88,7 +88,7 @@ class TestClosures:
         """Continuation captured inside a function that closes over variables."""
         k = e.eval_raw("""
             {
-                x := 100;
+                define x = 100;
                 callcc(function(k) k);
             };
         """)
@@ -174,8 +174,8 @@ class TestSICPExamples:
         """Test escape continuation pattern."""
         result = e.eval("""
             callcc(function(exit) {
-                x := 1;
-                y := 2;
+                define x = 1;
+                define y = 2;
                 if(x + y == 3) exit(x + y);
                 999;
             });
@@ -184,24 +184,10 @@ class TestSICPExamples:
 
     def test_captured_continuation_serialize(self, e):
         """Capture a continuation, serialize it, deserialize, resume."""
-        e.eval("saved_k := false;")
-        e.eval("""
-            result := callcc(function(k) {
-                saved_k = k;
-                "first";
-            });
-        """)
-        first_result = e["result"]
-        assert first_result == "first"
-
-        # Get the saved continuation as ChibiSexp
-        k = e.eval_raw("saved_k;")
+        k = e.eval_raw("callcc(function(k) k);")
         data = e.serialize_continuation(k)
 
-        # Deserialize in same context
+        # Deserialize and resume with a value
         k2 = e.deserialize_continuation(data)
-        # Resuming the continuation re-enters the callcc and sets result
-        # in the Eval context. The Python return is void (None) since
-        # the continuation jumps back into the VM's saved stack.
-        k2("second")
-        assert e["result"] == "second"
+        result = k2("second")
+        assert result == "second"

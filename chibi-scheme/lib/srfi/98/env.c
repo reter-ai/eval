@@ -42,10 +42,7 @@ sexp sexp_get_environment_variables (sexp ctx, sexp self, sexp_sint_t n) {
   return res;
 }
 
-sexp sexp_init_library (sexp ctx, sexp self, sexp_sint_t n, sexp env, const char* version, const sexp_abi_identifier_t abi) {
-  if (!(sexp_version_compatible(ctx, version, sexp_version)
-        && sexp_abi_compatible(ctx, abi, SEXP_ABI_IDENTIFIER)))
-    return SEXP_ABI_ERROR;
+sexp sexp_init_srfi98_env (sexp ctx, sexp self, sexp_sint_t n, sexp env) {
   sexp_define_foreign(ctx, env, "get-environment-variable", 1, sexp_get_environment_variable);
   sexp_define_foreign(ctx, env, "get-environment-variables", 0, sexp_get_environment_variables);
   return SEXP_VOID;

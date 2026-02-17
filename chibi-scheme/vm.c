@@ -1120,6 +1120,7 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
 #if SEXP_USE_DEBUG_THREADS
       tmp2 = ctx;
 #endif
+      tmp2 = ctx;
       ctx = sexp_apply1(ctx, tmp1, root_thread);
       /* restore thread */
       stack = sexp_stack_data(sexp_context_stack(ctx));
@@ -1222,6 +1223,7 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
     tmp1 = stack[fp-1];
     tmp2 = sexp_restore_stack(ctx, sexp_vector_ref(cp, 0));
     if (sexp_exceptionp(tmp2)) {_ARG1 = tmp2; goto call_error_handler;}
+    stack = sexp_stack_data(sexp_context_stack(ctx)); /* refresh after possible grow */
     top = sexp_context_top(ctx);
     fp = sexp_unbox_fixnum(_ARG1);
     self = _ARG2;

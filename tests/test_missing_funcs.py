@@ -58,8 +58,8 @@ class TestStringExtras:
 
     def test_string_for_each(self, e):
         result = e.eval("""
-            x := 0;
-            `string-for-each`(function(c) { x = x + 1; }, "hello");
+            define x = 0;
+            `string-for-each`(function(c) { x += 1; }, "hello");
             x;
         """)
         assert result == 5
@@ -74,8 +74,8 @@ class TestVectorExtras:
 
     def test_vector_for_each(self, e):
         result = e.eval("""
-            total := 0;
-            `vector-for-each`(function(x) { total = total + x; }, #[10, 20, 30]);
+            define total = 0;
+            `vector-for-each`(function(x) { total += x; }, #[10, 20, 30]);
             total;
         """)
         assert result == 60
@@ -106,7 +106,7 @@ class TestIOExtras:
 
     def test_write_string(self, e):
         result = e.eval("""
-            let(p := `open-output-string`()) {
+            let(p = `open-output-string`()) {
                 `write-string`("hello", p);
                 `get-output-string`(p);
             };
@@ -120,9 +120,9 @@ class TestIOExtras:
 
     def test_peek_u8(self, e):
         result = e.eval("""
-            let(p := `open-input-string`("AB")) {
-                x := `peek-u8`(p);
-                y := `read-u8`(p);
+            let(p = `open-input-string`("AB")) {
+                define x = `peek-u8`(p);
+                define y = `read-u8`(p);
                 x == y;
             };
         """)
@@ -130,7 +130,7 @@ class TestIOExtras:
 
     def test_write_u8(self, e):
         result = e.eval("""
-            let(p := `open-output-string`()) {
+            let(p = `open-output-string`()) {
                 `write-u8`(65, p);
                 `write-u8`(66, p);
                 `get-output-string`(p);
@@ -144,7 +144,7 @@ class TestParameters:
 
     def test_make_parameter(self, e):
         result = e.eval("""
-            p := `make-parameter`(42);
+            define p = `make-parameter`(42);
             p();
         """)
         assert result == 42

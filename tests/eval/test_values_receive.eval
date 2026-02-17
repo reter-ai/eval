@@ -1,0 +1,19 @@
+test_begin("Values & Receive");
+
+// Basic values + receive
+test("receive 2", 3,
+    receive(a, b) from values(1, 2) a + b);
+
+// Three values
+test("receive 3", 6,
+    receive(a, b, c) from values(1, 2, 3) a + b + c);
+
+// Receive with computation
+test("receive computed", 14,
+    receive(x, y) from values(2 + 3, 4 + 5) x + y);
+
+// Single value
+test("receive 1", 42,
+    receive(x) from values(42) x);
+
+test_end();

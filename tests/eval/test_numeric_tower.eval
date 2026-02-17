@@ -1,0 +1,46 @@
+test_begin("Numeric Tower");
+
+// Large integers (bignums)
+define big = 2 ** 100;
+test("bignum pow", true, big > 1000000000);
+test_assert("bignum arith", 2 ** 100 + 1 > 2 ** 100);
+test("bignum exact", true, big == big);
+
+// Rationals
+test_assert("rational", `rational?`(1 / 3));
+test("rational add", 1, 1 / 3 + 2 / 3);
+
+// exact->inexact, inexact->exact
+test("exact->inexact", 42.0, `exact->inexact`(42));
+test("inexact->exact", 3, `inexact->exact`(3.0));
+
+// Type predicates
+test("number? int", true, `number?`(42));
+test("number? float", true, `number?`(3.14));
+test("number? str", false, `number?`("hello"));
+test("integer? yes", true, `integer?`(42));
+test("integer? no", false, `integer?`(3.14));
+
+// Rounding
+test("floor", 3, `floor`(3.7));
+test("ceiling", 4, `ceiling`(3.2));
+test("round", 4, `round`(3.5));
+test("truncate", 3, `truncate`(3.7));
+
+// Basic math
+test("abs pos", 5, `abs`(5));
+test("abs neg", 5, `abs`(-5));
+test("min", 1, min(1, 2, 3));
+test("max", 3, max(1, 2, 3));
+
+// GCD, LCM
+test("gcd", 6, `gcd`(12, 18));
+test("lcm", 36, `lcm`(12, 18));
+
+// Zero
+test("zero? true", true, `zero?`(0));
+test("zero? false", false, `zero?`(1));
+test("positive? true", true, `positive?`(1));
+test("negative? true", true, `negative?`(-1));
+
+test_end();

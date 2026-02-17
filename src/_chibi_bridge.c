@@ -348,6 +348,35 @@ static sexp bridge_exception_message(sexp ctx, sexp self, sexp_sint_t n, sexp ex
     return sexp_c_string(ctx, "", -1);
 }
 
+/* current-second — high-resolution wall-clock time in seconds */
+#ifdef _WIN32
+#include <windows.h>
+static sexp bridge_current_second(sexp ctx, sexp self, sexp_sint_t n) {
+    LARGE_INTEGER freq, count;
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&count);
+    return sexp_make_flonum(ctx, (double)count.QuadPart / (double)freq.QuadPart);
+}
+#else
+#include <sys/time.h>
+static sexp bridge_current_second(sexp ctx, sexp self, sexp_sint_t n) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return sexp_make_flonum(ctx, tv.tv_sec + tv.tv_usec / 1000000.0);
+}
+#endif
+
+/* Evaluate a Scheme expression string in an isolated eval context.
+ * This creates a fresh sexp_eval_string call, so any call/cc captured
+ * inside will have a clean continuation chain (no references to the
+ * caller's bytecode/channels). */
+sexp bridge_eval_scheme(sexp ctx, sexp self, sexp_sint_t n, sexp s) {
+    if (!sexp_stringp(s))
+        return sexp_type_exception(ctx, self, SEXP_STRING, s);
+    return sexp_eval_string(ctx, sexp_string_data(s), sexp_string_size(s),
+                            sexp_context_env(ctx));
+}
+
 void register_bridge_functions(sexp ctx, sexp env) {
     sexp_define_foreign(ctx, env, "py-import", 1, bridge_py_import);
     sexp_define_foreign(ctx, env, "py-getattr", 2, bridge_py_getattr);
@@ -382,6 +411,14 @@ void register_bridge_functions(sexp ctx, sexp env) {
 
     /* Exception accessor — exception-message is not an opcode in chibi */
     sexp_define_foreign(ctx, env, "exception-message", 1, bridge_exception_message);
+
+    /* Timing */
+    sexp_define_foreign(ctx, env, "current-second", 0, bridge_current_second);
+    sexp_define_foreign(ctx, env, "current_second", 0, bridge_current_second);
+
+    /* Evaluate Scheme expression string in isolated eval context */
+    sexp_define_foreign(ctx, env, "eval-scheme", 1, bridge_eval_scheme);
+    sexp_define_foreign(ctx, env, "eval_scheme", 1, bridge_eval_scheme);
 
     /* Continuation serialization (defined in _chibi_serialize.c) */
     extern sexp bridge_serialize_continuation(sexp, sexp, sexp_sint_t, sexp);

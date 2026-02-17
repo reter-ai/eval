@@ -491,10 +491,7 @@ sexp sexp_json_write (sexp ctx, sexp self, sexp_sint_t n, sexp obj, sexp out) {
 }
 
 
-sexp sexp_init_library (sexp ctx, sexp self, sexp_sint_t n, sexp env, const char* version, const sexp_abi_identifier_t abi) {
-  if (!(sexp_version_compatible(ctx, version, sexp_version)
-        && sexp_abi_compatible(ctx, abi, SEXP_ABI_IDENTIFIER)))
-    return SEXP_ABI_ERROR;
+sexp sexp_init_chibi_json (sexp ctx, sexp self, sexp_sint_t n, sexp env) {
   sexp_define_foreign(ctx, env, "json-read", 1, sexp_json_read);
   sexp_define_foreign(ctx, env, "json-write", 2, sexp_json_write);
   return SEXP_VOID;

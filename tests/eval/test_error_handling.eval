@@ -1,0 +1,32 @@
+test_begin("Error Handling");
+
+// Basic try/catch
+test("catch error", 999, try error("boom") catch(err) 999);
+
+// No error passes through
+test("no error", 42, try 42 catch(err) 0);
+
+// Block try/catch
+test("block catch", 42, try { error("oops"); } catch(err) { 42; });
+
+// Error message access
+define msg = try error("test msg") catch(ex) `error-object-message`(ex);
+test("error message", "test msg", msg);
+
+// Nested try/catch
+test("nested try", "inner",
+    try {
+        try error("inner") catch(e1) "inner";
+    } catch(e2) "outer");
+
+// test_error: expected error
+test_error("div by zero", function() 1 / 0);
+test_error("undefined var", function() undefined_xyz_123);
+test_error("explicit error", function() error("fail"));
+
+// Error recovery — use = to mutate outer variable inside try block
+define x = 0;
+try { x = 3; error("mid"); } catch(e) x;
+test("error mid block", 3, x);
+
+test_end();

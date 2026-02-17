@@ -8,10 +8,16 @@
 #include "_chibi_bridge.h"
 #include "_eval_writer.h"
 #include "_chibi_serialize.h"
+#include "_eval_pool.h"
 
 /* The ChibiSexp type and wrapper function from _chibi_sexp.c */
 extern PyTypeObject ChibiSexpType;
 extern PyObject *ChibiSexp_wrap(sexp ctx, sexp value, PyObject *context);
+
+/* Pool/channel registration (defined in _eval_pool.c) */
+extern void register_channel_type(sexp ctx);
+extern void register_pool_type(sexp ctx);
+extern void register_pool_eval_functions(sexp ctx, sexp env);
 
 /* === ChibiContext Python type === */
 
@@ -164,6 +170,9 @@ static sexp trampoline_call_rest(sexp ctx, sexp self, sexp_sint_t n, sexp args) 
     return trampoline_call(ctx, self, n, args);
 }
 
+/* eval_set_module_path2 is defined in _eval_pool.c but not in header */
+extern void eval_set_module_path2(const char *path);
+
 /* === ChibiContext methods === */
 
 static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject *kwds) {
@@ -213,10 +222,16 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
                         path_sexp = sexp_c_string(self->ctx, full_path, -1);
                         sexp_add_module_directory(self->ctx, path_sexp, SEXP_TRUE);
 
+                        /* Cache for worker threads */
+                        eval_set_module_path(full_path);
+
                         /* Also try chibi-scheme/lib relative to parent dir (dev install) */
                         snprintf(full_path, sizeof(full_path), "%s/../chibi-scheme/lib", pkg_dir);
                         path_sexp = sexp_c_string(self->ctx, full_path, -1);
                         sexp_add_module_directory(self->ctx, path_sexp, SEXP_TRUE);
+
+                        /* Cache for worker threads */
+                        eval_set_module_path2(full_path);
                     }
                 }
                 Py_DECREF(file_attr);
@@ -238,8 +253,17 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
     /* Register python-object type */
     register_pyobject_type(self->ctx);
 
+    /* Register channel type (must be same order as workers for tag consistency) */
+    register_channel_type(self->ctx);
+
+    /* Register pool type (must be same order as workers for tag consistency) */
+    register_pool_type(self->ctx);
+
     /* Register bridge functions */
     register_bridge_functions(self->ctx, self->env);
+
+    /* Register pool/channel/future functions for pure-Eval use */
+    register_pool_eval_functions(self->ctx, self->env);
 
     /* Import (scheme base) via the meta-environment — this adds:
      * error-object?, error-object-message, square, boolean=?, symbol=?,
@@ -347,43 +371,152 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
          * that aren't available with SEXP_USE_DL=0. Pure Scheme implementations
          * are provided below instead. */
 
+        /* Load scheme/test.scm — lightweight test framework */
+        sexp_load_module_file(self->ctx, "scheme/test.scm", self->env);
+
         /* After loading, the context env may have shifted.
          * Update self->env to the current context env. */
         self->env = sexp_context_env(self->ctx);
     }
 
-    /* make-parameter — pure Scheme closure-based implementation */
-    sexp_eval_string(self->ctx,
-        "(define (make-parameter init . o)"
-        "  (let ((value (if (and (pair? o) (car o)) ((car o) init) init))"
-        "        (converter (and (pair? o) (car o))))"
-        "    (lambda args"
-        "      (cond ((null? args) value)"
-        "            (else"
-        "             (set! value (if converter (converter (car args)) (car args)))"
-        "             value)))))", -1, self->env);
+    /* Initialize all statically compiled chibi libraries.
+     * Must be after extras.scm (provides define-record-type for types.scm). */
+    {
+        extern void eval_init_all_libs(sexp ctx, sexp env);
+        eval_init_all_libs(self->ctx, self->env);
+        self->env = sexp_context_env(self->ctx);
+    }
 
-    /* sort — pure Scheme merge sort */
+    /* make-parameter and sort are now provided by srfi/39/syntax.scm
+     * and srfi/95/sort.scm loaded in eval_init_all_libs. */
+
+    /* SRFI-18 green thread wrappers (simplified, no timeval dependency) */
     sexp_eval_string(self->ctx,
-        "(define (sort lst less)"
-        "  (define (merge a b)"
-        "    (cond ((null? a) b)"
-        "          ((null? b) a)"
-        "          ((less (car a) (car b))"
-        "           (cons (car a) (merge (cdr a) b)))"
-        "          (else"
-        "           (cons (car b) (merge a (cdr b))))))"
-        "  (define (msort lst n)"
-        "    (if (<= n 1)"
-        "        (if (= n 1) (list (car lst)) '())"
-        "        (let* ((mid (quotient n 2))"
-        "               (left (msort lst mid))"
-        "               (rest (list-tail lst mid))"
-        "               (right (msort rest (- n mid))))"
-        "          (merge left right))))"
-        "  (if (vector? lst)"
-        "      (list->vector (msort (vector->list lst) (vector-length lst)))"
-        "      (msort lst (length lst))))", -1, self->env);
+        "(define thread-yield! yield!)", -1, self->env);
+    sexp_eval_string(self->ctx,
+        "(define (thread-join! thread . o)"
+        "  (let ((timeout (and (pair? o) (car o))))"
+        "    (let lp ()"
+        "      (cond"
+        "       ((%thread-join! thread timeout)"
+        "        (if (%thread-exception? thread)"
+        "            (raise (%thread-end-result thread))"
+        "            (%thread-end-result thread)))"
+        "       (else"
+        "        (thread-yield!)"
+        "        (cond"
+        "         ((and timeout (thread-timeout?))"
+        "          (if (and (pair? o) (pair? (cdr o)))"
+        "              (cadr o)"
+        "              (error \"timed out waiting for thread\" thread)))"
+        "         (else (lp))))))))", -1, self->env);
+    sexp_eval_string(self->ctx,
+        "(define (thread-terminate! thread)"
+        "  (if (%thread-terminate! thread) (thread-yield!)))", -1, self->env);
+    sexp_eval_string(self->ctx,
+        "(define (thread-sleep! timeout)"
+        "  (%thread-sleep! timeout) (thread-yield!))", -1, self->env);
+    sexp_eval_string(self->ctx,
+        "(define (mutex-lock! mutex . o)"
+        "  (let ((timeout (and (pair? o) (car o)))"
+        "        (thread (if (and (pair? o) (pair? (cdr o))) (cadr o) #t)))"
+        "    (cond"
+        "     ((%mutex-lock! mutex timeout thread))"
+        "     (else"
+        "      (thread-yield!)"
+        "      (if (thread-timeout?) #f"
+        "          (mutex-lock! mutex timeout thread))))))", -1, self->env);
+    sexp_eval_string(self->ctx,
+        "(define (mutex-unlock! mutex . o)"
+        "  (let ((condvar (and (pair? o) (car o)))"
+        "        (timeout (if (and (pair? o) (pair? (cdr o))) (cadr o) #f)))"
+        "    (cond"
+        "     ((%mutex-unlock! mutex condvar timeout))"
+        "     (else (thread-yield!) (not (thread-timeout?))))))", -1, self->env);
+
+    /* Eval underscore aliases for SRFI-18 threads */
+    sexp_eval_string(self->ctx,
+        "(begin"
+        " (define make_thread make-thread)"
+        " (define thread_start thread-start!)"
+        " (define thread_yield thread-yield!)"
+        " (define thread_join thread-join!)"
+        " (define thread_sleep thread-sleep!)"
+        " (define thread_terminate thread-terminate!)"
+        " (define current_thread current-thread)"
+        " (define make_mutex make-mutex)"
+        " (define mutex_lock mutex-lock!)"
+        " (define mutex_unlock mutex-unlock!)"
+        " (define make_condvar make-condition-variable)"
+        " (define condvar_signal condition-variable-signal!)"
+        " (define condvar_broadcast condition-variable-broadcast!))",
+        -1, self->env);
+
+    /* Eval underscore aliases for other new libraries */
+    sexp_eval_string(self->ctx,
+        "(begin"
+        " (define random_integer random-integer)"
+        " (define random_real random-real)"
+        " (define json_read json-read)"
+        " (define json_write json-write)"
+        " (define get_env get-environment-variable)"
+        " (define current_clock_second current-clock-second)"
+        " (define bit_and bit-and)"
+        " (define bit_ior bit-ior)"
+        " (define bit_xor bit-xor)"
+        " (define bit_count bit-count)"
+        " (define arithmetic_shift arithmetic-shift)"
+        " (define integer_length integer-length)"
+        " (define object_cmp object-cmp)"
+        " (define heap_stats heap-stats)"
+        /* srfi/69 hash table aliases */
+        " (define make_hash_table make-hash-table)"
+        " (define hash_table_ref hash-table-ref)"
+        " (define hash_table_set hash-table-set!)"
+        " (define hash_table_delete hash-table-delete!)"
+        " (define hash_table_exists hash-table-exists?)"
+        " (define hash_table_keys hash-table-keys)"
+        " (define hash_table_values hash-table-values)"
+        " (define hash_table_size hash-table-size)"
+        " (define hash_table_to_alist hash-table->alist)"
+        /* srfi/1 list library aliases */
+        " (define take_while take-while)"
+        " (define drop_while drop-while)"
+        " (define list_index list-index)"
+        " (define delete_duplicates delete-duplicates)"
+        " (define alist_cons alist-cons)"
+        " (define alist_copy alist-copy)"
+        " (define alist_delete alist-delete)"
+        " (define append_map append-map)"
+        " (define filter_map filter-map)"
+        " (define fold_right fold-right)"
+        " (define take_right take-right)"
+        " (define drop_right drop-right)"
+        " (define split_at split-at)"
+        " (define last_pair last-pair)"
+        " (define circular_list circular-list)"
+        " (define is_proper_list proper-list?)"
+        " (define is_dotted_list dotted-list?)"
+        /* math/prime aliases */
+        " (define is_prime prime?)"
+        " (define is_probable_prime probable-prime?)"
+        " (define random_prime random-prime)"
+        " (define nth_prime nth-prime)"
+        " (define prime_above prime-above)"
+        " (define prime_below prime-below))",
+        -1, self->env);
+
+    /* Test framework underscore aliases for Eval syntax */
+    sexp_eval_string(self->ctx,
+        "(define test_begin test-begin)", -1, self->env);
+    sexp_eval_string(self->ctx,
+        "(define test_end test-end)", -1, self->env);
+    sexp_eval_string(self->ctx,
+        "(define test_assert test-assert)", -1, self->env);
+    sexp_eval_string(self->ctx,
+        "(define test_error test-error)", -1, self->env);
+    sexp_eval_string(self->ctx,
+        "(define test_group test-group)", -1, self->env);
 
     self->initialized = 1;
     return 0;

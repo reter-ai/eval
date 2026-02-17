@@ -1,0 +1,43 @@
+test_begin("Literals");
+
+// Integers
+test("decimal", 42, 42);
+test("hex", 255, 0xFF);
+test("zero", 0, 0);
+test("negative", -1, -1);
+
+// Floats
+test_assert("pi approx", `abs`(3.14 - 3.14) < 0.001);
+test_assert("float small", 0.001 > 0);
+test_assert("float large", 1000000.5 > 1000000);
+
+// Strings
+test("string basic", "hello", "hello");
+test("string empty", "", "");
+test("string with space", "a b", "a b");
+
+// Booleans
+test("true", true, true);
+test("false", false, false);
+
+// Nil / empty list
+test("empty list", [], []);
+
+// Lists
+test("list 3", [1, 2, 3], [1, 2, 3]);
+test("nested list", [1, [2, 3], 4], [1, [2, 3], 4]);
+test("single element", [42], [42]);
+
+// Vectors
+test_assert("vector", `vector?`(#[10, 20]));
+test("vector length", 3, `vector-length`(#[1, 2, 3]));
+test("empty vector", 0, `vector-length`(#[]));
+
+// Quote
+test("quote symbol", 'hello, 'hello);
+
+// Dotted pairs
+test("dotted pair", (1 .. 2), cons(1, 2));
+test("dotted multi", (1, 2 .. 3), cons(1, cons(2, 3)));
+
+test_end();

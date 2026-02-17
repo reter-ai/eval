@@ -2761,11 +2761,23 @@ sexp sexp_eval_op (sexp ctx, sexp self, sexp_sint_t n, sexp obj, sexp env) {
 
 sexp sexp_eval_string (sexp ctx, const char *str, sexp_sint_t len, sexp env) {
   sexp res;
-  sexp_gc_var1(obj);
-  sexp_gc_preserve1(ctx, obj);
-  obj = sexp_read_from_string(ctx, str, len);
+  sexp_gc_var3(s, in, obj);
+  sexp_gc_preserve3(ctx, s, in, obj);
+  s = sexp_c_string(ctx, str, len);
+  in = sexp_open_input_string(ctx, s);
+  obj = sexp_read(ctx, in);
+  if (sexp_exceptionp(obj)) { sexp_gc_release3(ctx); return obj; }
+  /* Check for trailing expressions — reject silently ignoring them */
+  {
+    sexp next = sexp_read(ctx, in);
+    if (next != SEXP_EOF && !sexp_exceptionp(next)) {
+      sexp_gc_release3(ctx);
+      return sexp_user_exception(ctx, SEXP_FALSE,
+        "sexp_eval_string: multiple expressions in string (only one allowed)", s);
+    }
+  }
   res = sexp_eval(ctx, obj, env);
-  sexp_gc_release1(ctx);
+  sexp_gc_release3(ctx);
   return res;
 }
 

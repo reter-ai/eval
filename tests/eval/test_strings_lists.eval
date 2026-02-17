@@ -1,0 +1,38 @@
+test_begin("Strings & Lists");
+
+// String operations
+test("string-append", "hello world", `string-append`("hello", " ", "world"));
+test("string-length", 5, `string-length`("hello"));
+test("string-ref", "e", `string`(`string-ref`("hello", 1)));
+
+// List basics
+test("car", 1, car([1, 2, 3]));
+test("cdr", [2, 3], cdr([1, 2, 3]));
+test("cons", [0, 1, 2], cons(0, [1, 2]));
+
+// List functions
+test("length", 3, length([1, 2, 3]));
+test("length empty", 0, length([]));
+test("reverse", [3, 2, 1], reverse([1, 2, 3]));
+test("append", [1, 2, 3, 4], append([1, 2], [3, 4]));
+test("list-ref", 20, `list-ref`([10, 20, 30], 1));
+
+// Sort
+test("sort <", [1, 2, 3, 4, 5], sort([3, 1, 4, 5, 2], <));
+test("sort >", [5, 4, 3, 2, 1], sort([3, 1, 4, 5, 2], >));
+
+// String conversion
+test("number->string", "42", `number->string`(42));
+test("string->number", 42, `string->number`("42"));
+
+// String->list and back
+test("string->list length", 5, length(`string->list`("hello")));
+test("list->string", "abc", `list->string`(`string->list`("abc")));
+
+// list-copy
+test("list-copy", [1, 2, 3], `list-copy`([1, 2, 3]));
+
+// make-list
+test("make-list", [0, 0, 0], `make-list`(3, 0));
+
+test_end();

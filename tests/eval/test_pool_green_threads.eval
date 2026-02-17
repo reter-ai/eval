@@ -1,0 +1,334 @@
+test_begin("Green Threads on Pool + Continuation Exchange");
+
+// ============================================================
+// Part 1: SRFI-18 Green Threads Inside Pool Workers
+// ============================================================
+
+define pool = make_pool(2);
+
+// Basic: spawn a green thread inside a worker, join its result
+define gt1 = pool_channel(pool, "gt1");
+pool_submit(pool, "
+  define t = make_thread(function() 42);
+  thread_start(t);
+  channel_send(gt1, thread_join(t));
+");
+test("green thread basic", 42, channel_recv(gt1));
+
+// Multiple green threads in one worker
+define gt2 = pool_channel(pool, "gt2");
+pool_submit(pool, "
+  define t1 = make_thread(function() 10);
+  define t2 = make_thread(function() 20);
+  define t3 = make_thread(function() 30);
+  thread_start(t1);
+  thread_start(t2);
+  thread_start(t3);
+  channel_send(gt2, thread_join(t1) + thread_join(t2) + thread_join(t3));
+");
+test("multiple green threads", 60, channel_recv(gt2));
+
+// Green threads with closures capturing worker-local state
+define gt3 = pool_channel(pool, "gt3");
+pool_submit(pool, "
+  define base = 1000;
+  define t1 = make_thread(function() base + 1);
+  define t2 = make_thread(function() base + 2);
+  thread_start(t1);
+  thread_start(t2);
+  channel_send(gt3, list(thread_join(t1), thread_join(t2)));
+");
+test("green thread closures", [1001, 1002], channel_recv(gt3));
+
+// Mutex synchronization between green threads in a worker
+define gt4 = pool_channel(pool, "gt4");
+pool_submit(pool, "
+  define counter = 0;
+  define m = make_mutex();
+  define inc = function() {
+    for(let i = 0, i < 50, i++) {
+      mutex_lock(m);
+      counter = counter + 1;
+      mutex_unlock(m);
+    }
+  };
+  define t1 = make_thread(inc);
+  define t2 = make_thread(inc);
+  thread_start(t1);
+  thread_start(t2);
+  thread_join(t1);
+  thread_join(t2);
+  channel_send(gt4, counter);
+");
+test("mutex between green threads", 100, channel_recv(gt4));
+
+// Thread yield works in worker
+define gt5 = pool_channel(pool, "gt5");
+pool_submit(pool, "
+  thread_yield();
+  channel_send(gt5, true);
+");
+test("thread yield in worker", true, channel_recv(gt5));
+
+// current_thread inside worker
+define gt6 = pool_channel(pool, "gt6");
+pool_submit(pool, "
+  channel_send(gt6, `thread?`(current_thread()));
+");
+test("current-thread in worker", true, channel_recv(gt6));
+
+pool_shutdown(pool);
+
+// ============================================================
+// Part 2: Green Threads Producing Closures Exchanged via Channels
+// (Closures fly in binary form over channels)
+// ============================================================
+
+define pool2 = make_pool(2);
+
+// Worker A: green threads produce closures, send through channel
+define fn_ch = pool_channel(pool2, "fn_ch");
+define res_ch = pool_channel(pool2, "res_ch");
+
+pool_submit(pool2, "
+  define t1 = make_thread(function() {
+    define base = 100;
+    function(x) x + base
+  });
+  define t2 = make_thread(function() {
+    define factor = 3;
+    function(x) x * factor
+  });
+  thread_start(t1);
+  thread_start(t2);
+  channel_send(fn_ch, thread_join(t1));
+  channel_send(fn_ch, thread_join(t2));
+");
+
+// Worker B: receive closures, compose in green thread
+pool_submit(pool2, "
+  define add100 = channel_recv(fn_ch);
+  define triple = channel_recv(fn_ch);
+  define t = make_thread(function() add100(triple(5)));
+  thread_start(t);
+  channel_send(res_ch, thread_join(t));
+");
+test("closures from green threads exchanged", 115, channel_recv(res_ch));
+
+// Higher-order: send a function factory, apply in another worker
+define ho_ch = pool_channel(pool2, "ho_ch");
+define ho_out = pool_channel(pool2, "ho_out");
+
+pool_submit(pool2, "
+  define t = make_thread(function() {
+    function(n) function(x) x + n
+  });
+  thread_start(t);
+  channel_send(ho_ch, thread_join(t));
+");
+
+pool_submit(pool2, "
+  define make_adder = channel_recv(ho_ch);
+  define add5 = make_adder(5);
+  define add10 = make_adder(10);
+  define t1 = make_thread(function() add5(100));
+  define t2 = make_thread(function() add10(100));
+  thread_start(t1);
+  thread_start(t2);
+  channel_send(ho_out, list(thread_join(t1), thread_join(t2)));
+");
+test("higher-order closure exchange", [105, 110], channel_recv(ho_out));
+
+pool_shutdown(pool2);
+
+// ============================================================
+// Part 3: Continuations Exchanged via Channels (Binary Form)
+// Using eval_scheme for isolated eval context (clean continuation chain)
+// ============================================================
+
+define pool3 = make_pool(2);
+
+// Basic: capture identity continuation, send to another worker
+define k_ch1 = pool_channel(pool3, "k_ch1");
+pool_submit(pool3, "define k = eval_scheme(\"(let ((x (call-with-current-continuation (lambda (k) k)))) (if (procedure? x) x x))\"); channel_send(k_ch1, k); \"sent\";");
+
+// Worker B invokes with 42 — continuation returns the value as-is
+define fb1 = pool_submit(pool3, "define k = channel_recv(k_ch1); k(42);");
+test("continuation exchange identity", 42, future_result(fb1));
+
+// Continuation with computation: x * x
+define k_ch2 = pool_channel(pool3, "k_ch2");
+pool_submit(pool3, "define k = eval_scheme(\"(let ((x (call-with-current-continuation (lambda (k) k)))) (if (procedure? x) x (* x x)))\"); channel_send(k_ch2, k); \"sent\";");
+
+define fb2 = pool_submit(pool3, "define k = channel_recv(k_ch2); k(7);");
+test("continuation exchange x*x", 49, future_result(fb2));
+
+// Continuation with more complex computation: fibonacci-like
+define k_ch3 = pool_channel(pool3, "k_ch3");
+pool_submit(pool3, "define k = eval_scheme(\"(let ((n (call-with-current-continuation (lambda (k) k)))) (if (procedure? n) n (let loop ((i n) (a 0) (b 1)) (if (= i 0) a (loop (- i 1) b (+ a b))))))\"); channel_send(k_ch3, k); \"sent\";");
+
+define fb3 = pool_submit(pool3, "define k = channel_recv(k_ch3); k(10);");
+test("continuation exchange fibonacci", 55, future_result(fb3));
+
+pool_shutdown(pool3);
+
+// ============================================================
+// Part 4: Continuation reuse — same continuation, multiple workers
+// ============================================================
+
+define pool4 = make_pool(3);
+define k_ch4 = pool_channel(pool4, "k_ch4");
+
+// Capture x+100 continuation and share it
+pool_submit(pool4, "define k = eval_scheme(\"(let ((x (call-with-current-continuation (lambda (k) k)))) (if (procedure? x) x (+ x 100)))\"); channel_send(k_ch4, k); channel_send(k_ch4, k); \"sent\";");
+
+// Two workers each invoke the same continuation with different values
+define fb4a = pool_submit(pool4, "define k = channel_recv(k_ch4); k(1);");
+define fb4b = pool_submit(pool4, "define k = channel_recv(k_ch4); k(200);");
+
+test("continuation reuse worker A", 101, future_result(fb4a));
+test("continuation reuse worker B", 300, future_result(fb4b));
+
+pool_shutdown(pool4);
+
+// ============================================================
+// Part 5: Green Threads in Parallel Workers
+// ============================================================
+
+define pool5 = make_pool(2);
+define par1 = pool_channel(pool5, "par1");
+define par2 = pool_channel(pool5, "par2");
+
+// Two workers run green threads simultaneously
+pool_submit(pool5, "
+  define m = make_mutex();
+  define results = [];
+  define worker = function(id) {
+    mutex_lock(m);
+    results = append(results, [id]);
+    mutex_unlock(m);
+  };
+  define threads = map(function(i) {
+    define t = make_thread(function() worker(i));
+    thread_start(t);
+    t
+  }, [1, 2, 3, 4, 5]);
+  `for-each`(thread_join, threads);
+  channel_send(par1, sort(results, <));
+");
+
+pool_submit(pool5, "
+  define m = make_mutex();
+  define results = [];
+  define worker = function(id) {
+    mutex_lock(m);
+    results = append(results, [id]);
+    mutex_unlock(m);
+  };
+  define threads = map(function(i) {
+    define t = make_thread(function() worker(i));
+    thread_start(t);
+    t
+  }, [10, 20, 30, 40, 50]);
+  `for-each`(thread_join, threads);
+  channel_send(par2, sort(results, <));
+");
+
+test("parallel worker green threads A", [1, 2, 3, 4, 5], channel_recv(par1));
+test("parallel worker green threads B", [10, 20, 30, 40, 50], channel_recv(par2));
+
+pool_shutdown(pool5);
+
+// ============================================================
+// Part 6: Green Threads + Channels + Closures Pipeline
+// ============================================================
+
+define pool6 = make_pool(3);
+define pipe_in = pool_channel(pool6, "pipe_in");
+define pipe_mid = pool_channel(pool6, "pipe_mid");
+define pipe_out = pool_channel(pool6, "pipe_out");
+
+// Stage 1: generate values using green threads
+pool_submit(pool6, "
+  define gen = function(start, count) {
+    for(let i = 0, i < count, i++) {
+      channel_send(pipe_in, start + i);
+    }
+  };
+  define t1 = make_thread(function() gen(1, 3));
+  define t2 = make_thread(function() gen(10, 3));
+  thread_start(t1);
+  thread_start(t2);
+  thread_join(t1);
+  thread_join(t2);
+  channel_send(pipe_in, \"done\");
+");
+
+// Stage 2: transform values — square them
+pool_submit(pool6, "
+  define transform = function() {
+    define val = channel_recv(pipe_in);
+    while(val != \"done\") {
+      channel_send(pipe_mid, val * val);
+      val = channel_recv(pipe_in);
+    };
+    channel_send(pipe_mid, \"done\");
+  };
+  transform();
+");
+
+// Stage 3: collect results
+pool_submit(pool6, "
+  define results = [];
+  define val = channel_recv(pipe_mid);
+  while(val != \"done\") {
+    results = append(results, [val]);
+    val = channel_recv(pipe_mid);
+  };
+  channel_send(pipe_out, sort(results, <));
+");
+
+test("pipeline green threads + channels",
+  [1, 4, 9, 100, 121, 144],
+  channel_recv(pipe_out));
+
+pool_shutdown(pool6);
+
+// ============================================================
+// Part 7: pool_apply with call/cc for control flow
+// ============================================================
+
+define pool7 = make_pool(2);
+
+// Function using callcc for early exit
+define find_first_negative = function(lst) {
+  callcc(function(exit) {
+    `for-each`(function(x) {
+      if(x < 0) exit(x);
+    }, lst);
+    false
+  })
+};
+
+test("pool_apply callcc early exit",
+  -3,
+  future_result(pool_apply(pool7, find_first_negative, [[1, 2, -3, 4]])));
+
+test("pool_apply callcc no exit",
+  false,
+  future_result(pool_apply(pool7, find_first_negative, [[1, 2, 3, 4]])));
+
+// Function with return (uses call/cc internally)
+define safe_divide = function(a, b) {
+  if(b == 0) return "division by zero";
+  return a / b;
+};
+
+test("pool_apply return early", "division by zero",
+  future_result(pool_apply(pool7, safe_divide, [10, 0])));
+test("pool_apply return normal", 5,
+  future_result(pool_apply(pool7, safe_divide, [10, 2])));
+
+pool_shutdown(pool7);
+
+test_end();

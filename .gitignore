@@ -31,3 +31,5 @@ Thumbs.db
 
 # Backup files
 *.bak
+NUL
+.reter_code/

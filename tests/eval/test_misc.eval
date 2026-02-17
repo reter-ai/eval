@@ -1,0 +1,43 @@
+test_begin("Miscellaneous");
+
+// Compile-time eval
+test("bangbang", 5, !!(2 + 3));
+test("bangbang mul", 42, !!(6 * 7));
+
+// Backtick identifiers
+test("list->vector", true, `vector?`(`list->vector`([1, 2, 3])));
+test("vector->list", [10, 20], `vector->list`(#[10, 20]));
+test("vector-ref", 30, `vector-ref`(#[10, 20, 30], 2));
+
+// boolean=? and symbol=?
+test("boolean=? tt", true, `boolean=?`(true, true));
+test("boolean=? ff", true, `boolean=?`(false, false));
+test("boolean=? tf", false, `boolean=?`(true, false));
+test("symbol=? same", true, `symbol=?`('a, 'a));
+test("symbol=? diff", false, `symbol=?`('a, 'b));
+
+// Tail call optimization: deep recursion should not overflow
+define loop = function(n) if(n <= 0) "done" else loop(n - 1);
+test("tail call", "done", loop(100000));
+
+// Pair operations
+test("pair?", true, `pair?`([1, 2]));
+test("pair? empty", false, `pair?`([]));
+test("null?", true, `null?`([]));
+test("null? nonempty", false, `null?`([1]));
+
+// Type predicates
+test("string?", true, `string?`("hi"));
+test("string? no", false, `string?`(42));
+test("boolean?", true, `boolean?`(true));
+test("list?", true, `list?`([1, 2]));
+
+// not
+test("not true", false, !true);
+test("not false", true, !false);
+
+// Equality
+test("equal? same", true, [1, 2, 3] == [1, 2, 3]);
+test("equal? diff", false, [1, 2] == [1, 3]);
+
+test_end();

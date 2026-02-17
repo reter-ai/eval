@@ -2,6 +2,9 @@
 /*  Copyright (c) 2009-2011 Alex Shinn.  All rights reserved. */
 /*  BSD-style license: http://synthcode.com/license.txt       */
 
+#ifndef _WIN32
+/* Entire file is POSIX-only: uses sigaction, fork, siginfo_t, etc. */
+
 #define SEXP_MAX_SIGNUM 32
 
 static sexp sexp_signal_contexts[SEXP_MAX_SIGNUM];
@@ -72,10 +75,6 @@ static sexp sexp_set_signal_action (sexp ctx, sexp self, sexp signum, sexp newac
 
 static sexp sexp_pid_cmdline (sexp ctx, int pid) {
 #ifdef __NetBSD__
-  /*
-   * Newer version with defined interface that doesn't expose kernel
-   * guts and works with 64-bit kernel, 32-bit userland.
-   */
   struct kinfo_proc2 res;
   int id = KERN_PROC2;
 #else
@@ -105,34 +104,7 @@ static sexp sexp_pid_cmdline (sexp ctx, int pid) {
   }
 }
 
-#else
-
-/* #include <sys/syscall.h> */
-/* #include <linux/sysctl.h> */
-
-/* #define CMDLINE_LENGTH 512 */
-
-/* static sexp sexp_pid_cmdline (sexp ctx, int pid) { */
-/*   struct __sysctl_args args; */
-/*   char cmdline[CMDLINE_LENGTH]; */
-/*   size_t cmdline_length; */
-/*   int name[] = { CTL_KERN, KERN_OSTYPE }; */
-
-/*   memset(&args, 0, sizeof(struct __sysctl_args)); */
-/*   args.name = name; */
-/*   args.nlen = sizeof(name)/sizeof(name[0]); */
-/*   args.oldval = cmdline; */
-/*   args.oldlenp = &cmdline_length; */
-/*   cmdline_length = sizeof(cmdline); */
-
-/*   if (syscall(SYS__sysctl, &args) == -1) { */
-/*     return SEXP_FALSE; */
-/*   } else { */
-/*     return sexp_c_string(ctx, cmdline, -1); */
-/*   } */
-/* } */
-
-#endif
+#endif  /* SEXP_BSD */
 
 static pid_t sexp_fork_and_kill_threads (sexp ctx) {
   pid_t res = fork();
@@ -158,3 +130,5 @@ static void sexp_init_signals (sexp ctx, sexp env) {
   call_sigignore.sa_handler    = SIG_IGN;
   memset(sexp_signal_contexts, 0, sizeof(sexp_signal_contexts));
 }
+
+#endif  /* !_WIN32 */

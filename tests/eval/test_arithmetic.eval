@@ -1,0 +1,40 @@
+test_begin("Arithmetic");
+
+// Basic operations
+test("add", 30, 10 + 20);
+test("subtract", 7, 10 - 3);
+test("multiply", 42, 6 * 7);
+test("divide", 5, 10 / 2);
+test("exponent", 1024, 2 ** 10);
+test("modulo", 1, 10 % 3);
+
+// Unary
+test("unary minus", -5, -5);
+test("unary plus", 5, +5);
+test("double negative", 5, -(-5));
+
+// Precedence
+test("mul before add", 14, 2 + 3 * 4);
+test("parens override", 20, (2 + 3) * 4);
+test("nested parens", 21, (1 + 2) * (3 + 4));
+test("left assoc sub", 2, 10 - 5 - 3);
+
+// Float arithmetic
+test("float add", 4.0, 1.5 + 2.5);
+test("float mul", 6.25, 2.5 * 2.5);
+test_assert("mixed int float", 1 + 0.5 == 1.5);
+
+// Exponentiation
+test("expt 3^3", 27, 3 ** 3);
+test("expt 1", 1, 99 ** 0);
+
+// Modulo
+test("mod positive", 1, 10 % 3);
+test("mod even", 0, 10 % 5);
+
+// Chained operations
+test("chained add", 60, 10 + 20 + 30);
+test("chained mul", 120, 2 * 3 * 4 * 5);
+test("complex expr", 90, (10 + 20) * 3);
+
+test_end();

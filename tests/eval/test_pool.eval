@@ -1,0 +1,336 @@
+test_begin("Thread Pool & Channels");
+
+// ===== Basic Submit =====
+
+define pool = make_pool(2);
+
+// Integer result
+define f1 = pool_submit(pool, "1 + 2;");
+test("submit int", 3, future_result(f1));
+
+// String result
+define f2 = pool_submit(pool, "\"hello\";");
+test("submit string", "hello", future_result(f2));
+
+// Boolean result
+define f3 = pool_submit(pool, "3 > 2;");
+test("submit bool", true, future_result(f3));
+
+// List result
+define f4 = pool_submit(pool, "[1, 2, 3];");
+test("submit list", [1, 2, 3], future_result(f4));
+
+pool_shutdown(pool);
+
+// ===== Functions in Workers =====
+
+define pool_fn = make_pool(2);
+
+// Define and call
+define ff1 = pool_submit(pool_fn, "define square = function(x) x * x; square(7);");
+test("worker fn", 49, future_result(ff1));
+
+// Recursive factorial
+define ff2 = pool_submit(pool_fn,
+    "define fact = function(n) if(n <= 1) 1 else n * fact(n - 1); fact(10);");
+test("worker fact", 3628800, future_result(ff2));
+
+// Recursive fibonacci
+define ff3 = pool_submit(pool_fn,
+    "define fib = function(n) if(n <= 1) n else fib(n-1) + fib(n-2); fib(10);");
+test("worker fib", 55, future_result(ff3));
+
+// Higher-order: map
+define ff4 = pool_submit(pool_fn,
+    "map(function(x) x * x, [1, 2, 3, 4, 5]);");
+test("worker map", [1, 4, 9, 16, 25], future_result(ff4));
+
+// Closure
+define ff5 = pool_submit(pool_fn,
+    "define make_adder = function(n) function(x) n + x; make_adder(10)(32);");
+test("worker closure", 42, future_result(ff5));
+
+pool_shutdown(pool_fn);
+
+// ===== Multiple Submissions =====
+
+define pool_multi = make_pool(4);
+
+define ma = pool_submit(pool_multi, "10 + 1;");
+define mb = pool_submit(pool_multi, "20 + 2;");
+define mc = pool_submit(pool_multi, "30 + 3;");
+define md = pool_submit(pool_multi, "40 + 4;");
+
+test("multi results",
+    [11, 22, 33, 44],
+    list(future_result(ma), future_result(mb),
+         future_result(mc), future_result(md)));
+
+pool_shutdown(pool_multi);
+
+// ===== Future Ready =====
+
+define pool_rdy = make_pool(2);
+define frdy = pool_submit(pool_rdy, "1 + 1;");
+define rdy_val = future_result(frdy);
+test("future val", 2, rdy_val);
+test("future ready", true, future_ready?(frdy));
+
+pool_shutdown(pool_rdy);
+
+// ===== Channel: Worker → Main =====
+
+define pool_ch1 = make_pool(2);
+define ch_int = pool_channel(pool_ch1, "ch_int");
+
+pool_submit(pool_ch1, "channel_send(ch_int, 42);");
+test("chan w→m int", 42, channel_recv(ch_int));
+
+define ch_str = pool_channel(pool_ch1, "ch_str");
+pool_submit(pool_ch1, "channel_send(ch_str, \"hello world\");");
+test("chan w→m str", "hello world", channel_recv(ch_str));
+
+define ch_lst = pool_channel(pool_ch1, "ch_lst");
+pool_submit(pool_ch1, "channel_send(ch_lst, [10, 20, 30]);");
+test("chan w→m list", [10, 20, 30], channel_recv(ch_lst));
+
+define ch_bool = pool_channel(pool_ch1, "ch_bool");
+pool_submit(pool_ch1, "channel_send(ch_bool, true);");
+test("chan w→m bool", true, channel_recv(ch_bool));
+
+pool_shutdown(pool_ch1);
+
+// ===== Channel: Main → Worker =====
+
+define pool_ch2 = make_pool(2);
+define ch_in = pool_channel(pool_ch2, "input");
+
+channel_send(ch_in, 99);
+define fch = pool_submit(pool_ch2,
+    "define x = channel_recv(input); x + 1;");
+test("chan m→w", 100, future_result(fch));
+
+pool_shutdown(pool_ch2);
+
+// ===== Channel: Multiple Values =====
+
+define pool_ch3 = make_pool(2);
+define ch_multi = pool_channel(pool_ch3, "vals");
+
+pool_submit(pool_ch3, "
+    channel_send(vals, 1);
+    channel_send(vals, 2);
+    channel_send(vals, 3);
+");
+test("chan multi 1", 1, channel_recv(ch_multi));
+test("chan multi 2", 2, channel_recv(ch_multi));
+test("chan multi 3", 3, channel_recv(ch_multi));
+
+pool_shutdown(pool_ch3);
+
+// ===== Non-blocking Try Recv =====
+
+define pool_try = make_pool(1);
+define ch_try = pool_channel(pool_try, "try_ch");
+
+// Empty channel returns false
+test("try empty", false, channel_try_recv(ch_try));
+
+// With data returns (value) list
+channel_send(ch_try, 99);
+test("try data", [99], channel_try_recv(ch_try));
+
+// Empty again after consuming
+test("try empty again", false, channel_try_recv(ch_try));
+
+pool_shutdown(pool_try);
+
+// ===== Producer-Consumer Pipeline =====
+
+define pool_pipe = make_pool(3);
+define pipe_in = pool_channel(pool_pipe, "pipe");
+define pipe_out = pool_channel(pool_pipe, "result");
+
+// Producer: send squares 1..5
+pool_submit(pool_pipe, "
+    define i = 0;
+    while(i < 5) {
+        i++;
+        channel_send(pipe, i * i);
+    };
+");
+
+// Consumer: sum received values
+pool_submit(pool_pipe, "
+    define total = 0;
+    define count = 0;
+    define val = 0;
+    while(count < 5) {
+        val = channel_recv(pipe);
+        total += val;
+        count++;
+    };
+    channel_send(result, total);
+");
+
+test("pipeline sum", 55, channel_recv(pipe_out));  // 1+4+9+16+25
+
+pool_shutdown(pool_pipe);
+
+// ===== Bidirectional: Request-Response =====
+
+define pool_rr = make_pool(2);
+define req_ch = pool_channel(pool_rr, "req");
+define resp_ch = pool_channel(pool_rr, "resp");
+
+// Worker: receive number, send back its square
+pool_submit(pool_rr, "
+    define x = channel_recv(req);
+    channel_send(resp, x * x);
+");
+
+channel_send(req_ch, 7);
+test("req-resp", 49, channel_recv(resp_ch));
+
+pool_shutdown(pool_rr);
+
+// ===== Parallel Computation =====
+
+define pool_par = make_pool(4);
+
+define pf1 = pool_submit(pool_par,
+    "define fib = function(n) if(n <= 1) n else fib(n-1) + fib(n-2); fib(15);");
+define pf2 = pool_submit(pool_par,
+    "define fib = function(n) if(n <= 1) n else fib(n-1) + fib(n-2); fib(16);");
+define pf3 = pool_submit(pool_par,
+    "define fib = function(n) if(n <= 1) n else fib(n-1) + fib(n-2); fib(17);");
+define pf4 = pool_submit(pool_par,
+    "define fib = function(n) if(n <= 1) n else fib(n-1) + fib(n-2); fib(18);");
+
+test("par fib 15", 610, future_result(pf1));
+test("par fib 16", 987, future_result(pf2));
+test("par fib 17", 1597, future_result(pf3));
+test("par fib 18", 2584, future_result(pf4));
+
+pool_shutdown(pool_par);
+
+// ===== Multiple Pools =====
+
+define p1 = make_pool(1);
+define p2 = make_pool(1);
+
+define mp1 = pool_submit(p1, "100 + 1;");
+define mp2 = pool_submit(p2, "200 + 2;");
+
+test("pool 1", 101, future_result(mp1));
+test("pool 2", 202, future_result(mp2));
+
+pool_shutdown(p1);
+pool_shutdown(p2);
+
+// ===== Error Propagation =====
+
+define pool_err = make_pool(1);
+
+// Syntax error
+define fe1 = pool_submit(pool_err, "this is not valid !!!");
+define err1 = try { future_result(fe1); false; } catch(e) true;
+test("err syntax", true, err1);
+
+// Runtime error
+define fe2 = pool_submit(pool_err, "error(\"boom\");");
+define err2 = try { future_result(fe2); false; } catch(e) true;
+test("err runtime", true, err2);
+
+// Undefined variable
+define fe3 = pool_submit(pool_err, "undefined_xyz + 1;");
+define err3 = try { future_result(fe3); false; } catch(e) true;
+test("err undefined", true, err3);
+
+// Good submit still works after errors
+define fe4 = pool_submit(pool_err, "42;");
+test("after errors", 42, future_result(fe4));
+
+pool_shutdown(pool_err);
+
+// ===== Many Submissions =====
+
+define pool_many = make_pool(4);
+
+define s0 = pool_submit(pool_many, "0 * 0;");
+define s1 = pool_submit(pool_many, "1 * 1;");
+define s2 = pool_submit(pool_many, "2 * 2;");
+define s3 = pool_submit(pool_many, "3 * 3;");
+define s4 = pool_submit(pool_many, "4 * 4;");
+define s5 = pool_submit(pool_many, "5 * 5;");
+define s6 = pool_submit(pool_many, "6 * 6;");
+define s7 = pool_submit(pool_many, "7 * 7;");
+define s8 = pool_submit(pool_many, "8 * 8;");
+define s9 = pool_submit(pool_many, "9 * 9;");
+
+test("many squares",
+    [0, 1, 4, 9, 16, 25, 36, 49, 64, 81],
+    list(future_result(s0), future_result(s1), future_result(s2),
+         future_result(s3), future_result(s4), future_result(s5),
+         future_result(s6), future_result(s7), future_result(s8),
+         future_result(s9)));
+
+pool_shutdown(pool_many);
+
+// ===== Worker Chains via Channels =====
+
+define pool_chain = make_pool(3);
+define step1_ch = pool_channel(pool_chain, "step1");
+define step2_ch = pool_channel(pool_chain, "step2");
+define final_ch = pool_channel(pool_chain, "final");
+
+// Stage 1: add 10
+pool_submit(pool_chain, "
+    define x = channel_recv(step1);
+    channel_send(step2, x + 10);
+");
+
+// Stage 2: multiply by 3
+pool_submit(pool_chain, "
+    define x = channel_recv(step2);
+    channel_send(final, x * 3);
+");
+
+// Feed the pipeline
+channel_send(step1_ch, 5);
+test("chain pipeline", 45, channel_recv(final_ch));  // (5+10)*3
+
+pool_shutdown(pool_chain);
+
+// ===== Parallel Speedup (proves OS threads) =====
+
+define fib_code = "define fib = function(n) if(n <= 1) n else fib(n-1) + fib(n-2); fib(28);";
+
+// Serial: 4 tasks on 1 worker
+define pool_serial = make_pool(1);
+define t0 = current_second();
+future_result(pool_submit(pool_serial, fib_code));
+future_result(pool_submit(pool_serial, fib_code));
+future_result(pool_submit(pool_serial, fib_code));
+future_result(pool_submit(pool_serial, fib_code));
+define serial_time = current_second() - t0;
+pool_shutdown(pool_serial);
+
+// Parallel: 4 tasks on 4 workers
+define pool_parallel = make_pool(4);
+define t1 = current_second();
+define pf1 = pool_submit(pool_parallel, fib_code);
+define pf2 = pool_submit(pool_parallel, fib_code);
+define pf3 = pool_submit(pool_parallel, fib_code);
+define pf4 = pool_submit(pool_parallel, fib_code);
+future_result(pf1);
+future_result(pf2);
+future_result(pf3);
+future_result(pf4);
+define parallel_time = current_second() - t1;
+pool_shutdown(pool_parallel);
+
+// Parallel must be significantly faster than serial
+test_assert("parallel speedup", parallel_time < serial_time * 0.8);
+
+test_end();

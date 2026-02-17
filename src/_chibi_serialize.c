@@ -545,8 +545,13 @@ static uint32_t ser_walk(SerState *s, sexp x) {
                                                sizeof(nbuf));
                         uint32_t si = strtab_intern(&s->strtab, nbuf,
                                                      (uint32_t)nlen);
-                        uint32_t gid = ser_alloc_obj(s, SER_GLOBAL_REF);
+                        /* Serialize value alongside name so the target
+                         * context can create the binding if missing
+                         * (e.g. user-defined globals, underscore aliases) */
+                        uint32_t val_id = ser_walk(s, sexp_cdr(ref));
+                        uint32_t gid = ser_alloc_obj(s, SER_GLOBAL_REF_VAL);
                         buf_write_u32(&s->obj_bufs[gid - 1], si);
+                        buf_write_u32(&s->obj_bufs[gid - 1], val_id);
                         ref_id = gid;
                     } else if (sexp_opcodep(ref)) {
                         /* Opcode: serialize by name */
@@ -731,7 +736,38 @@ static PyObject *ser_assemble(SerState *s) {
 }
 
 /* ================================================================
- *  Public serialization API
+ *  Pure-C serialization API (no Python dependency)
+ * ================================================================ */
+
+int ser_sexp_to_buf(sexp ctx, sexp env, sexp val,
+                    unsigned char **out_data, size_t *out_len,
+                    char *err_msg, size_t err_len) {
+    SerState s;
+    ser_init(&s, ctx, env);
+
+    uint32_t root_id = ser_walk(&s, val);
+
+    if (s.error || root_id == 0) {
+        if (err_msg) {
+            const char *msg = s.error ? s.error_msg : "failed to serialize";
+            strncpy(err_msg, msg, err_len - 1);
+            err_msg[err_len - 1] = '\0';
+        }
+        ser_free(&s);
+        return -1;
+    }
+
+    Buffer out;
+    ser_assemble_buf(&s, &out);
+    ser_free(&s);
+
+    *out_data = out.data;  /* caller owns — hand over the buffer */
+    *out_len = out.len;
+    return 0;
+}
+
+/* ================================================================
+ *  Public serialization API (Python wrappers)
  * ================================================================ */
 
 PyObject *chibi_serialize_continuation(sexp ctx, sexp env, sexp cont) {
@@ -1033,9 +1069,8 @@ static void deser_alloc(DeserState *d) {
             break;
         }
         case SER_GLOBAL_REF_VAL: {
-            /* Legacy: resolve to env cell like SER_GLOBAL_REF.
-             * The captured value (second u32) is ignored — the env
-             * cell already has the correct current value. */
+            /* Resolve to env cell; if missing, create with VOID
+             * and let the fixup phase fill in the captured value. */
             if (olen < 8) { deser_error(d, "truncated global ref+val"); break; }
             uint32_t si;
             memcpy(&si, odata, 4);
@@ -1043,8 +1078,7 @@ static void deser_alloc(DeserState *d) {
             tmp1 = sexp_intern(d->ctx, d->strs[si], (int)d->str_lens[si]);
             tmp2 = sexp_env_cell(d->ctx, d->env, tmp1, 0);
             if (!tmp2 || tmp2 == SEXP_FALSE) {
-                /* Variable not in env — create it with VOID,
-                 * fixup will set the captured value. */
+                /* Not found — create with VOID, fixup will set value */
                 sexp_env_define(d->ctx, d->env, tmp1, SEXP_VOID);
                 tmp2 = sexp_env_cell(d->ctx, d->env, tmp1, 0);
             }
@@ -1184,6 +1218,88 @@ static void deser_fixup(DeserState *d) {
         default:
             break;
         }
+    }
+}
+
+/* Pure-C deserialization (no Python dependency) */
+sexp deser_sexp_from_buf(sexp ctx, sexp env,
+                         const unsigned char *data, size_t len,
+                         char *err_msg, size_t err_len) {
+    DeserState d;
+    memset(&d, 0, sizeof(d));
+    d.ctx = ctx;
+    d.env = env;
+    d.data = data;
+    d.data_len = (Py_ssize_t)len;
+
+    /* Parse header */
+    if (!deser_parse_header(&d)) goto fail;
+
+    /* Parse string table */
+    size_t pos = SER_HEADER_SIZE;
+    if (!deser_parse_strings(&d, &pos)) goto fail;
+
+    /* Parse object table */
+    if (!deser_parse_obj_table(&d, &pos)) goto fail;
+
+    /* Allocate output array */
+    d.objs = (sexp *)calloc(d.obj_count, sizeof(sexp));
+
+    /* Pass 1: Allocate */
+    deser_alloc(&d);
+    if (d.error) goto fail;
+
+    /* Pass 2: Fixup */
+    deser_fixup(&d);
+    if (d.error) goto fail;
+
+    /* Root object is ID 1 */
+    {
+        sexp result = d.objs[0];
+
+        /* Release all preserved objects except root */
+        for (uint32_t i = 1; i < d.obj_count; i++) {
+            if (d.objs[i] && sexp_pointerp(d.objs[i]))
+                sexp_release_object(ctx, d.objs[i]);
+        }
+
+        /* Cleanup */
+        for (uint32_t i = 0; i < d.str_count; i++) free(d.strs[i]);
+        free(d.strs);
+        free(d.str_lens);
+        free(d.obj_kinds);
+        free(d.obj_data_offs);
+        free(d.obj_data_lens);
+        free(d.objs);
+
+        return result;
+    }
+
+fail:
+    {
+        const char *msg = d.error ? d.error_msg : "deserialization failed";
+        if (err_msg) {
+            strncpy(err_msg, msg, err_len - 1);
+            err_msg[err_len - 1] = '\0';
+        }
+
+        if (d.strs) {
+            for (uint32_t i = 0; i < d.str_count; i++) free(d.strs[i]);
+            free(d.strs);
+        }
+        free(d.str_lens);
+        free(d.obj_kinds);
+        free(d.obj_data_offs);
+        free(d.obj_data_lens);
+        if (d.objs) {
+            for (uint32_t i = 0; i < d.obj_count; i++) {
+                if (d.objs[i] && sexp_pointerp(d.objs[i]))
+                    sexp_release_object(ctx, d.objs[i]);
+            }
+            free(d.objs);
+        }
+
+        return SEXP_FALSE;
     }
 }
 

@@ -1,0 +1,59 @@
+test_begin("Functions");
+
+// Simple
+define double = function(x) x * 2;
+test("simple", 42, double(21));
+
+// Multi-arg
+define add = function(a, b) a + b;
+test("multi arg", 7, add(3, 4));
+
+// Zero-arg
+define answer = function() 42;
+test("zero arg", 42, answer());
+
+// Recursive: factorial
+define factorial = function(n) if(n <= 1) 1 else n * factorial(n - 1);
+test("factorial 10", 3628800, factorial(10));
+
+// Recursive: fibonacci
+define fib = function(n) if(n <= 1) n else fib(n - 1) + fib(n - 2);
+test("fib 10", 55, fib(10));
+
+// Closure
+define make_adder = function(n) function(x) n + x;
+define add10 = make_adder(10);
+test("closure", 42, add10(32));
+
+// Block body
+define f = function(x) { define y = x * 2; y + 1; };
+test("block body", 21, f(10));
+
+// Early return
+define g = function(x) { if(x < 0) return -1; x * 2; };
+test("early return neg", -1, g(-5));
+test("early return pos", 10, g(5));
+
+// Multiple returns
+define abs_fn = function(x) { if(x >= 0) return x; return -x; };
+test("abs pos", 5, abs_fn(5));
+test("abs neg", 3, abs_fn(-3));
+
+// Variadic
+define list_all = function(..args) args;
+test("variadic", [1, 2, 3], list_all(1, 2, 3));
+
+// Mixed fixed + rest
+define mixed = function(a, b ..rest) [a, b, rest];
+test("mixed rest", [1, 2, [3, 4]], mixed(1, 2, 3, 4));
+
+// Higher-order: function returning function
+define make_mul = function(n) function(x) n * x;
+define triple = make_mul(3);
+test("higher order", 15, triple(5));
+
+// Immediate call
+test("immediate call", 42, (function() 42)());
+test("immediate call arg", 10, (function(x) x * 2)(5));
+
+test_end();

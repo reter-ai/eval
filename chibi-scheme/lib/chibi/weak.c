@@ -49,15 +49,12 @@ sexp sexp_weak_vector_set (sexp ctx, sexp self, sexp_sint_t n, sexp v, sexp k, s
 }
 #endif
 
-sexp sexp_init_library (sexp ctx, sexp self, sexp_sint_t n, sexp env, const char* version, const sexp_abi_identifier_t abi) {
+sexp sexp_init_chibi_weak (sexp ctx, sexp self, sexp_sint_t n, sexp env) {
 #if 0
   sexp v;
   int sexp_weak_vector_id;
 #endif
   sexp_gc_var3(name, t, op);
-  if (!(sexp_version_compatible(ctx, version, sexp_version)
-        && sexp_abi_compatible(ctx, abi, SEXP_ABI_IDENTIFIER)))
-    return SEXP_ABI_ERROR;
   sexp_gc_preserve3(ctx, name, t, op);
 
 #if SEXP_USE_WEAK_REFERENCES

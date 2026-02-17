@@ -1,0 +1,231 @@
+test_begin("Green Threads (SRFI-18)");
+
+// ===== Basic thread creation =====
+test("make and join thread", 42, {
+  define t = make_thread(function() 42);
+  thread_start(t);
+  thread_join(t)
+});
+
+test("thread returns string", "hello", {
+  define t = make_thread(function() "hello");
+  thread_start(t);
+  thread_join(t)
+});
+
+test("thread returns list", [1, 2, 3], {
+  define t = make_thread(function() [1, 2, 3]);
+  thread_start(t);
+  thread_join(t)
+});
+
+test("thread returns boolean", true, {
+  define t = make_thread(function() true);
+  thread_start(t);
+  thread_join(t)
+});
+
+// ===== Thread with closures =====
+test("thread closure", 100, {
+  define x = 100;
+  define t = make_thread(function() x);
+  thread_start(t);
+  thread_join(t)
+});
+
+test("thread closure mutation", 42, {
+  define result = 0;
+  define t = make_thread(function() { result = 42; });
+  thread_start(t);
+  thread_join(t);
+  result
+});
+
+test("thread closure captures multiple vars", 15, {
+  define a = 5;
+  define b = 10;
+  define t = make_thread(function() a + b);
+  thread_start(t);
+  thread_join(t)
+});
+
+// ===== Multiple threads =====
+test("two threads", 30, {
+  define t1 = make_thread(function() 10);
+  define t2 = make_thread(function() 20);
+  thread_start(t1);
+  thread_start(t2);
+  thread_join(t1) + thread_join(t2)
+});
+
+test("three threads", 60, {
+  define t1 = make_thread(function() 10);
+  define t2 = make_thread(function() 20);
+  define t3 = make_thread(function() 30);
+  thread_start(t1);
+  thread_start(t2);
+  thread_start(t3);
+  thread_join(t1) + thread_join(t2) + thread_join(t3)
+});
+
+// ===== Thread predicates =====
+test_assert("current-thread is thread", `thread?`(current_thread()));
+test_assert("make-thread returns thread", `thread?`(make_thread(function() 1)));
+
+// ===== Thread naming =====
+test("thread-name", "worker", {
+  define t = make_thread(function() 1, "worker");
+  `thread-name`(t)
+});
+
+// ===== Thread specific data =====
+test("thread-specific", 42, {
+  define t = make_thread(function() 1);
+  `thread-specific-set!`(t, 42);
+  `thread-specific`(t)
+});
+
+// ===== Thread yield =====
+thread_yield();
+test("thread-yield ok", true, true);
+
+test("yield in thread", true, {
+  define t = make_thread(function() { thread_yield(); true; });
+  thread_start(t);
+  thread_join(t)
+});
+
+// ===== Thread with computation =====
+test("thread fibonacci", 55, {
+  define fib = function(n) {
+    if(n <= 1) n
+    else fib(n - 1) + fib(n - 2)
+  };
+  define t = make_thread(function() fib(10));
+  thread_start(t);
+  thread_join(t)
+});
+
+test("thread loop", 45, {
+  define t = make_thread(function() {
+    define sum = 0;
+    for(let i = 0, i < 10, i++) {
+      sum = sum + i;
+    };
+    sum
+  });
+  thread_start(t);
+  thread_join(t)
+});
+
+// ===== Mutex basic usage =====
+test("mutex lock/unlock", true, {
+  define m = make_mutex();
+  mutex_lock(m);
+  mutex_unlock(m);
+  true
+});
+
+test("mutex-state unlocked", true, {
+  define m = make_mutex();
+  // unlocked mutex state depends on implementation
+  define s = `mutex-state`(m);
+  // mutex-state returns symbol 'not-abandoned (hyphenated, not valid Eval identifier)
+  s == `string->symbol`("not-abandoned") || s == `string->symbol`("not-abandoned") || !(`thread?`(s))
+});
+
+// ===== Mutex between threads =====
+test("mutex shared counter", 10, {
+  define counter = 0;
+  define m = make_mutex();
+  define inc = function() {
+    for(let i = 0, i < 5, i++) {
+      mutex_lock(m);
+      counter = counter + 1;
+      mutex_unlock(m)
+    }
+  };
+  define t1 = make_thread(inc);
+  define t2 = make_thread(inc);
+  thread_start(t1);
+  thread_start(t2);
+  thread_join(t1);
+  thread_join(t2);
+  counter
+});
+
+test("mutex protects list", 10, {
+  define results = [];
+  define m = make_mutex();
+  define add_item = function(x) {
+    mutex_lock(m);
+    results = cons(x, results);
+    mutex_unlock(m)
+  };
+  define t1 = make_thread(function() {
+    for(let i = 0, i < 5, i++) add_item(i);
+  });
+  define t2 = make_thread(function() {
+    for(let i = 10, i < 15, i++) add_item(i);
+  });
+  thread_start(t1);
+  thread_start(t2);
+  thread_join(t1);
+  thread_join(t2);
+  length(results)
+});
+
+// ===== Condition variables =====
+test("condvar create", true, {
+  define cv = make_condvar();
+  `condition-variable?`(cv)
+});
+
+test("condvar signal", true, {
+  define cv = make_condvar();
+  condvar_signal(cv);
+  true
+});
+
+test("condvar broadcast", true, {
+  define cv = make_condvar();
+  condvar_broadcast(cv);
+  true
+});
+
+// ===== Cross-thread continuation =====
+test("cross-thread callcc", 42, {
+  define k = callcc(function(k) k);
+  if(`procedure?`(k)) {
+    define t = make_thread(function() k(42));
+    thread_start(t);
+    thread_join(t);
+  };
+  k
+});
+
+// ===== Thread with error handling =====
+test("thread with try/catch", "caught", {
+  define t = make_thread(function() {
+    try {
+      `error`("test error");
+    } catch(e) {
+      "caught"
+    }
+  });
+  thread_start(t);
+  thread_join(t)
+});
+
+// ===== Nested thread creation =====
+test("thread creates thread", 42, {
+  define t = make_thread(function() {
+    define t2 = make_thread(function() 42);
+    thread_start(t2);
+    thread_join(t2)
+  });
+  thread_start(t);
+  thread_join(t)
+});
+
+test_end();

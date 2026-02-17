@@ -1,0 +1,385 @@
+test_begin("Statically Compiled Libraries");
+
+// ===== scheme/time =====
+test_assert("current-clock-second is number", number?(current_clock_second()));
+test_assert("current-clock-second positive", current_clock_second() > 0);
+test_assert("current-clock-second reasonable",
+  let(t = current_clock_second()) t > 1000000000 && t < 3000000000);
+test_assert("clock monotonic",
+  let(t1 = current_clock_second(), t2 = current_clock_second())
+    t2 >= t1 && (t2 - t1) < 1.0);
+
+// ===== srfi/27 random =====
+test_assert("random-integer range",
+  let(r = random_integer(100)) r >= 0 && r < 100);
+test_assert("random-integer small",
+  let(r = random_integer(2)) r == 0 || r == 1);
+test_assert("random-integer boundary",
+  let(r = random_integer(1)) r == 0);
+test_assert("random-real range",
+  let(r = random_real()) r >= 0.0 && r < 1.0);
+// Multiple random calls should not all return same value
+test_assert("random-integer varies", {
+  define a = random_integer(1000000);
+  define b = random_integer(1000000);
+  define c = random_integer(1000000);
+  !(a == b && b == c)
+});
+test_assert("make-random-source", `random-source?`(`make-random-source`()));
+test_assert("default-random-source", `random-source?`(`default-random-source`));
+test_assert("random-source-state-ref",
+  `bytevector?`(`random-source-state-ref`(`default-random-source`)));
+test("random-source-randomize!", true, {
+  `random-source-randomize!`(`make-random-source`());
+  true
+});
+test("random with custom source", true, {
+  define rs = `make-random-source`();
+  define r = `%random-integer`(rs, 100);
+  r >= 0 && r < 100
+});
+
+// ===== srfi/98 environment =====
+test_assert("get-env PATH", string?(get_env("PATH")));
+test_assert("get-env PATH non-empty", `string-length`(get_env("PATH")) > 0);
+test("get-env nonexistent", false, get_env("__NONEXISTENT_VAR_12345__"));
+test_assert("get-environment-variables is list",
+  list?(`get-environment-variables`()));
+test_assert("get-environment-variables non-empty",
+  length(`get-environment-variables`()) > 0);
+
+// ===== srfi/69 hash =====
+test_assert("hash number", number?(hash(42)));
+test_assert("hash string", number?(hash("hello")));
+test_assert("hash symbol", number?(hash('foo)));
+test_assert("hash list", number?(hash([1, 2, 3])));
+test("hash deterministic", hash("test"), hash("test"));
+test_assert("string-hash", number?(`string-hash`("hello")));
+test("string-hash deterministic", `string-hash`("test"), `string-hash`("test"));
+test_assert("string-ci-hash", number?(`string-ci-hash`("Hello")));
+test_assert("hash-by-identity", number?(`hash-by-identity`(42)));
+// Different values should (usually) hash differently
+test_assert("hash varies",
+  !(hash("hello") == hash("world")));
+
+// ===== srfi/95 sort =====
+test("sort ascending", [1, 1, 3, 4, 5], sort([3, 1, 4, 1, 5], <));
+test("sort descending", [5, 4, 3, 1, 1], sort([3, 1, 4, 1, 5], >));
+test("sort empty", [], sort([], <));
+test("sort single", [42], sort([42], <));
+test("sort with key", [1, 2, 3], sort([3, 1, 2], <));
+test("sort already sorted", [1, 2, 3], sort([1, 2, 3], <));
+test("sort reverse", [1, 2, 3, 4, 5], sort([5, 4, 3, 2, 1], <));
+test("sort large", true, {
+  define lst = map(function(_) random_integer(100), list(1,2,3,4,5,6,7,8,9,10));
+  define sorted = sort(lst, <);
+  // verify sorted: each element <= next
+  define ok = true;
+  define prev = -1;
+  `for-each`(function(x) {
+    if(x < prev) ok = false;
+    prev = x;
+  }, sorted);
+  ok
+});
+// object-cmp
+test_assert("object-cmp equal", object_cmp(42, 42) == 0);
+test_assert("object-cmp less", object_cmp(1, 2) < 0);
+test_assert("object-cmp greater", object_cmp(2, 1) > 0);
+test_assert("object-cmp strings", object_cmp("a", "b") < 0);
+
+// ===== srfi/151 bitwise =====
+test("bit-and basic", 8, bit_and(12, 10));
+test("bit-and zero", 0, bit_and(0xFF, 0));
+test("bit-and all ones", 0xFF, bit_and(0xFF, 0xFF));
+test("bit-ior basic", 14, bit_ior(12, 10));
+test("bit-ior identity", 255, bit_ior(255, 0));
+test("bit-ior disjoint", 15, bit_ior(5, 10));
+test("bit-xor basic", 6, bit_xor(12, 10));
+test("bit-xor self", 0, bit_xor(42, 42));
+test("bit-xor zero", 42, bit_xor(42, 0));
+test("arithmetic-shift left 1", 2, arithmetic_shift(1, 1));
+test("arithmetic-shift left 3", 24, arithmetic_shift(3, 3));
+test("arithmetic-shift right", 3, arithmetic_shift(24, -3));
+test("arithmetic-shift zero", 0, arithmetic_shift(0, 5));
+test("arithmetic-shift large", 256, arithmetic_shift(1, 8));
+test("bit-count 0", 0, `bit-count`(0));
+test("bit-count 1", 1, `bit-count`(1));
+test("bit-count 7", 3, `bit-count`(7));
+test("bit-count 255", 8, `bit-count`(255));
+test("integer-length 0", 0, integer_length(0));
+test("integer-length 1", 1, integer_length(1));
+test("integer-length 7", 3, integer_length(7));
+test("integer-length 8", 4, integer_length(8));
+test("integer-length 15", 4, integer_length(15));
+test("integer-length 16", 5, integer_length(16));
+test("integer-length 255", 8, integer_length(255));
+test("integer-length 256", 9, integer_length(256));
+test("bit-set? bit0", true, `bit-set?`(0, 1));
+test("bit-set? bit1", true, `bit-set?`(1, 2));
+test("bit-set? bit2", true, `bit-set?`(2, 7));
+test("bit-set? false", false, `bit-set?`(3, 7));
+test("bit-set? bit0 of 0", false, `bit-set?`(0, 0));
+
+// ===== chibi/ast - type introspection =====
+test_assert("type-of fixnum", `type?`(`type-of`(42)));
+test_assert("type-of string", `type?`(`type-of`("hello")));
+test_assert("type-of pair", `type?`(`type-of`([1, 2])));
+test_assert("type-of boolean", `type?`(`type-of`(true)));
+test_assert("type-name string", string?(`type-name`(`type-of`(42))));
+test_assert("type-num-slots", number?(`type-num-slots`(`type-of`(42))));
+
+// ===== chibi/ast - procedure introspection =====
+test("procedure-arity 0", 0, `procedure-arity`(function() 1));
+test("procedure-arity 1", 1, `procedure-arity`(function(x) x));
+test("procedure-arity 2", 2, `procedure-arity`(function(x, y) x + y));
+test("procedure-variadic? false", false,
+  `procedure-variadic?`(function(x, y) x + y));
+test_assert("procedure-code is bytecode",
+  `bytecode?`(`procedure-code`(function(x) x)));
+test_assert("procedure-vars is vector",
+  vector?(`procedure-vars`(function(x) x)));
+
+// ===== chibi/ast - GC =====
+test("gc runs", true, { gc(); true; });
+test_assert("gc-count is number", number?(`gc-count`()));
+test_assert("gc-count positive", `gc-count`() >= 0);
+test_assert("gc-usecs is number", number?(`gc-usecs`()));
+
+// ===== chibi/ast - object-size =====
+test_assert("object-size pair", `object-size`([1, 2]) > 0);
+test_assert("object-size string", `object-size`("hello") > 0);
+test_assert("object-size vector", `object-size`(vector(1, 2, 3)) > 0);
+
+// ===== chibi/ast - string-contains =====
+// string-contains returns a cursor (truthy) or #f
+test_assert("string-contains found",
+  `string-contains`("hello world", "world"));
+test("string-contains not found", false,
+  `string-contains`("hello", "xyz"));
+test_assert("string-contains at start",
+  `string-contains`("hello", "hel"));
+test_assert("string-contains middle",
+  `string-contains`("abcdef", "cde"));
+
+// ===== chibi/ast - immutable =====
+test_assert("immutable-string is string",
+  string?(`immutable-string`("hello")));
+test("immutable? true", true,
+  `immutable?`(`immutable-string`("hello")));
+
+// ===== chibi/ast - misc =====
+test_assert("chibi-version is string", string?(`chibi-version`));
+test_assert("errno is number", number?(`errno`()));
+
+// ===== chibi/ast - opcode introspection =====
+test_assert("opcode-name", string?(`opcode-name`(+)));
+test_assert("opcode-class", number?(`opcode-class`(+)));
+test_assert("opcode-num-params", number?(`opcode-num-params`(+)));
+
+// ===== chibi/ast - setenv/unsetenv =====
+test("setenv/getenv roundtrip", "test_value_123", {
+  `setenv`("__CHIBI_TEST_VAR__", "test_value_123");
+  define result = get_env("__CHIBI_TEST_VAR__");
+  `unsetenv`("__CHIBI_TEST_VAR__");
+  result
+});
+test("unsetenv clears var", false, {
+  `setenv`("__CHIBI_TEST_VAR2__", "x");
+  `unsetenv`("__CHIBI_TEST_VAR2__");
+  get_env("__CHIBI_TEST_VAR2__")
+});
+
+// ===== chibi/ast - env operations =====
+// env-parent may return #f for top-level environment
+test("env-parent callable", true, {
+  define p = `env-parent`(`current-environment`());
+  p == false || `environment?`(p)
+});
+test("env-define!", 42, {
+  define e = `current-environment`();
+  `env-define!`(e, '__test_env_var__, 42);
+  __test_env_var__
+});
+
+// ===== chibi/weak - ephemerons =====
+test("ephemeron create", true, {
+  define key = [1, 2, 3];
+  define eph = `make-ephemeron`(key, "value");
+  `ephemeron?`(eph)
+});
+test("ephemeron-key", [1, 2, 3], {
+  define key = [1, 2, 3];
+  define eph = `make-ephemeron`(key, "value");
+  `ephemeron-key`(eph)
+});
+test("ephemeron-value", "value", {
+  define key = "key";
+  define eph = `make-ephemeron`(key, "value");
+  `ephemeron-value`(eph)
+});
+test("ephemeron not broken", false, {
+  define key = "key";
+  define eph = `make-ephemeron`(key, "value");
+  `ephemeron-broken?`(eph)
+});
+test("ephemeron? false for non-eph", false,
+  `ephemeron?`(42));
+
+// ===== chibi/json =====
+// json-write numbers
+test("json-write integer", "42", {
+  define p = `open-output-string`();
+  json_write(42, p);
+  `get-output-string`(p)
+});
+test("json-write negative", "-7", {
+  define p = `open-output-string`();
+  json_write(-7, p);
+  `get-output-string`(p)
+});
+test("json-write zero", "0", {
+  define p = `open-output-string`();
+  json_write(0, p);
+  `get-output-string`(p)
+});
+test("json-write float", "3.14", {
+  define p = `open-output-string`();
+  json_write(3.14, p);
+  `get-output-string`(p)
+});
+// json-write strings
+test("json-write string", "\"hello\"", {
+  define p = `open-output-string`();
+  json_write("hello", p);
+  `get-output-string`(p)
+});
+test("json-write empty string", "\"\"", {
+  define p = `open-output-string`();
+  json_write("", p);
+  `get-output-string`(p)
+});
+// json-write booleans
+test("json-write true", "true", {
+  define p = `open-output-string`();
+  json_write(true, p);
+  `get-output-string`(p)
+});
+test("json-write false", "false", {
+  define p = `open-output-string`();
+  json_write(false, p);
+  `get-output-string`(p)
+});
+// json-write null (symbol 'null maps to JSON null)
+test("json-write null", "null", {
+  define p = `open-output-string`();
+  json_write('null, p);
+  `get-output-string`(p)
+});
+// json-write empty object (empty alist = empty JSON object)
+test("json-write empty object", "{}", {
+  define p = `open-output-string`();
+  json_write('(), p);
+  `get-output-string`(p)
+});
+// json-write arrays (vectors map to JSON arrays)
+test("json-write array", "[1,2,3]", {
+  define p = `open-output-string`();
+  json_write(vector(1, 2, 3), p);
+  `get-output-string`(p)
+});
+test("json-write empty array", "[]", {
+  define p = `open-output-string`();
+  json_write(vector(), p);
+  `get-output-string`(p)
+});
+// json-read
+test("json-read integer", 42, {
+  define p = `open-input-string`("42");
+  json_read(p)
+});
+test("json-read negative", -7, {
+  define p = `open-input-string`("-7");
+  json_read(p)
+});
+test("json-read float", 3.14, {
+  define p = `open-input-string`("3.14");
+  json_read(p)
+});
+test("json-read string", "hello", {
+  define p = `open-input-string`("\"hello\"");
+  json_read(p)
+});
+test("json-read true", true, {
+  define p = `open-input-string`("true");
+  json_read(p)
+});
+test("json-read false", false, {
+  define p = `open-input-string`("false");
+  json_read(p)
+});
+test("json-read array", [1, 2, 3], {
+  define p = `open-input-string`("[1, 2, 3]");
+  json_read(p)
+});
+test("json-read empty array", [], {
+  define p = `open-input-string`("[]");
+  json_read(p)
+});
+// json roundtrip: vector → JSON array → list
+test("json roundtrip array", true, {
+  define data = vector(1, "hello", true, false);
+  define p = `open-output-string`();
+  json_write(data, p);
+  define s = `get-output-string`(p);
+  define p2 = `open-input-string`(s);
+  define result = json_read(p2);
+  `equiv?`(result, [1, "hello", true, false])
+});
+
+// ===== srfi/39 parameters =====
+test("make-parameter default", 10, {
+  define p = `make-parameter`(10);
+  p()
+});
+test("make-parameter with converter", 20, {
+  define p = `make-parameter`(10, function(x) x * 2);
+  p()
+});
+test("parameter-converter exists", true, {
+  define conv = function(x) x + 1;
+  define p = `make-parameter`(0, conv);
+  `procedure?`(`parameter-converter`(p))
+});
+
+// ===== chibi/heap-stats =====
+test_assert("heap-stats is list", list?(heap_stats()));
+test_assert("heap-stats non-empty", length(heap_stats()) > 0);
+test_assert("heap-sizes is list", list?(`heap-sizes`()));
+test_assert("heap-sizes non-empty", length(`heap-sizes`()) > 0);
+test_assert("free-sizes is list", list?(`free-sizes`()));
+
+// ===== chibi/optimize/profile =====
+test("increment-cdr!", 2, {
+  define p = cons(1, 1);
+  `increment-cdr!`(p);
+  cdr(p)
+});
+test("increment-cdr! twice", 3, {
+  define p = cons(1, 1);
+  `increment-cdr!`(p);
+  `increment-cdr!`(p);
+  cdr(p)
+});
+
+// ===== chibi/optimize/rest =====
+test_assert("num-parameters", number?(`num-parameters`()));
+
+// ===== chibi/disasm =====
+test("disasm runs", true, {
+  define p = `open-output-string`();
+  `disasm`(function(x) x + 1, p);
+  `string-length`(`get-output-string`(p)) > 0
+});
+
+test_end();

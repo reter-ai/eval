@@ -203,10 +203,7 @@ sexp sexp_free_sizes (sexp ctx, sexp self, sexp_sint_t n) {
 
 #endif
 
-sexp sexp_init_library (sexp ctx, sexp self, sexp_sint_t n, sexp env, const char* version, const sexp_abi_identifier_t abi) {
-  if (!(sexp_version_compatible(ctx, version, sexp_version)
-        && sexp_abi_compatible(ctx, abi, SEXP_ABI_IDENTIFIER)))
-    return SEXP_ABI_ERROR;
+sexp sexp_init_chibi_heap_stats (sexp ctx, sexp self, sexp_sint_t n, sexp env) {
   sexp_define_foreign(ctx, env, "heap-stats", 0, sexp_heap_stats);
   sexp_define_foreign(ctx, env, "heap-sizes", 0, sexp_heap_sizes);
   sexp_define_foreign_opt(ctx, env, "heap-dump", 1, sexp_heap_dump, SEXP_ONE);

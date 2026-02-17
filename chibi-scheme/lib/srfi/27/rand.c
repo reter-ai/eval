@@ -198,12 +198,9 @@ sexp sexp_random_source_pseudo_randomize (sexp ctx, sexp self, sexp_sint_t n, se
   return SEXP_VOID;
 }
 
-sexp sexp_init_library (sexp ctx, sexp self, sexp_sint_t n, sexp env, const char* version, const sexp_abi_identifier_t abi) {
+sexp sexp_init_srfi27_rand (sexp ctx, sexp self, sexp_sint_t n, sexp env) {
   sexp_uint_t rs_type_id;
   sexp_gc_var3(name, op, make_op);
-  if (!(sexp_version_compatible(ctx, version, sexp_version)
-        && sexp_abi_compatible(ctx, abi, SEXP_ABI_IDENTIFIER)))
-    return SEXP_ABI_ERROR;
   sexp_gc_preserve3(ctx, name, op, make_op);
 
   name = sexp_c_string(ctx, "random-source", -1);

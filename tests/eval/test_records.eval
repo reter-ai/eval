@@ -1,0 +1,28 @@
+test_begin("Records");
+
+// Basic record
+record Point(x, y);
+define p = make_Point(3, 4);
+test("accessor x", 3, Point_x(p));
+test("accessor y", 4, Point_y(p));
+
+// Predicate
+test("predicate true", true, Point?(p));
+test("predicate false", false, Point?(42));
+
+// Multiple record types
+record Pair(a, b);
+define pr = make_Pair(10, 20);
+test("Pair a", 10, Pair_a(pr));
+test("Pair b", 20, Pair_b(pr));
+test("Pair? true", true, Pair?(pr));
+test("Pair? false for Point", false, Pair?(p));
+test("Point? false for Pair", false, Point?(pr));
+
+// Record with different value types
+record Entry(key, value);
+define e = make_Entry("name", 42);
+test("string field", "name", Entry_key(e));
+test("int field", 42, Entry_value(e));
+
+test_end();

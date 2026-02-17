@@ -100,6 +100,7 @@ static const Keyword keywords[] = {
     {"else",        TOK_ELSE},
     {"for",         TOK_FOR},
     {"while",       TOK_WHILE},
+    {"in",          TOK_IN},
     {"do",          TOK_DO},
     {"until",       TOK_UNTIL},
     {"return",      TOK_RETURN},
@@ -125,6 +126,8 @@ static const Keyword keywords[] = {
     {"include",     TOK_INCLUDE},
     {"macro",       TOK_MACRO},
     {"syntax_rules",TOK_SYNTAX_RULES},
+    {"test_group",  TOK_TEST_GROUP},
+    {"define",      TOK_DEFINE},
     {"true",        TOK_TRUE},
     {"false",       TOK_FALSE},
     {"nil",         TOK_NIL},
@@ -404,13 +407,7 @@ int eval_lexer_next(EvalLexer *lexer, EvalToken *token) {
         break;
 
     case ':':
-        if (peek(lexer) == '=') {
-            advance(lexer);
-            token->type = TOK_DEFINE;
-            token->length = 2;
-        } else {
-            token->type = TOK_COLON;
-        }
+        token->type = TOK_COLON;
         break;
 
     case '=':
@@ -526,7 +523,11 @@ int eval_lexer_next(EvalLexer *lexer, EvalToken *token) {
         break;
 
     case '!':
-        if (peek(lexer) == '!') {
+        if (peek(lexer) == '=') {
+            advance(lexer);
+            token->type = TOK_BANGEQ;
+            token->length = 2;
+        } else if (peek(lexer) == '!') {
             advance(lexer);
             token->type = TOK_BANGBANG;
             token->length = 2;
@@ -566,7 +567,6 @@ const char *eval_token_name(int type) {
     /* Use a switch since token values are lemon-assigned and may change. */
     switch (type) {
     case TOK_EOF:           return "EOF";
-    case TOK_DEFINE:        return ":=";
     case TOK_ASSIGN:        return "=";
     case TOK_PLUS_ASSIGN:   return "+=";
     case TOK_MINUS_ASSIGN:  return "-=";
@@ -577,6 +577,7 @@ const char *eval_token_name(int type) {
     case TOK_BITAND:        return "&";
     case TOK_EQEQ:          return "==";
     case TOK_EQQ:           return "=?";
+    case TOK_BANGEQ:        return "!=";
     case TOK_LT:            return "<";
     case TOK_GT:            return ">";
     case TOK_LTE:           return "<=";
@@ -644,6 +645,8 @@ const char *eval_token_name(int type) {
     case TOK_INCLUDE:       return "include";
     case TOK_MACRO:         return "macro";
     case TOK_SYNTAX_RULES:  return "syntax_rules";
+    case TOK_TEST_GROUP:    return "test_group";
+    case TOK_DEFINE:        return "define";
     case TOK_OPVAL:         return "OPVAL";
     default:                return "UNKNOWN";
     }

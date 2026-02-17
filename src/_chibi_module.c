@@ -17,6 +17,9 @@ static PyModuleDef chibi_module = {
 PyMODINIT_FUNC PyInit__chibi(void) {
     PyObject *m;
 
+    /* Initialize chibi-scheme globals once (thread-safe) */
+    sexp_scheme_init();
+
     /* Initialize types */
     if (PyType_Ready(&ChibiContextType) < 0)
         return NULL;

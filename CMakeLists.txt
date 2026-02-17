@@ -50,6 +50,25 @@ set(CHIBI_SOURCES
     chibi-scheme/simplify.c
 )
 
+# ---------- Chibi-scheme library sources (statically compiled in) ----------
+set(CHIBI_LIB_SOURCES
+    chibi-scheme/lib/scheme/time.c
+    chibi-scheme/lib/chibi/json.c
+    chibi-scheme/lib/chibi/weak.c
+    chibi-scheme/lib/chibi/ast.c
+    chibi-scheme/lib/chibi/heap-stats.c
+    chibi-scheme/lib/chibi/disasm.c
+    chibi-scheme/lib/chibi/optimize/profile.c
+    chibi-scheme/lib/chibi/optimize/rest.c
+    chibi-scheme/lib/srfi/18/threads.c
+    chibi-scheme/lib/srfi/27/rand.c
+    chibi-scheme/lib/srfi/39/param.c
+    chibi-scheme/lib/srfi/69/hash.c
+    chibi-scheme/lib/srfi/95/qsort.c
+    chibi-scheme/lib/srfi/98/env.c
+    chibi-scheme/lib/srfi/151/bit.c
+)
+
 # ---------- Extension module sources ----------
 set(EXT_SOURCES
     src/_chibi_module.c
@@ -63,16 +82,26 @@ set(EXT_SOURCES
     src/eval_grammar.c
     src/_eval_parser_helpers.c
     src/_chibi_serialize.c
+    src/_eval_pool.c
+    src/_eval_lib_init.c
 )
 
 # ---------- Build the Python C extension ----------
-python_add_library(_chibi MODULE ${CHIBI_SOURCES} ${EXT_SOURCES})
+python_add_library(_chibi MODULE ${CHIBI_SOURCES} ${CHIBI_LIB_SOURCES} ${EXT_SOURCES})
 
 target_include_directories(_chibi PRIVATE
     ${CMAKE_SOURCE_DIR}/chibi-scheme/include
     ${CMAKE_BINARY_DIR}/include
     ${CMAKE_SOURCE_DIR}/src
 )
+
+# Win_compat headers provide sys/time.h, unistd.h, poll.h shims for Windows.
+# Must come AFTER system includes so #include_next works on POSIX.
+if(WIN32)
+    target_include_directories(_chibi PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/win_compat
+    )
+endif()
 
 target_compile_definitions(_chibi PRIVATE
     SEXP_STATIC_LIBRARY=1
@@ -81,6 +110,7 @@ target_compile_definitions(_chibi PRIVATE
     SEXP_USE_GREEN_THREADS=1
     SEXP_USE_MMAP=0
     SEXP_USE_BOEHM=0
+    BUILDING_EVAL_POOL=1
 )
 
 # Platform-specific settings

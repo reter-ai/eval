@@ -1,0 +1,39 @@
+test_begin("Variables");
+
+// Define
+define x = 42;
+test("define", 42, x);
+
+// Redefine
+x = 100;
+test("redefine", 100, x);
+
+// Compound assignment
+define c = 10;
+c += 5;
+test("plus-assign", 15, c);
+c -= 3;
+test("minus-assign", 12, c);
+
+// Increment / decrement
+define n = 10;
+n++;
+test("increment", 11, n);
+n--;
+test("decrement", 10, n);
+
+// Multiple variables
+define a = 1;
+define b = 2;
+test("multi vars sum", 3, a + b);
+
+// Assignment in block
+define result = { define v = 99; v + 1; };
+test("block assign", 100, result);
+
+// Assignment in if body
+define flag = 0;
+if(true) flag = 7;
+test("if body assign", 7, flag);
+
+test_end();

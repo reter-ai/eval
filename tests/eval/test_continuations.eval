@@ -1,0 +1,30 @@
+test_begin("Continuations");
+
+// Basic callcc
+test("callcc basic", 42, `call/cc`(function(k) k(42)));
+
+// callcc alias
+test("callcc alias", 99, callcc(function(k) k(99)));
+
+// callcc for early exit
+test("callcc early exit", 10,
+    callcc(function(exit) {
+        define x = 10;
+        exit(x);
+        x + 100;
+    }));
+
+// callcc with computation after
+test("callcc compute", 45,
+    callcc(function(k) {
+        define total = 0;
+        for(let i = 0, i < 10, i++) total += i;
+        k(total);
+    }));
+
+// callcc storing continuation
+define saved_k = false;
+define r1 = callcc(function(k) { saved_k = k; 1; });
+test_assert("callcc stored", !(saved_k == false));
+
+test_end();

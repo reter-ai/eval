@@ -42,10 +42,18 @@ enum ser_immediate_kind {
     SER_IMM_UNDEF = 5,
 };
 
-/* Public API */
+/* Public API (Python wrappers) */
 PyObject *chibi_serialize_continuation(sexp ctx, sexp env, sexp cont);
 sexp chibi_deserialize_continuation(sexp ctx, sexp env,
                                     const unsigned char *data,
                                     Py_ssize_t len);
+
+/* Pure-C API (no Python dependency) */
+int ser_sexp_to_buf(sexp ctx, sexp env, sexp val,
+                    unsigned char **out_data, size_t *out_len,
+                    char *err_msg, size_t err_len);
+sexp deser_sexp_from_buf(sexp ctx, sexp env,
+                         const unsigned char *data, size_t len,
+                         char *err_msg, size_t err_len);
 
 #endif /* _CHIBI_SERIALIZE_H */

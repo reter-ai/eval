@@ -1,0 +1,370 @@
+test_begin("Pool Continuations");
+
+define pool = make_pool(2);
+
+// === call/cc basic ===
+define f1 = pool_submit(pool, "callcc(function(k) k(42));");
+test("callcc basic", 42, future_result(f1));
+
+// === return (uses call/cc internally) ===
+define f2 = pool_submit(pool, "define double = function(x) return x * 2; double(21);");
+test("return", 42, future_result(f2));
+
+// === early return from function ===
+define f3 = pool_submit(pool, "define abs = function(x) { if(x >= 0) return x; return 0 - x; }; abs(0 - 7);");
+test("early return", 7, future_result(f3));
+
+// === nested call/cc ===
+define f4 = pool_submit(pool, "callcc(function(k1) callcc(function(k2) k1(99)));");
+test("nested callcc", 99, future_result(f4));
+
+// === call/cc used for loop exit ===
+define f5 = pool_submit(pool, "
+    define result = callcc(function(exit) {
+        define i = 0;
+        while(i < 100) {
+            if(i == 5) exit(i);
+            i++;
+        };
+        999;
+    });
+    result;
+");
+test("callcc loop exit", 5, future_result(f5));
+
+// === Multiple continuations in separate workers ===
+define f6 = pool_submit(pool, "callcc(function(k) k(100));");
+define f7 = pool_submit(pool, "callcc(function(k) k(200));");
+test("parallel callcc 1", 100, future_result(f6));
+test("parallel callcc 2", 200, future_result(f7));
+
+// === call/cc with channels ===
+define ch = pool_channel(pool, "cont_ch");
+pool_submit(pool, "
+    define val = callcc(function(k) k(77));
+    channel_send(cont_ch, val);
+");
+test("callcc + channel", 77, channel_recv(ch));
+
+// === function with multiple returns ===
+define f8 = pool_submit(pool, "
+    define classify = function(n) {
+        if(n < 0) return \"negative\";
+        if(n == 0) return \"zero\";
+        return \"positive\";
+    };
+    list(classify(0 - 1), classify(0), classify(1));
+");
+test("multi return", ["negative", "zero", "positive"], future_result(f8));
+
+pool_shutdown(pool);
+
+// ===== Lambda/Closure Transfer via Channels =====
+
+define pool2 = make_pool(2);
+
+// Send a lambda through a channel, receive and call it
+define lch = pool_channel(pool2, "lambda_ch");
+define lch_out = pool_channel(pool2, "lambda_out");
+
+pool_submit(pool2, "
+    define add10 = function(x) x + 10;
+    channel_send(lambda_ch, add10);
+");
+
+pool_submit(pool2, "
+    define fn = channel_recv(lambda_ch);
+    channel_send(lambda_out, fn(32));
+");
+
+test("lambda via channel", 42, channel_recv(lch_out));
+
+// Send a closure (captures variable) through a channel
+define cch = pool_channel(pool2, "closure_ch");
+define cch_out = pool_channel(pool2, "closure_out");
+
+pool_submit(pool2, "
+    define make_adder = function(n) function(x) n + x;
+    define add100 = make_adder(100);
+    channel_send(closure_ch, add100);
+");
+
+pool_submit(pool2, "
+    define fn = channel_recv(closure_ch);
+    channel_send(closure_out, fn(23));
+");
+
+test("closure via channel", 123, channel_recv(cch_out));
+
+pool_shutdown(pool2);
+
+// ===== Lambda Return via Future =====
+
+define pool3 = make_pool(2);
+
+// Worker returns a closure via future result
+define fch = pool_channel(pool3, "fn_result");
+
+pool_submit(pool3, "
+    define multiplier = function(n) function(x) n * x;
+    define triple = multiplier(3);
+    channel_send(fn_result, triple);
+");
+
+// Receive the closure in main context and call it
+define received_fn = channel_recv(fch);
+test("closure from worker", 21, received_fn(7));
+
+pool_shutdown(pool3);
+
+// ===== Higher-order: map with transferred function =====
+
+define pool4 = make_pool(2);
+define hch = pool_channel(pool4, "ho_ch");
+define hch_out = pool_channel(pool4, "ho_out");
+
+pool_submit(pool4, "
+    define square = function(x) x * x;
+    channel_send(ho_ch, square);
+");
+
+pool_submit(pool4, "
+    define fn = channel_recv(ho_ch);
+    channel_send(ho_out, map(fn, [1, 2, 3, 4, 5]));
+");
+
+test("higher-order transfer", [1, 4, 9, 16, 25], channel_recv(hch_out));
+
+pool_shutdown(pool4);
+
+// ===== pool_apply: Submit Lambda/Closure via Binary Serialization =====
+
+define pool5 = make_pool(2);
+
+// Basic: apply a simple function
+define square = function(x) x * x;
+define fa1 = pool_apply(pool5, square, [7]);
+test("pool_apply square", 49, future_result(fa1));
+
+// Closure with captured variable
+define make_adder = function(n) function(x) n + x;
+define add100 = make_adder(100);
+define fa2 = pool_apply(pool5, add100, [23]);
+test("pool_apply closure", 123, future_result(fa2));
+
+// No-arg function
+define greeting = function() "hello";
+define fa3 = pool_apply(pool5, greeting, []);
+test("pool_apply no-arg", "hello", future_result(fa3));
+
+// Multi-arg function
+define add3 = function(a, b, c) a + b + c;
+define fa4 = pool_apply(pool5, add3, [10, 20, 30]);
+test("pool_apply multi-arg", 60, future_result(fa4));
+
+// Higher-order: return a closure from worker
+define multiplier = function(n) function(x) n * x;
+define fa5 = pool_apply(pool5, multiplier, [5]);
+define triple_fn = future_result(fa5);
+test("pool_apply returns closure", 25, triple_fn(5));
+
+// Multiple pool_apply in parallel
+define fa6 = pool_apply(pool5, square, [3]);
+define fa7 = pool_apply(pool5, square, [4]);
+define fa8 = pool_apply(pool5, square, [5]);
+test("pool_apply parallel", [9, 16, 25],
+    list(future_result(fa6), future_result(fa7), future_result(fa8)));
+
+pool_shutdown(pool5);
+
+// ===== pool_apply with continuations =====
+
+define pool6 = make_pool(2);
+
+// Function using return (compiles to call/cc internally)
+define abs_val = function(x) {
+    if(x >= 0) return x;
+    return 0 - x;
+};
+define fc1 = pool_apply(pool6, abs_val, [-42]);
+test("pool_apply return", 42, future_result(fc1));
+
+define fc2 = pool_apply(pool6, abs_val, [7]);
+test("pool_apply return pos", 7, future_result(fc2));
+
+// Function with multiple return paths
+define classify = function(n) {
+    if(n < 0) return "negative";
+    if(n == 0) return "zero";
+    return "positive";
+};
+test("pool_apply classify neg", "negative",
+    future_result(pool_apply(pool6, classify, [-5])));
+test("pool_apply classify zero", "zero",
+    future_result(pool_apply(pool6, classify, [0])));
+test("pool_apply classify pos", "positive",
+    future_result(pool_apply(pool6, classify, [1])));
+
+// Function using callcc for early exit from for-in loop
+define sum_until_negative = function(lst) {
+    callcc(function(exit) {
+        define result = 0;
+        for(let x in lst) {
+            if(x < 0) exit(result);
+            result += x;
+        };
+        result;
+    });
+};
+define fc3 = pool_apply(pool6, sum_until_negative, [[1, 2, 3, -1, 4, 5]]);
+test("pool_apply callcc exit", 6, future_result(fc3));
+
+define fc4 = pool_apply(pool6, sum_until_negative, [[10, 20, 30]]);
+test("pool_apply callcc no exit", 60, future_result(fc4));
+
+// Recursive function with return
+define factorial = function(n) {
+    if(n <= 1) return 1;
+    return n * factorial(n - 1);
+};
+define fc5 = pool_apply(pool6, factorial, [10]);
+test("pool_apply recursive", 3628800, future_result(fc5));
+
+// Closure + return combo
+define make_clamper = function(lo, hi) {
+    function(x) {
+        if(x < lo) return lo;
+        if(x > hi) return hi;
+        return x;
+    };
+};
+define clamp = make_clamper(0, 100);
+test("pool_apply closure+return lo", 0,
+    future_result(pool_apply(pool6, clamp, [-5])));
+test("pool_apply closure+return mid", 50,
+    future_result(pool_apply(pool6, clamp, [50])));
+test("pool_apply closure+return hi", 100,
+    future_result(pool_apply(pool6, clamp, [999])));
+
+pool_shutdown(pool6);
+
+// ===== Green threads inside pool workers =====
+
+define pool7 = make_pool(2);
+define gt_ch = pool_channel(pool7, "gt_out");
+
+// Run a cooperative green thread scheduler inside a worker
+pool_submit(pool7, "
+    // Mini scheduler using callcc
+    define threads = [];
+    define sched_k = false;
+
+    define spawn = function(thunk) {
+        threads = append(threads, [thunk]);
+    };
+
+    define run = function() {
+        callcc(function(sk) { sched_k = sk; });
+        while(length(threads) > 0) {
+            define t = car(threads);
+            threads = cdr(threads);
+            t();
+        };
+    };
+
+    define yield = function() {
+        callcc(function(k) {
+            spawn(function() k(false));
+            sched_k(false);
+        });
+    };
+
+    // Accumulate interleaved output
+    define log = [];
+
+    spawn(function() {
+        log = append(log, [\"A1\"]);
+        yield();
+        log = append(log, [\"A2\"]);
+        yield();
+        log = append(log, [\"A3\"]);
+    });
+
+    spawn(function() {
+        log = append(log, [\"B1\"]);
+        yield();
+        log = append(log, [\"B2\"]);
+        yield();
+        log = append(log, [\"B3\"]);
+    });
+
+    run();
+    channel_send(gt_out, log);
+");
+
+test("green threads in worker",
+    ["A1", "B1", "A2", "B2", "A3", "B3"],
+    channel_recv(gt_ch));
+
+// Green threads in TWO workers in parallel
+define gt_ch2 = pool_channel(pool7, "gt_out2");
+define gt_ch3 = pool_channel(pool7, "gt_out3");
+
+pool_submit(pool7, "
+    define threads = [];
+    define sched_k = false;
+    define spawn = function(thunk) { threads = append(threads, [thunk]); };
+    define run = function() {
+        callcc(function(sk) { sched_k = sk; });
+        while(length(threads) > 0) {
+            define t = car(threads);
+            threads = cdr(threads);
+            t();
+        };
+    };
+    define yield = function() {
+        callcc(function(k) {
+            spawn(function() k(false));
+            sched_k(false);
+        });
+    };
+
+    define result = 0;
+    spawn(function() { result += 1; yield(); result += 10; yield(); result += 100; });
+    spawn(function() { result += 2; yield(); result += 20; yield(); result += 200; });
+    run();
+    channel_send(gt_out2, result);
+");
+
+pool_submit(pool7, "
+    define threads = [];
+    define sched_k = false;
+    define spawn = function(thunk) { threads = append(threads, [thunk]); };
+    define run = function() {
+        callcc(function(sk) { sched_k = sk; });
+        while(length(threads) > 0) {
+            define t = car(threads);
+            threads = cdr(threads);
+            t();
+        };
+    };
+    define yield = function() {
+        callcc(function(k) {
+            spawn(function() k(false));
+            sched_k(false);
+        });
+    };
+
+    define result = 0;
+    spawn(function() { result += 1000; yield(); result += 4000; });
+    spawn(function() { result += 2000; yield(); result += 3000; });
+    run();
+    channel_send(gt_out3, result);
+");
+
+test("green threads worker 1", 333, channel_recv(gt_ch2));
+test("green threads worker 2", 10000, channel_recv(gt_ch3));
+
+pool_shutdown(pool7);
+
+test_end();

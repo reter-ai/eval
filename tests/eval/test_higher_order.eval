@@ -1,0 +1,39 @@
+test_begin("Higher-Order Functions");
+
+// map
+test("map double", [2, 4, 6], map(function(x) x * 2, [1, 2, 3]));
+test("map square", [1, 4, 9], map(function(x) x * x, [1, 2, 3]));
+test("map empty", [], map(function(x) x, []));
+
+// filter
+test("filter >2", [3, 4, 5], filter(function(x) x > 2, [1, 2, 3, 4, 5]));
+test("filter even", [2, 4], filter(function(x) modulo(x, 2) == 0, [1, 2, 3, 4, 5]));
+test("filter none", [], filter(function(x) x > 10, [1, 2, 3]));
+
+// fold
+test("fold sum", 15, fold(+, 0, [1, 2, 3, 4, 5]));
+test("fold product", 120, fold(*, 1, [1, 2, 3, 4, 5]));
+test("fold custom", [3, 2, 1],
+    fold(function(x, acc) cons(x, acc), [], [1, 2, 3]));
+
+// apply
+test("apply +", 10, apply(+, [1, 2, 3, 4]));
+test("apply list", [1, 2, 3], apply(list, [1, 2, 3]));
+
+// for-each (side effects)
+define count = 0;
+`for-each`(function(x) { count += x; }, [1, 2, 3, 4, 5]);
+test("for-each sum", 15, count);
+
+// Composition patterns
+define square = function(x) x * x;
+define double = function(x) x * 2;
+test("compose map", [2, 8, 18],
+    map(double, map(square, [1, 2, 3])));
+
+// Map with index via zip-like pattern
+test("map filter chain", [4, 16],
+    map(function(x) x * x,
+        filter(function(x) modulo(x, 2) == 0, [1, 2, 3, 4, 5])));
+
+test_end();

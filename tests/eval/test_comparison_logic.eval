@@ -1,0 +1,45 @@
+test_begin("Comparison & Logic");
+
+// Comparisons
+test("less than true", true, 1 < 2);
+test("less than false", false, 2 < 1);
+test("greater than", true, 2 > 1);
+test("lte equal", true, 1 <= 1);
+test("lte less", true, 1 <= 2);
+test("gte equal", true, 2 >= 2);
+test("gte greater", true, 3 >= 2);
+test("equal true", true, 1 == 1);
+test("equal false", false, 1 == 2);
+
+// eq? vs equal?
+test("eq? same symbol", true, ('hello) =? ('hello));
+test("equal? lists", true, [1, 2] == [1, 2]);
+
+// Logical AND
+test("and tt", true, (1 < 2) && (3 > 1));
+test("and tf", false, (1 > 2) && (3 > 1));
+test("and ff", false, (1 > 2) && (3 < 1));
+
+// Logical OR
+test("or tf", true, (1 > 2) || (3 > 1));
+test("or tt", true, (1 < 2) || (3 > 1));
+test("or ff", false, (1 > 2) || (3 < 1));
+
+// Logical NOT
+test("not false", true, !(1 > 2));
+test("not true", false, !true);
+
+// Short-circuit: false && ... should not evaluate RHS
+// (if it did, it would error)
+test_assert("short-circuit and", !(false && (1 / 0 == 0)));
+
+// String equality
+test("string equal", true, "abc" == "abc");
+test("string not equal", false, "abc" == "xyz");
+
+// Boolean equality
+test("bool equal true", true, true == true);
+test("bool equal false", true, false == false);
+test("bool not equal", false, true == false);
+
+test_end();

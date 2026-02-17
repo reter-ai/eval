@@ -10,10 +10,7 @@ static sexp sexp_increment_cdr (sexp ctx, sexp self, sexp_sint_t n, sexp pair) {
   return SEXP_VOID;
 }
 
-sexp sexp_init_library (sexp ctx, sexp self, sexp_sint_t n, sexp env, const char* version, const sexp_abi_identifier_t abi) {
-  if (!(sexp_version_compatible(ctx, version, sexp_version)
-        && sexp_abi_compatible(ctx, abi, SEXP_ABI_IDENTIFIER)))
-    return SEXP_ABI_ERROR;
+sexp sexp_init_chibi_optimize_profile (sexp ctx, sexp self, sexp_sint_t n, sexp env) {
   sexp_define_foreign(ctx, env, "increment-cdr!", 1, sexp_increment_cdr);
   return SEXP_VOID;
 }

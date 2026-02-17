@@ -1,0 +1,50 @@
+test_begin("OOP");
+
+// Constructor with interface
+define Point = constructor(x, y)
+    interface(x: x, y: y, dist: function() (x**2 + y**2)**0.5);
+define p = Point(3, 4);
+test("member x", 3, p->x);
+test("member y", 4, p->y);
+test("method dist", 5.0, p->dist());
+
+// Constructor with block body and mutation
+define Counter = constructor(init) {
+    define count = init;
+    interface(
+        get: function() count,
+        inc: function() { count += 1; count; }
+    );
+};
+define c = Counter(0);
+test("counter init", 0, c->get());
+c->inc();
+test("counter inc", 1, c->get());
+c->inc();
+c->inc();
+test("counter inc 3", 3, c->get());
+
+// Inheritance with super
+define Base = constructor()
+    interface(greet: function() "hello");
+define Child = constructor() {
+    super Base();
+    interface(name: function() "child");
+};
+define ch = Child();
+test("child method", "child", ch->name());
+test("inherited method", "hello", ch->greet());
+
+// Interface with closures
+define make_pair = constructor(a, b)
+    interface(
+        first: function() a,
+        second: function() b,
+        sum: function() a + b
+    );
+define pr = make_pair(10, 20);
+test("pair first", 10, pr->first());
+test("pair second", 20, pr->second());
+test("pair sum", 30, pr->sum());
+
+test_end();

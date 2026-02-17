@@ -1,0 +1,48 @@
+test_begin("Loops");
+
+// while
+define i = 0;
+define total = 0;
+while(i < 10) { total += i; i++; };
+test("while sum", 45, total);
+
+// while with = for mutation
+define x = 0;
+while(x < 3) x = x + 1;
+test("while assign", 3, x);
+
+// for loop
+define sum = 0;
+for(let j = 0, j < 5, j++) sum += j;
+test("for sum", 10, sum);
+
+// do..until
+define k = 0;
+do k++ until(k >= 5);
+test("do until", 5, k);
+
+// break in while
+define n = 0;
+while(true) { if(n >= 3) break; n++; };
+test("break while", 3, n);
+
+// break in for
+total = 0;
+for(let i = 0, i < 100, i++) { if(i >= 5) break; total += i; };
+test("break for", 10, total);
+
+// Nested loops
+define outer = 0;
+for(let i = 0, i < 3, i++) {
+    for(let j = 0, j < 3, j++) {
+        outer += 1;
+    };
+};
+test("nested loops", 9, outer);
+
+// Loop accumulating via list
+define acc = [];
+for(let i = 0, i < 4, i++) acc = append(acc, [i]);
+test("loop accumulate", [0, 1, 2, 3], acc);
+
+test_end();

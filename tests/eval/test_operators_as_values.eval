@@ -1,0 +1,39 @@
+test_begin("Operators as Values");
+
+// apply with operator values
+test("apply +", 7, apply(+, [3, 4]));
+test("apply -", 7, apply(-, [10, 3]));
+test("apply *", 42, apply(*, [6, 7]));
+test("apply /", 5, apply(/, [10, 2]));
+
+// Comparisons as values
+test("apply <", true, apply(<, [1, 2]));
+test("apply >", true, apply(>, [2, 1]));
+test("apply >=", true, apply(>=, [2, 2]));
+test("apply ==", true, apply(==, [42, 42]));
+
+// fold with operators
+test("fold +", 15, fold(+, 0, [1, 2, 3, 4, 5]));
+test("fold *", 120, fold(*, 1, [1, 2, 3, 4, 5]));
+
+// Operators in list
+define ops = [+, -, *];
+test("op from list", 7, apply(car(ops), [3, 4]));
+test("op from list 2", 7, apply(car(cdr(ops)), [10, 3]));
+test("op from list 3", 42, apply(car(cdr(cdr(ops))), [6, 7]));
+
+// map with unary minus
+test("map negate", [-1, -2, -3], map(-, [1, 2, 3]));
+
+// op() bridge function
+test("op add", 7, apply(op("+"), [3, 4]));
+test("op mul", 42, apply(op("*"), [6, 7]));
+
+// Operator assigned to variable
+define my_add = +;
+test("op var", 7, my_add(3, 4));
+
+define my_lt = <;
+test("cmp var", true, my_lt(1, 2));
+
+test_end();

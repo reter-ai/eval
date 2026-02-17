@@ -96,8 +96,10 @@ sexp sexp_make_thread (sexp ctx, sexp self, sexp_sint_t n, sexp thunk, sexp name
   stack[2] = sexp_global(ctx, SEXP_G_FINAL_RESUMER);
   sexp_context_top(res) = 4;
   sexp_context_last_fp(res) = 0;
-  sexp_context_dk(res) = sexp_make_vector(res, SEXP_FOUR, SEXP_FALSE);
-  sexp_vector_set(sexp_context_dk(res), SEXP_ZERO, SEXP_ZERO);
+  /* Use parent's dk so travel-to-point! can find common ancestor via eq?.
+     Each thread has its own sexp_context_dk pointer, so dynamic-wind in one
+     thread won't affect others (they just set their own dk independently). */
+  sexp_context_dk(res) = sexp_context_dk(ctx);
   /* reset parameters */
   sexp_context_params(res) = SEXP_NULL;
   /* alternately reset only the current exception handler */
@@ -642,12 +644,9 @@ sexp sexp_lookup_named_type (sexp ctx, sexp env, const char *name) {
 
 #endif  /* SEXP_USE_GREEN_THREADS */
 
-sexp sexp_init_library (sexp ctx, sexp self, sexp_sint_t n, sexp env, const char* version, const sexp_abi_identifier_t abi) {
+sexp sexp_init_srfi18_threads (sexp ctx, sexp self, sexp_sint_t n, sexp env) {
   sexp t;
   sexp_gc_var1(name);
-  if (!(sexp_version_compatible(ctx, version, sexp_version)
-        && sexp_abi_compatible(ctx, abi, SEXP_ABI_IDENTIFIER)))
-    return SEXP_ABI_ERROR;
 
 #if SEXP_USE_GREEN_THREADS
 

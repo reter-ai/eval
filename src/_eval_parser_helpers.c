@@ -77,19 +77,37 @@ sexp ps_shift_right(sexp ctx, sexp left, sexp right) {
     return result;
 }
 
-/* Build (lambda (params)
-          (call-with-current-continuation (lambda (__return__) body)))
-    The __return__ continuation allows early return via (__return__ val). */
-sexp ps_make_function(sexp ctx, sexp params, sexp body) {
-    sexp return_sym = ps_intern(ctx, "__return__");
-    sexp inner_lambda = sexp_list3(ctx, ps_intern(ctx, "lambda"),
-                                   sexp_list1(ctx, return_sym), body);
-    sexp callcc = sexp_list2(ctx, ps_intern(ctx, "call-with-current-continuation"),
-                             inner_lambda);
-    return sexp_list3(ctx, ps_intern(ctx, "lambda"), params, callcc);
+/* Check if an sexp tree contains a reference to the __return__ symbol.
+   Used to decide whether a function body needs call/cc wrapping. */
+static int ps_uses_return(sexp ctx, sexp expr) {
+    if (!sexp_pairp(expr)) {
+        return sexp_symbolp(expr) && expr == ps_intern(ctx, "__return__");
+    }
+    /* Don't descend into nested lambda (they have their own __return__) */
+    if (sexp_car(expr) == ps_intern(ctx, "lambda"))
+        return 0;
+    /* Check car and cdr */
+    if (ps_uses_return(ctx, sexp_car(expr)))
+        return 1;
+    return ps_uses_return(ctx, sexp_cdr(expr));
 }
 
-/* Build (lambda (a . rest) (call-with-current-continuation (lambda (__return__) body))) */
+/* Build function lambda.
+   If body uses 'return', wraps in call/cc for early return support.
+   Otherwise builds a plain lambda to preserve tail call optimization. */
+sexp ps_make_function(sexp ctx, sexp params, sexp body) {
+    if (ps_uses_return(ctx, body)) {
+        sexp return_sym = ps_intern(ctx, "__return__");
+        sexp inner_lambda = sexp_list3(ctx, ps_intern(ctx, "lambda"),
+                                       sexp_list1(ctx, return_sym), body);
+        sexp callcc = sexp_list2(ctx, ps_intern(ctx, "call-with-current-continuation"),
+                                 inner_lambda);
+        return sexp_list3(ctx, ps_intern(ctx, "lambda"), params, callcc);
+    }
+    return sexp_list3(ctx, ps_intern(ctx, "lambda"), params, body);
+}
+
+/* Build (lambda (a . rest) body), with optional call/cc for return */
 sexp ps_make_function_rest(sexp ctx, sexp params, sexp rest, sexp body) {
     /* Build dotted pair params list: (a b . rest) */
     sexp dotted;
@@ -102,12 +120,15 @@ sexp ps_make_function_rest(sexp ctx, sexp params, sexp rest, sexp body) {
             p = sexp_cdr(p);
         sexp_cdr(p) = rest;
     }
-    sexp return_sym = ps_intern(ctx, "__return__");
-    sexp inner_lambda = sexp_list3(ctx, ps_intern(ctx, "lambda"),
-                                   sexp_list1(ctx, return_sym), body);
-    sexp callcc = sexp_list2(ctx, ps_intern(ctx, "call-with-current-continuation"),
-                             inner_lambda);
-    return sexp_list3(ctx, ps_intern(ctx, "lambda"), dotted, callcc);
+    if (ps_uses_return(ctx, body)) {
+        sexp return_sym = ps_intern(ctx, "__return__");
+        sexp inner_lambda = sexp_list3(ctx, ps_intern(ctx, "lambda"),
+                                       sexp_list1(ctx, return_sym), body);
+        sexp callcc = sexp_list2(ctx, ps_intern(ctx, "call-with-current-continuation"),
+                                 inner_lambda);
+        return sexp_list3(ctx, ps_intern(ctx, "lambda"), dotted, callcc);
+    }
+    return sexp_list3(ctx, ps_intern(ctx, "lambda"), dotted, body);
 }
 
 /* Build while loop:
@@ -123,8 +144,7 @@ sexp ps_make_while(sexp ctx, sexp cond, sexp body) {
     sexp break_sym = ps_intern(ctx, "__break__");
     sexp loop_call = sexp_list1(ctx, loop_sym);
 
-    /* Build (begin body... (__loop__)), splicing body if it's a begin,
-     * then apply ps_expr_safe so := works inside while bodies. */
+    /* Build (begin body... (__loop__)), splicing body if it's a begin. */
     sexp lambda_body;
     if (sexp_pairp(body) && sexp_car(body) == ps_intern(ctx, "begin")) {
         /* Splice: (begin e1 e2 ...) + (__loop__) → (begin e1 e2 ... (__loop__)) */
@@ -140,7 +160,6 @@ sexp ps_make_while(sexp ctx, sexp cond, sexp body) {
     } else {
         lambda_body = sexp_list3(ctx, ps_intern(ctx, "begin"), body, loop_call);
     }
-    lambda_body = ps_expr_safe(ctx, lambda_body);
     sexp if_form = sexp_list3(ctx, ps_intern(ctx, "if"), cond, lambda_body);
     sexp lambda_form = sexp_list3(ctx, ps_intern(ctx, "lambda"), SEXP_NULL, if_form);
     sexp binding = sexp_list1(ctx, sexp_list2(ctx, loop_sym, lambda_form));
@@ -164,8 +183,7 @@ sexp ps_make_for(sexp ctx, sexp init, sexp cond, sexp step, sexp body) {
     sexp break_sym = ps_intern(ctx, "__break__");
     sexp loop_call = sexp_list1(ctx, loop_sym);
 
-    /* (begin body... step (__loop__)), splicing body if it's a begin,
-     * then apply ps_expr_safe so := works inside for bodies. */
+    /* (begin body... step (__loop__)), splicing body if it's a begin. */
     sexp inner_body;
     if (sexp_pairp(body) && sexp_car(body) == ps_intern(ctx, "begin")) {
         inner_body = sexp_cons(ctx, ps_intern(ctx, "begin"), SEXP_NULL);
@@ -184,7 +202,6 @@ sexp ps_make_for(sexp ctx, sexp init, sexp cond, sexp step, sexp body) {
                           sexp_cons(ctx, step,
                             sexp_cons(ctx, loop_call, SEXP_NULL))));
     }
-    inner_body = ps_expr_safe(ctx, inner_body);
 
     sexp if_form = sexp_list3(ctx, ps_intern(ctx, "if"), cond, inner_body);
     sexp lambda_form = sexp_list3(ctx, ps_intern(ctx, "lambda"), SEXP_NULL, if_form);
@@ -197,6 +214,13 @@ sexp ps_make_for(sexp ctx, sexp init, sexp cond, sexp step, sexp body) {
     sexp callcc = sexp_list2(ctx, ps_intern(ctx, "call-with-current-continuation"),
                              break_lambda);
 
+    /* If init is (define var val), scope it to the loop with let */
+    if (sexp_pairp(init) && sexp_car(init) == ps_intern(ctx, "define")) {
+        sexp var = sexp_cadr(init);
+        sexp val = sexp_caddr(init);
+        sexp binding = sexp_list1(ctx, sexp_list2(ctx, var, val));
+        return sexp_list3(ctx, ps_intern(ctx, "let"), binding, callcc);
+    }
     return sexp_list3(ctx, ps_intern(ctx, "begin"), init, callcc);
 }
 
@@ -254,11 +278,12 @@ sexp ps_make_constructor(sexp ctx, sexp params, sexp body) {
                             sexp_list2(ctx, ps_intern(ctx, "quote"), SEXP_NULL));
     self_sym = ps_intern(ctx, "self");
 
-    /* (begin def_name def_supers body self) */
+    /* (begin def_name def_supers (define self body) self) */
+    sexp def_self = sexp_list3(ctx, ps_intern(ctx, "define"), self_sym, body);
     inner = sexp_cons(ctx, ps_intern(ctx, "begin"),
               sexp_cons(ctx, def_name,
                 sexp_cons(ctx, def_supers,
-                  sexp_cons(ctx, body,
+                  sexp_cons(ctx, def_self,
                     sexp_cons(ctx, self_sym, SEXP_NULL)))));
 
     result = sexp_list3(ctx, ps_intern(ctx, "lambda"), params, inner);
@@ -302,6 +327,16 @@ sexp ps_make_interface(sexp ctx, sexp entries) {
     }
     clauses = reversed;
 
+    /* Append else clause: (else (if (null? __supers__) (error "unknown message") ((car __supers__) __msg__))) */
+    sexp supers_sym = ps_intern(ctx, "__supers__");
+    sexp else_body = sexp_cons(ctx, ps_intern(ctx, "if"),
+        sexp_list3(ctx,
+            sexp_list2(ctx, ps_intern(ctx, "null?"), supers_sym),
+            sexp_list2(ctx, ps_intern(ctx, "error"), sexp_c_string(ctx, "unknown message", -1)),
+            sexp_list2(ctx, sexp_list2(ctx, ps_intern(ctx, "car"), supers_sym), msg_sym)));
+    sexp else_clause = sexp_list2(ctx, ps_intern(ctx, "else"), else_body);
+    clauses = ps_append(ctx, clauses, else_clause);
+
     /* Build cond form */
     cond_form = sexp_cons(ctx, ps_intern(ctx, "cond"), clauses);
 
@@ -309,9 +344,8 @@ sexp ps_make_interface(sexp ctx, sexp entries) {
     lambda_form = sexp_list3(ctx, ps_intern(ctx, "lambda"),
                              sexp_list1(ctx, msg_sym), cond_form);
 
-    /* (define self lambda_form) */
-    define_form = sexp_list3(ctx, ps_intern(ctx, "define"),
-                             ps_intern(ctx, "self"), lambda_form);
+    /* Return just the lambda — the constructor wraps it as (define self ...) */
+    define_form = lambda_form;
 
     sexp_gc_release5(ctx);
     return define_form;
@@ -520,14 +554,14 @@ sexp ps_make_string(sexp ctx, const char *start, int length) {
     return result;
 }
 
-/* Build a cond clause: (test expr) — apply ps_expr_safe for expression context */
+/* Build a cond clause: (test expr) */
 sexp ps_make_cond_clause(sexp ctx, sexp test, sexp expr) {
-    return sexp_list2(ctx, test, ps_expr_safe(ctx, expr));
+    return sexp_list2(ctx, test, expr);
 }
 
-/* Build a case clause: ((datums...) expr) — apply ps_expr_safe for expression context */
+/* Build a case clause: ((datums...) expr) */
 sexp ps_make_case_clause(sexp ctx, sexp datums, sexp expr) {
-    return sexp_list2(ctx, datums, ps_expr_safe(ctx, expr));
+    return sexp_list2(ctx, datums, expr);
 }
 
 /* Build (define-library (name...) body-forms...)
@@ -549,17 +583,27 @@ sexp ps_make_library(sexp ctx, sexp name, sexp body) {
 }
 
 /* Make a begin-with-defines safe for expression context.
-   Handles interleaved defines by nesting let* forms to preserve order:
+   Handles interleaved defines by nesting letrec forms to preserve order
+   and allow mutual recursion:
      (begin e1 (define x v1) e2 (define y v2) e3)
-   → (begin e1 (let* ((x v1)) (begin e2 (let* ((y v2)) e3))))
+   → (begin e1 (letrec ((x v1)) (begin e2 (letrec ((y v2)) e3))))
    If the expression is not a begin with defines, returns it unchanged. */
 sexp ps_expr_safe(sexp ctx, sexp expr) {
-    /* Only transform (begin ...) forms */
-    if (!sexp_pairp(expr) || sexp_car(expr) != ps_intern(ctx, "begin"))
+    if (!sexp_pairp(expr))
+        return expr;
+
+    /* Bare (define var val) in expression context → (set! var val) */
+    if (sexp_car(expr) == ps_intern(ctx, "define"))  {
+        sexp_car(expr) = ps_intern(ctx, "set!");
+        return expr;
+    }
+
+    /* Only transform (begin ...) forms below */
+    if (sexp_car(expr) != ps_intern(ctx, "begin"))
         return expr;
 
     sexp define_sym = ps_intern(ctx, "define");
-    sexp letstar_sym = ps_intern(ctx, "let*");
+    sexp letstar_sym = ps_intern(ctx, "letrec");
     sexp begin_sym = ps_intern(ctx, "begin");
 
     /* Check if any element is a define */

@@ -108,10 +108,7 @@ sexp sexp_current_clock_second (sexp ctx, sexp self, sexp_sint_t n) {
 #endif
 }
 
-sexp sexp_init_library (sexp ctx, sexp self, sexp_sint_t n, sexp env, const char* version, const sexp_abi_identifier_t abi) {
-  if (!(sexp_version_compatible(ctx, version, sexp_version)
-        && sexp_abi_compatible(ctx, abi, SEXP_ABI_IDENTIFIER)))
-    return sexp_global(ctx, SEXP_G_ABI_ERROR);
+sexp sexp_init_scheme_time (sexp ctx, sexp self, sexp_sint_t n, sexp env) {
   sexp_define_foreign(ctx, env, "current-clock-second", 0, sexp_current_clock_second);
 #if SEXP_USE_NTP_GETTIME
   determine_ntp_resolution();

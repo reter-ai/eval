@@ -1,0 +1,54 @@
+test_begin("Blocks & Scope");
+
+// Block returns last value
+test("block last", 3, { 1; 2; 3; });
+test("block single", 42, { 42; });
+
+// Block with defines -> letrec conversion
+test("block defines", 15, {
+    define a = 5;
+    define b = 10;
+    a + b;
+});
+
+// Nested blocks
+test("nested blocks", 30, {
+    define x = 10;
+    define y = {
+        define z = 20;
+        z;
+    };
+    x + y;
+});
+
+// Scope: inner block sees outer variables
+test("scope outer", 15, {
+    define a = 10;
+    define b = { a + 5; };
+    b;
+});
+
+// Let provides its own scope
+test("let scope", 10, {
+    define x = 10;
+    let(x = 20) x;
+    x;
+});
+
+// Block in function
+define f = function(n) {
+    define a = n * 2;
+    define b = a + 1;
+    b;
+};
+test("block in fn", 21, f(10));
+
+// Multiple statements
+test("multi stmt", 6, {
+    define a = 1;
+    define b = 2;
+    define c = 3;
+    a + b + c;
+});
+
+test_end();

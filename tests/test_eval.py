@@ -43,28 +43,28 @@ class TestArithmetic:
 
 class TestVariables:
     def test_define(self, e):
-        e.eval("x := 42;")
+        e.eval("define x = 42;")
         assert e["x"] == 42
 
     def test_set(self, e):
-        e.eval("x := 42;")
+        e.eval("define x = 42;")
         e.eval("x = 100;")
         assert e["x"] == 100
 
     def test_compound_assign(self, e):
-        e.eval("c := 10;")
+        e.eval("define c = 10;")
         e.eval("c += 5;")
         assert e["c"] == 15
         e.eval("c -= 3;")
         assert e["c"] == 12
 
     def test_increment(self, e):
-        e.eval("n := 10;")
+        e.eval("define n = 10;")
         e.eval("n++;")
         assert e["n"] == 11
 
     def test_decrement(self, e):
-        e.eval("n := 10;")
+        e.eval("define n = 10;")
         e.eval("n--;")
         assert e["n"] == 9
 
@@ -142,20 +142,20 @@ class TestControlFlow:
         assert e.eval("if(false) 1 else 2;") == 2
 
     def test_if_without_else(self, e):
-        e.eval("x := 0;")
+        e.eval("define x = 0;")
         e.eval("if(true) x = 42;")
         assert e["x"] == 42
 
     def test_block(self, e):
-        assert e.eval("{ x := 10; x + 5; };") == 15
+        assert e.eval("{ define x = 10; x + 5; };") == 15
 
     def test_when(self, e):
-        e.eval("w := 0;")
+        e.eval("define w = 0;")
         e.eval("when(true) w = 1;")
         assert e["w"] == 1
 
     def test_unless(self, e):
-        e.eval("w := 0;")
+        e.eval("define w = 0;")
         e.eval("unless(false) w = 2;")
         assert e["w"] == 2
 
@@ -165,68 +165,74 @@ class TestControlFlow:
 
 class TestFunctions:
     def test_simple(self, e):
-        e.eval("double := function(x) x * 2;")
+        e.eval("define double = function(x) x * 2;")
         assert e.eval("double(21);") == 42
 
     def test_recursive(self, e):
-        e.eval("factorial := function(n) if(n <= 1) 1 else n * factorial(n - 1);")
+        e.eval("define factorial = function(n) if(n <= 1) 1 else n * factorial(n - 1);")
         assert e.eval("factorial(10);") == 3628800
 
     def test_closure(self, e):
-        e.eval("make_adder := function(n) function(x) n + x;")
+        e.eval("define make_adder = function(n) function(x) n + x;")
         assert e.eval("make_adder(10)(32);") == 42
 
     def test_return(self, e):
-        e.eval("f := function(x) { if(x > 0) return x * 10; return 0; };")
+        e.eval("define f = function(x) { if(x > 0) return x * 10; return 0; };")
         assert e.eval("f(5);") == 50
         assert e.eval("f(0);") == 0
 
     def test_block_body(self, e):
-        e.eval("f := function(x) { y := x * 2; y + 1; };")
+        e.eval("define f = function(x) { define y = x * 2; y + 1; };")
         assert e.eval("f(10);") == 21
 
     def test_call_method(self, e):
-        e.eval("add := function(a, b) a + b;")
+        e.eval("define add = function(a, b) a + b;")
         assert e.call("add", 3, 4) == 7
 
 
 class TestLetBindings:
     def test_let(self, e):
-        assert e.eval("let(a := 1, b := 2) a + b;") == 3
+        assert e.eval("let(a = 1, b = 2) a + b;") == 3
 
     def test_let_star(self, e):
-        assert e.eval("let*(x := 10, y := x + 5) y;") == 15
+        assert e.eval("let*(x = 10, y = x + 5) y;") == 15
 
     def test_letrec(self, e):
         assert e.eval(
-            "letrec(f := function(n) if(n <= 0) 0 else n + f(n - 1)) f(5);"
+            "letrec(f = function(n) if(n <= 0) 0 else n + f(n - 1)) f(5);"
         ) == 15
 
 
 class TestLoops:
     def test_while(self, e):
-        e.eval("i := 0; total := 0;")
+        e.eval("define i = 0; define total = 0;")
         e.eval("while(i < 10) { total += i; i++; };")
         assert e["total"] == 45
 
+    def test_while_assign(self, e):
+        """Test that = inside while mutates (doesn't shadow)."""
+        e.eval("define x = 0;")
+        e.eval("while(x < 3) x = x + 1;")
+        assert e["x"] == 3
+
     def test_for(self, e):
-        e.eval("sum := 0;")
-        e.eval("for(j := 0, j < 5, j++) sum += j;")
+        e.eval("define sum = 0;")
+        e.eval("for(let j = 0, j < 5, j++) sum += j;")
         assert e["sum"] == 10
 
     def test_do_until(self, e):
-        e.eval("k := 0;")
+        e.eval("define k = 0;")
         e.eval("do k++ until(k >= 5);")
         assert e["k"] == 5
 
     def test_break(self, e):
-        e.eval("n := 0;")
+        e.eval("define n = 0;")
         e.eval("while(true) { if(n >= 3) break; n++; };")
         assert e["n"] == 3
 
     def test_break_in_for(self, e):
-        e.eval("total := 0;")
-        e.eval("for(i := 0, i < 100, i++) { if(i >= 5) break; total += i; };")
+        e.eval("define total = 0;")
+        e.eval("for(let i = 0, i < 100, i++) { if(i >= 5) break; total += i; };")
         assert e["total"] == 10
 
 
@@ -253,14 +259,14 @@ class TestPythonInterop:
         assert e.eval("py_sqrt(144);") == 12.0
 
     def test_py_import(self, e):
-        result = e.eval('os := py_import("os"); py_method(os, "getcwd");')
+        result = e.eval('define os = py_import("os"); py_method(os, "getcwd");')
         assert isinstance(result, str)
 
     def test_py_eval(self, e):
         assert e.eval('py_eval("1 + 2");') == 3
 
     def test_py_getattr(self, e):
-        e.eval('math := py_import("math");')
+        e.eval('define math = py_import("math");')
         pi = e.eval('py_getattr(math, "pi");')
         assert abs(pi - 3.14159265) < 0.001
 
@@ -286,13 +292,13 @@ class TestTryCatch:
 class TestRecords:
     def test_basic(self, e):
         e.eval("record Point(x, y);")
-        e.eval("p := make_Point(3, 4);")
+        e.eval("define p = make_Point(3, 4);")
         assert e.eval("Point_x(p);") == 3
         assert e.eval("Point_y(p);") == 4
 
     def test_predicate(self, e):
         e.eval("record Pair(a, b);")
-        e.eval("p := make_Pair(1, 2);")
+        e.eval("define p = make_Pair(1, 2);")
         assert e.eval("Pair?(p);") is True
         assert e.eval("Pair?(42);") is False
 
@@ -300,10 +306,10 @@ class TestRecords:
 class TestOOP:
     def test_constructor_interface(self, e):
         e.eval(
-            "Point := constructor(x, y) "
+            "define Point = constructor(x, y) "
             "interface(x: x, y: y, dist: function() (x**2 + y**2)**0.5);"
         )
-        e.eval("p := Point(3, 4);")
+        e.eval("define p = Point(3, 4);")
         assert e.eval("p->x;") == 3
         assert e.eval("p->y;") == 4
         assert e.eval("p->dist();") == 5.0
@@ -343,7 +349,7 @@ class TestOp:
         assert e.eval("fold(*, 1, [1, 2, 3, 4, 5]);") == 120
 
     def test_in_list(self, e):
-        e.eval("ops := [+, -, *];")
+        e.eval("define ops = [+, -, *];")
         assert e.eval("apply(car(ops), [3, 4]);") == 7
 
 
@@ -417,7 +423,7 @@ class TestBacktickIdent:
         assert e.eval('`dynamic-wind`(function() 0, function() 42, function() 0);') == 42
 
     def test_set_car(self, e):
-        e.eval('p := [1, 2, 3];')
+        e.eval('define p = [1, 2, 3];')
         e.eval('`set-car!`(p, 99);')
         assert e.eval('car(p);') == 99
 
@@ -431,17 +437,110 @@ class TestBacktickIdent:
 
     def test_assign_to_var(self, e):
         """Backtick ident result can be assigned to a regular variable."""
-        e.eval('v := `list->vector`([10, 20, 30]);')
+        e.eval('define v = `list->vector`([10, 20, 30]);')
         assert e.eval('`vector-ref`(v, 2);') == 30
+
+
+class TestGrammarFeatures:
+    def test_values_receive(self, e):
+        assert e.eval("receive(a, b) from values(1, 2) a + b;") == 3
+
+    def test_dotted_pair(self, e):
+        result = e.eval("(1 .. 2);")
+        assert result == (1, 2)
+
+    def test_dotted_pair_multi(self, e):
+        result = e.eval("(1, 2 .. 3);")
+        assert result == (1, 2, 3)
+
+    def test_compile_time_eval(self, e):
+        assert e.eval("!!(2 + 3);") == 5
+
+    def test_super_dispatch(self, e):
+        code = (
+            "define Base = constructor() "
+            "interface(greet: function() \"hello\");"
+            "define Child = constructor() {"
+            "  super Base();"
+            "  interface(name: function() \"child\");"
+            "};"
+            "define c = Child();"
+        )
+        e.eval(code)
+        assert e.eval('c->name();') == "child"
+        assert e.eval('c->greet();') == "hello"
+
+    def test_include_error(self, e):
+        with pytest.raises((EvalError, RuntimeError)):
+            e.eval('include("nonexistent_file_12345.scm");')
+
+    def test_case(self, e):
+        assert e.eval('case(2, (1): "a", (2): "b", else: "c");') == "b"
+
+    def test_case_else(self, e):
+        assert e.eval('case(99, (1): "a", (2): "b", else: "c");') == "c"
 
 
 class TestGCStress:
     def test_many_defines(self, e):
         for i in range(500):
-            e.eval(f"tmp_{i} := {i};")
+            e.eval(f"define tmp_{i} = {i};")
         assert e["tmp_499"] == 499
 
     def test_many_python_functions(self, e):
         for i in range(50):
             e.define_function(f"pyfn_{i}", lambda x, n=i: x + n, 1)
         assert e.eval("pyfn_25(10);") == 35
+
+
+class TestTestFramework:
+    def test_basic_pass(self, e, capsys):
+        e.eval('test(4, 2 + 2);')
+        assert "PASS" in capsys.readouterr().out
+
+    def test_basic_fail(self, e, capsys):
+        e.eval('test(4, 2 + 3);')
+        out = capsys.readouterr().out
+        assert "FAIL" in out
+
+    def test_named(self, e, capsys):
+        e.eval('test("addition", 4, 2 + 2);')
+        out = capsys.readouterr().out
+        assert "addition" in out
+        assert "PASS" in out
+
+    def test_assert_pass(self, e, capsys):
+        e.eval('test_assert(5 > 0);')
+        assert "PASS" in capsys.readouterr().out
+
+    def test_assert_fail(self, e, capsys):
+        e.eval('test_assert(5 < 0);')
+        out = capsys.readouterr().out
+        assert "FAIL" in out
+
+    def test_error_pass(self, e, capsys):
+        e.eval('test_error(function() 1 / 0);')
+        assert "PASS" in capsys.readouterr().out
+
+    def test_error_fail(self, e, capsys):
+        e.eval('test_error(function() 42);')
+        out = capsys.readouterr().out
+        assert "FAIL" in out
+
+    def test_group(self, e, capsys):
+        e.eval('''
+            test_group("math") {
+                test(4, 2 + 2);
+                test(9, 3 * 3);
+            };
+        ''')
+        out = capsys.readouterr().out
+        assert "math" in out
+        assert "2 pass" in out
+
+    def test_end_returns_failures(self, e):
+        e.eval('test_begin("x");')
+        e.eval('test(4, 2 + 2);')
+        e.eval('test(4, 2 + 3);')
+        result = e.eval('test_end();')
+        assert result == 1  # 1 failure

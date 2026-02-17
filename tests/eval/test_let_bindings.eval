@@ -1,0 +1,32 @@
+test_begin("Let Bindings");
+
+// let
+test("let basic", 3, let(a = 1, b = 2) a + b);
+
+// let*
+test("let* sequential", 15, let*(x = 10, y = x + 5) y);
+test("let* chain", 30, let*(a = 5, b = a * 2, c = a + b + a + b) c);
+
+// letrec (mutual recursion possible)
+test("letrec recursive", 15,
+    letrec(f = function(n) if(n <= 0) 0 else n + f(n - 1)) f(5));
+
+// Nested let
+test("nested let", 30,
+    let(x = 10) let(y = 20) x + y);
+
+// Let with block body
+test("let block", 25,
+    let(x = 5) {
+        define y = x * x;
+        y;
+    });
+
+// Let* with block body
+test("let* block", 11,
+    let*(a = 3, b = a + 2) {
+        define c = a + b;
+        a + c;
+    });
+
+test_end();

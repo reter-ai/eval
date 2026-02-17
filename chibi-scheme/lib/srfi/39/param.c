@@ -26,10 +26,7 @@ sexp sexp_parameter_converter (sexp ctx, sexp self, sexp_sint_t n, sexp param) {
   return res ? res : SEXP_FALSE;
 }
 
-sexp sexp_init_library (sexp ctx, sexp self, sexp_sint_t n, sexp env, const char* version, const sexp_abi_identifier_t abi) {
-  if (!(sexp_version_compatible(ctx, version, sexp_version)
-        && sexp_abi_compatible(ctx, abi, SEXP_ABI_IDENTIFIER)))
-    return SEXP_ABI_ERROR;
+sexp sexp_init_srfi39_param (sexp ctx, sexp self, sexp_sint_t n, sexp env) {
 
   sexp_define_foreign(ctx, env, "%make-parameter", 2, sexp_make_parameter);
   sexp_define_foreign(ctx, env, "parameter-converter", 1, sexp_parameter_converter);

@@ -34,26 +34,26 @@
    'arglist_inner ::= expr' so that in LALR-merged states the shift for
    RPAREN/COMMA (delimiters) wins over the reduce to arglist_inner. */
 %nonassoc ARGLIST_PREC.
-%right DEFINE ASSIGN PLUS_ASSIGN MINUS_ASSIGN.
+%right ASSIGN PLUS_ASSIGN MINUS_ASSIGN.
 %nonassoc IF_WITHOUT_ELSE.
 %nonassoc ELSE.
-%right RETURN_PREC SUPER_PREC QUOTE_PREC.
+%right RETURN_PREC SUPER_PREC.
 %left OR.
 %left AND.
 %left BITOR.
 %left BITAND.
-%left EQEQ EQQ.
+%left EQEQ EQQ BANGEQ.
 %left LT GT LTE GTE.
 %left SHL SHR.
 %left PLUS MINUS.
 %left STAR SLASH PERCENT.
 %right STARSTAR.
-%right UMINUS BANG BITNOT BANGBANG.
+%right UMINUS BANG BITNOT BANGBANG QUOTE_PREC.
 %left LPAREN ARROW PLUSPLUS MINUSMINUS.
 %nonassoc RPAREN COMMA DOTDOT RBRACKET RBRACE SEMICOLON COLON.
-/* Reserved keywords not yet used in grammar rules, but recognized by the lexer.
+/* Additional keyword tokens recognized by the lexer.
    Declaring them here makes lemon generate their TOK_ defines. */
-%token LIBRARY EXPORT INCLUDE MACRO SYNTAX_RULES OPVAL.
+%token LIBRARY EXPORT INCLUDE MACRO SYNTAX_RULES OPVAL TEST_GROUP DEFINE IN.
 
 /* Non-terminal types - all are sexp */
 %type program { sexp }
@@ -74,7 +74,6 @@
 %type datum_list { sexp }
 %type catch_clauses { sexp }
 %type field_list { sexp }
-%type dotted_params { sexp }
 %type dotpair_rest { sexp }
 %type string_list { sexp }
 %type sr_clauses { sexp }
@@ -97,12 +96,13 @@ stmt(A) ::= expr(E) SEMICOLON. { A = E; }
 /* ===== EXPRESSIONS ===== */
 
 /* --- Assignment / Definition --- */
-expr(A) ::= IDENT(N) DEFINE expr(E). {
-    A = sexp_list3(ctx, ps_intern(ctx, "define"),
-        ps_make_ident(ctx, N.start, N.length), E);
-}
 expr(A) ::= IDENT(N) ASSIGN expr(E). {
     A = sexp_list3(ctx, ps_intern(ctx, "set!"),
+        ps_make_ident(ctx, N.start, N.length), E);
+}
+/* define x = 10;  →  (define x 10) */
+expr(A) ::= DEFINE IDENT(N) ASSIGN expr(E). {
+    A = sexp_list3(ctx, ps_intern(ctx, "define"),
         ps_make_ident(ctx, N.start, N.length), E);
 }
 expr(A) ::= IDENT(N) PLUS_ASSIGN expr(E). {
@@ -140,6 +140,10 @@ expr(A) ::= expr(L) EQEQ expr(R). {
 }
 expr(A) ::= expr(L) EQQ expr(R). {
     A = sexp_list3(ctx, ps_intern(ctx, "eq?"), L, R);
+}
+expr(A) ::= expr(L) BANGEQ expr(R). {
+    A = sexp_list2(ctx, ps_intern(ctx, "not"),
+        sexp_list3(ctx, ps_intern(ctx, "equal?"), L, R));
 }
 expr(A) ::= expr(L) LT expr(R). {
     A = sexp_list3(ctx, ps_intern(ctx, "<"), L, R);
@@ -233,7 +237,7 @@ expr(A) ::= FALSE. {
     A = SEXP_FALSE;
 }
 expr(A) ::= NIL. {
-    A = SEXP_NULL;
+    A = sexp_list2(ctx, ps_intern(ctx, "quote"), SEXP_NULL);
 }
 
 /* --- Operator as value: bare +, *, etc. in value position --- */
@@ -245,6 +249,10 @@ expr(A) ::= OPVAL(V). {
 expr(A) ::= QUOTE expr(E). [QUOTE_PREC] {
     A = sexp_list2(ctx, ps_intern(ctx, "quote"), E);
 }
+/* '() — quoted empty list (special rule to avoid LALR conflict with arglist) */
+expr(A) ::= QUOTE LPAREN RPAREN. [QUOTE_PREC] {
+    A = sexp_list2(ctx, ps_intern(ctx, "quote"), SEXP_NULL);
+}
 
 /* --- Grouping --- */
 expr(A) ::= LPAREN expr(E) RPAREN. {
@@ -255,25 +263,44 @@ expr(A) ::= LPAREN expr(E) RPAREN. {
 /* Split into two rules to avoid LALR conflict with grouping (expr).
    After LPAREN expr, the next token (DOTDOT vs COMMA vs RPAREN) decides. */
 expr(A) ::= LPAREN expr(E) DOTDOT expr(R) RPAREN. {
-    /* (a .. c) -> (a . c) */
-    A = sexp_cons(ctx, E, R);
+    /* (a .. c) -> (cons a c) */
+    A = sexp_list3(ctx, ps_intern(ctx, "cons"), E, R);
 }
 expr(A) ::= LPAREN expr(E) COMMA dotpair_rest(L) DOTDOT expr(R) RPAREN. {
-    /* (a, b, ... .. c) -> (a b ... . c) */
-    A = sexp_cons(ctx, E, L);
-    sexp p = A;
-    while (sexp_pairp(sexp_cdr(p)))
+    /* (a, b, ... .. c) -> (cons a (cons b (... c))) */
+    /* First reverse L, then fold right building nested cons */
+    sexp rev = SEXP_NULL;
+    sexp p = L;
+    while (sexp_pairp(p)) {
+        rev = sexp_cons(ctx, sexp_car(p), rev);
         p = sexp_cdr(p);
-    sexp_cdr(p) = R;
+    }
+    /* Now fold: start with R, prepend each element of rev */
+    A = R;
+    p = rev;
+    while (sexp_pairp(p)) {
+        A = sexp_list3(ctx, ps_intern(ctx, "cons"), sexp_car(p), A);
+        p = sexp_cdr(p);
+    }
+    /* Wrap outermost: (cons E ...) */
+    A = sexp_list3(ctx, ps_intern(ctx, "cons"), E, A);
 }
 
 /* --- Block --- */
 expr(A) ::= LBRACE stmt_list(L) RBRACE. {
     if (sexp_pairp(L) && sexp_car(L) == ps_intern(ctx, "begin")) {
-        A = L; /* Already a begin form */
+        A = ps_expr_safe(ctx, L);
     } else {
-        A = sexp_list2(ctx, ps_intern(ctx, "begin"), L);
+        A = ps_expr_safe(ctx, sexp_list2(ctx, ps_intern(ctx, "begin"), L));
     }
+}
+/* Block with trailing expr (no semicolon on last): { a; b; c } */
+expr(A) ::= LBRACE stmt_list(L) expr(E) RBRACE. {
+    A = ps_expr_safe(ctx, ps_sexp_begin(ctx, L, E));
+}
+/* Block with single expr (no semicolon): { expr } */
+expr(A) ::= LBRACE expr(E) RBRACE. {
+    A = ps_expr_safe(ctx, sexp_list2(ctx, ps_intern(ctx, "begin"), E));
 }
 expr(A) ::= LBRACE RBRACE. {
     A = SEXP_VOID;
@@ -308,13 +335,13 @@ expr(A) ::= FUNCTION LPAREN DOTDOT IDENT(R) RPAREN expr(B). [ARGLIST_PREC] {
 
 /* --- If --- */
 expr(A) ::= IF LPAREN expr(C) RPAREN expr(T). [IF_WITHOUT_ELSE] {
-    A = sexp_list3(ctx, ps_intern(ctx, "if"), C, ps_expr_safe(ctx, T));
+    A = sexp_list3(ctx, ps_intern(ctx, "if"), C, T);
 }
 expr(A) ::= IF LPAREN expr(C) RPAREN expr(T) ELSE expr(E). [ARGLIST_PREC] {
     A = sexp_cons(ctx, ps_intern(ctx, "if"),
           sexp_cons(ctx, C,
-            sexp_cons(ctx, ps_expr_safe(ctx, T),
-              sexp_cons(ctx, ps_expr_safe(ctx, E), SEXP_NULL))));
+            sexp_cons(ctx, T,
+              sexp_cons(ctx, E, SEXP_NULL))));
 }
 
 /* --- Loops --- */
@@ -324,8 +351,21 @@ expr(A) ::= WHILE LPAREN expr(C) RPAREN expr(B). [ARGLIST_PREC] {
 expr(A) ::= FOR LPAREN expr(I) COMMA expr(C) COMMA expr(S) RPAREN expr(B). [ARGLIST_PREC] {
     A = ps_make_for(ctx, I, C, S, B);
 }
+/* for(let j = 0, ...) — j is loop-scoped */
+expr(A) ::= FOR LPAREN LET IDENT(N) ASSIGN expr(I) COMMA expr(C) COMMA expr(S) RPAREN expr(B). [ARGLIST_PREC] {
+    sexp init = sexp_list3(ctx, ps_intern(ctx, "define"),
+        ps_make_ident(ctx, N.start, N.length), I);
+    A = ps_make_for(ctx, init, C, S, B);
+}
 expr(A) ::= DO expr(B) UNTIL LPAREN expr(C) RPAREN. {
     A = ps_make_do_until(ctx, B, C);
+}
+/* for(let x in collection) body -- for-each loop */
+expr(A) ::= FOR LPAREN LET IDENT(V) IN expr(L) RPAREN expr(B). [ARGLIST_PREC] {
+    sexp var = ps_make_ident(ctx, V.start, V.length);
+    sexp lam = sexp_list3(ctx, ps_intern(ctx, "lambda"),
+                   sexp_list1(ctx, var), B);
+    A = sexp_list3(ctx, ps_intern(ctx, "for-each"), lam, L);
 }
 expr(A) ::= BREAK. {
     A = ps_make_break(ctx);
@@ -386,12 +426,12 @@ expr(A) ::= CASE LPAREN expr(K) COMMA case_clauses(C) RPAREN. {
 /* --- When / Unless --- */
 expr(A) ::= WHEN LPAREN expr(C) RPAREN expr(B). [ARGLIST_PREC] {
     /* when(cond) body  ->  (if cond body) */
-    A = sexp_list3(ctx, ps_intern(ctx, "if"), C, ps_expr_safe(ctx, B));
+    A = sexp_list3(ctx, ps_intern(ctx, "if"), C, B);
 }
 expr(A) ::= UNLESS LPAREN expr(C) RPAREN expr(B). [ARGLIST_PREC] {
     /* unless(cond) body  ->  (if (not cond) body) */
     A = sexp_list3(ctx, ps_intern(ctx, "if"),
-        sexp_list2(ctx, ps_intern(ctx, "not"), C), ps_expr_safe(ctx, B));
+        sexp_list2(ctx, ps_intern(ctx, "not"), C), B);
 }
 
 /* --- Values / Receive --- */
@@ -446,6 +486,13 @@ expr(A) ::= RECORD IDENT(N) LPAREN field_list(F) RPAREN. {
     A = ps_make_record(ctx, ps_make_ident(ctx, N.start, N.length), F);
 }
 
+/* --- Test group --- */
+expr(A) ::= TEST_GROUP LPAREN expr(N) RPAREN expr(B). [ARGLIST_PREC] {
+    /* test_group("name") body  →  (test-group name (lambda () body)) */
+    A = sexp_list3(ctx, ps_intern(ctx, "test-group"), N,
+                   sexp_list3(ctx, ps_intern(ctx, "lambda"), SEXP_NULL, B));
+}
+
 /* ===== HELPER RULES ===== */
 
 /* Argument list (possibly empty) */
@@ -468,12 +515,12 @@ params_inner(A) ::= params_inner(L) COMMA IDENT(N). {
     A = ps_append(ctx, L, ps_make_ident(ctx, N.start, N.length));
 }
 
-/* Bindings for let, let-star, letrec: x := 1, y := 2 */
-bindings(A) ::= IDENT(N) DEFINE expr(E). {
+/* Bindings for let, let-star, letrec: x = 1, y = 2 */
+bindings(A) ::= IDENT(N) ASSIGN expr(E). {
     A = sexp_list1(ctx,
         sexp_list2(ctx, ps_make_ident(ctx, N.start, N.length), E));
 }
-bindings(A) ::= bindings(L) COMMA IDENT(N) DEFINE expr(E). {
+bindings(A) ::= bindings(L) COMMA IDENT(N) ASSIGN expr(E). {
     A = ps_append(ctx, L,
         sexp_list2(ctx, ps_make_ident(ctx, N.start, N.length), E));
 }
@@ -498,7 +545,7 @@ iface_entries(A) ::= iface_entries(L) COMMA iface_entry(E). {
     A = ps_append(ctx, L, E);
 }
 iface_entry(A) ::= IDENT(N) COLON expr(E). {
-    A = sexp_cons(ctx, ps_make_ident(ctx, N.start, N.length), ps_expr_safe(ctx, E));
+    A = sexp_cons(ctx, ps_make_ident(ctx, N.start, N.length), E);
 }
 
 /* Cond clauses: test: expr, test: expr, else: expr */
