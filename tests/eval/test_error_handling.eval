@@ -29,4 +29,69 @@ define x = 0;
 try { x = 3; error("mid"); } catch(e) x;
 test("error mid block", 3, x);
 
+// === try/catch/finally ===
+
+// finally runs after catch on error
+define log1 = [];
+define r1 = try { error("oops"); }
+    catch(e) { log1 = `cons`("caught", log1); 42; }
+    finally { log1 = `cons`("finally", log1); };
+test("tcf error result", 42, r1);
+test("tcf error order", ["finally", "caught"], log1);
+
+// finally runs on success (no error)
+define log2 = [];
+define r2 = try { log2 = `cons`("body", log2); 100; }
+    catch(e) { log2 = `cons`("catch", log2); 0; }
+    finally { log2 = `cons`("finally", log2); };
+test("tcf success result", 100, r2);
+test("tcf success order", ["finally", "body"], log2);
+
+// === try/finally (no catch) ===
+
+// finally runs on success
+define log3 = [];
+define r3 = try { 77; } finally { log3 = `cons`("done", log3); };
+test("tf success result", 77, r3);
+test("tf success cleanup", ["done"], log3);
+
+// finally runs on error (error still propagates)
+define log4 = [];
+define r4 = try {
+    try { error("inner"); } finally { log4 = `cons`("inner-fin", log4); };
+} catch(e) { log4 = `cons`("outer-catch", log4); 0; };
+test("tf error cleanup", true, `member`("inner-fin", log4) != false);
+test("tf error propagates", true, `member`("outer-catch", log4) != false);
+
+// === finally with blocks ===
+define log5 = [];
+define r5 = try {
+    define a = 10;
+    define b = 20;
+    a + b;
+} catch(e) { 0; } finally {
+    log5 = `cons`("block-fin", log5);
+};
+test("tcf block result", 30, r5);
+test("tcf block finally", ["block-fin"], log5);
+
+// === nested try/catch/finally ===
+define log6 = [];
+define r6 = try {
+    try { error("inner"); }
+        catch(e) { log6 = `cons`("inner-catch", log6); 1; }
+        finally { log6 = `cons`("inner-fin", log6); };
+} catch(e) { log6 = `cons`("outer-catch", log6); 2; }
+  finally { log6 = `cons`("outer-fin", log6); };
+test("nested tcf result", 1, r6);
+test("nested inner-catch", true, `member`("inner-catch", log6) != false);
+test("nested inner-fin", true, `member`("inner-fin", log6) != false);
+test("nested outer-fin", true, `member`("outer-fin", log6) != false);
+// outer catch should NOT have run (inner caught it)
+test("nested no outer-catch", false, `member`("outer-catch", log6));
+
+// === finally does not change return value ===
+define r7 = try { 42; } catch(e) { 0; } finally { 999; };
+test("finally no affect return", 42, r7);
+
 test_end();

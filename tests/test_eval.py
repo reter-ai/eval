@@ -292,15 +292,68 @@ class TestTryCatch:
 class TestRecords:
     def test_basic(self, e):
         e.eval("record Point(x, y);")
-        e.eval("define p = make_Point(3, 4);")
-        assert e.eval("Point_x(p);") == 3
-        assert e.eval("Point_y(p);") == 4
+        e.eval("define p = Point(3, 4);")
+        assert e.eval("p->x;") == 3
+        assert e.eval("p->y;") == 4
 
     def test_predicate(self, e):
         e.eval("record Pair(a, b);")
-        e.eval("define p = make_Pair(1, 2);")
+        e.eval("define p = Pair(1, 2);")
         assert e.eval("Pair?(p);") is True
         assert e.eval("Pair?(42);") is False
+
+
+class TestDict:
+    def test_create_and_access(self, e):
+        e.eval("define d = dict(x: 10, y: 20);")
+        assert e.eval("d->x;") == 10
+        assert e.eval("d->y;") == 20
+
+    def test_predicate(self, e):
+        e.eval("define d = dict(a: 1);")
+        assert e.eval("dict?(d);") is True
+        assert e.eval("dict?(42);") is False
+        assert e.eval('dict?("hello");') is False
+
+    def test_empty(self, e):
+        e.eval("define d = dict();")
+        assert e.eval("dict?(d);") is True
+        assert e.eval("d->size();") == 0
+
+    def test_get(self, e):
+        e.eval('define d = dict(name: "Alice");')
+        assert e.eval('d->get("name");') == "Alice"
+        assert e.eval('d->get("missing");') is False
+
+    def test_set(self, e):
+        e.eval("define d = dict(a: 1);")
+        e.eval('d->set("b", 2);')
+        assert e.eval("d->b;") == 2
+        e.eval('d->set("a", 99);')
+        assert e.eval("d->a;") == 99
+
+    def test_delete(self, e):
+        e.eval("define d = dict(a: 1, b: 2);")
+        e.eval('d->delete("a");')
+        assert e.eval('d->has?("a");') is False
+        assert e.eval('d->has?("b");') is True
+        assert e.eval("d->size();") == 1
+
+    def test_keys_values_size(self, e):
+        e.eval("define d = dict(a: 1, b: 2, c: 3);")
+        assert e.eval("d->size();") == 3
+        assert e.eval("`length`(d->keys());") == 3
+        assert e.eval("`length`(d->values());") == 3
+
+    def test_nested(self, e):
+        e.eval("define d = dict(inner: dict(v: 42));")
+        assert e.eval("d->inner->v;") == 42
+
+    def test_dict_from_function(self, e):
+        e.eval("define mk = function(x, y) dict(x: x, y: y);")
+        e.eval("define p = mk(3, 4);")
+        assert e.eval("p->x;") == 3
+        assert e.eval("p->y;") == 4
 
 
 class TestOOP:

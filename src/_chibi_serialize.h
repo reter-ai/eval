@@ -2,7 +2,9 @@
 #ifndef _CHIBI_SERIALIZE_H
 #define _CHIBI_SERIALIZE_H
 
+#ifndef EVAL_STANDALONE
 #include <Python.h>
+#endif
 #include <chibi/eval.h>
 
 /* Binary format magic and version */
@@ -43,10 +45,12 @@ enum ser_immediate_kind {
 };
 
 /* Public API (Python wrappers) */
+#ifndef EVAL_STANDALONE
 PyObject *chibi_serialize_continuation(sexp ctx, sexp env, sexp cont);
 sexp chibi_deserialize_continuation(sexp ctx, sexp env,
                                     const unsigned char *data,
                                     Py_ssize_t len);
+#endif
 
 /* Pure-C API (no Python dependency) */
 int ser_sexp_to_buf(sexp ctx, sexp env, sexp val,

@@ -518,6 +518,165 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
     sexp_eval_string(self->ctx,
         "(define test_group test-group)", -1, self->env);
 
+    /* Dict runtime: __make_eval_dict__ creates a closure wrapping a hash table */
+    sexp_eval_string(self->ctx,
+        "(define (__make_eval_dict__ pairs)"
+        "  (let ((ht (make-hash-table)))"
+        "    (for-each (lambda (p) (hash-table-set! ht (car p) (cdr p))) pairs)"
+        "    (lambda (__msg__)"
+        "      (cond"
+        "        ((eq? __msg__ 'get)"
+        "         (lambda (k) (hash-table-ref/default ht"
+        "           (if (string? k) (string->symbol k) k) #f)))"
+        "        ((eq? __msg__ 'set)"
+        "         (lambda (k v) (hash-table-set! ht"
+        "           (if (string? k) (string->symbol k) k) v)))"
+        "        ((eq? __msg__ 'delete)"
+        "         (lambda (k) (hash-table-delete! ht"
+        "           (if (string? k) (string->symbol k) k))))"
+        "        ((eq? __msg__ 'keys)"
+        "         (lambda () (hash-table-keys ht)))"
+        "        ((eq? __msg__ 'values)"
+        "         (lambda () (hash-table-values ht)))"
+        "        ((eq? __msg__ 'has?)"
+        "         (lambda (k) (hash-table-exists? ht"
+        "           (if (string? k) (string->symbol k) k))))"
+        "        ((eq? __msg__ 'size)"
+        "         (lambda () (hash-table-size ht)))"
+        "        ((eq? __msg__ 'to_list)"
+        "         (lambda () (hash-table->alist ht)))"
+        "        ((eq? __msg__ '__type__) '__dict__)"
+        "        ((hash-table-exists? ht __msg__)"
+        "         (hash-table-ref ht __msg__))"
+        "        (else #f)))))", -1, self->env);
+    sexp_eval_string(self->ctx,
+        "(define (dict? v)"
+        "  (and (procedure? v)"
+        "       (protect (e (else #f))"
+        "         (eq? (v '__type__) '__dict__))))", -1, self->env);
+
+    /* Async/await runtime: promise type backed by mutex+condvar */
+    sexp_eval_string(self->ctx,
+        "(define (__make-promise__)"
+        "  (let ((m (make-mutex)) (cv (make-condition-variable))"
+        "        (resolved #f) (value #f) (err #f))"
+        "    (lambda (__msg__)"
+        "      (cond"
+        "        ((eq? __msg__ '__resolve__)"
+        "         (lambda (v)"
+        "           (mutex-lock! m)"
+        "           (set! resolved #t) (set! value v)"
+        "           (condition-variable-broadcast! cv)"
+        "           (mutex-unlock! m)))"
+        "        ((eq? __msg__ '__reject__)"
+        "         (lambda (e)"
+        "           (mutex-lock! m)"
+        "           (set! resolved #t) (set! err e)"
+        "           (condition-variable-broadcast! cv)"
+        "           (mutex-unlock! m)))"
+        "        ((eq? __msg__ '__await__)"
+        "         (mutex-lock! m)"
+        "         (let loop ()"
+        "           (if resolved"
+        "               (begin (mutex-unlock! m)"
+        "                      (if err (raise err) value))"
+        "               (begin (mutex-unlock! m cv)"
+        "                      (mutex-lock! m)"
+        "                      (loop)))))"
+        "        ((eq? __msg__ 'ready?)"
+        "         (mutex-lock! m)"
+        "         (let ((r resolved)) (mutex-unlock! m) r))"
+        "        ((eq? __msg__ '__type__) '__promise__)"
+        "        (else (error \"promise: unknown message\" __msg__))))))", -1, self->env);
+    sexp_eval_string(self->ctx,
+        "(define (__promise-resolve!__ p val)"
+        "  (protect (e (else ((p '__reject__) e)))"
+        "    ((p '__resolve__) val)))", -1, self->env);
+    sexp_eval_string(self->ctx,
+        "(define (promise? v)"
+        "  (and (procedure? v)"
+        "       (protect (e (else #f))"
+        "         (eq? (v '__type__) '__promise__))))", -1, self->env);
+    sexp_eval_string(self->ctx,
+        "(define (__await__ x)"
+        "  (cond"
+        "    ((and (procedure? x)"
+        "          (protect (e (else #f)) (eq? (x '__type__) '__promise__)))"
+        "     (x '__await__))"
+        "    (else (future-result x))))", -1, self->env);
+
+    /* OO wrapper: Channel-wrap — wraps raw channel cpointer */
+    sexp_eval_string(self->ctx,
+        "(define (Channel-wrap raw)"
+        "  (lambda (__msg__)"
+        "    (cond"
+        "      ((eq? __msg__ 'send)"
+        "       (lambda (val) (channel-send raw val)))"
+        "      ((eq? __msg__ 'recv)"
+        "       (lambda () (channel-recv raw)))"
+        "      ((eq? __msg__ 'try_recv)"
+        "       (lambda () (channel-try-recv raw)))"
+        "      ((eq? __msg__ 'close)"
+        "       (lambda () (channel-close raw)))"
+        "      ((eq? __msg__ '__type__) '__channel__)"
+        "      ((eq? __msg__ '__raw__) raw)"
+        "      (else (error \"Channel: unknown message\" __msg__)))))",
+        -1, self->env);
+
+    /* OO wrapper: Future-wrap — wraps raw cpointer future */
+    sexp_eval_string(self->ctx,
+        "(define (Future-wrap raw)"
+        "  (lambda (__msg__)"
+        "    (cond"
+        "      ((eq? __msg__ 'result)"
+        "       (lambda () (future-result raw)))"
+        "      ((eq? __msg__ 'ready?)"
+        "       (future-ready? raw))"
+        "      ((eq? __msg__ '__await__)"
+        "       (future-result raw))"
+        "      ((eq? __msg__ '__type__) '__future__)"
+        "      ((eq? __msg__ '__raw__) raw)"
+        "      (else (error \"Future: unknown message\" __msg__)))))",
+        -1, self->env);
+
+    /* OO wrapper: Pool(n) — wraps raw pool with -> access and RAII close */
+    sexp_eval_string(self->ctx,
+        "(define (Pool n)"
+        "  (let ((raw (make-pool n)) (alive #t))"
+        "    (lambda (__msg__)"
+        "      (cond"
+        "        ((eq? __msg__ 'submit)"
+        "         (lambda (code) (Future-wrap (pool-submit raw code))))"
+        "        ((eq? __msg__ 'apply)"
+        "         (lambda (fn args) (Future-wrap (pool-apply raw fn args))))"
+        "        ((eq? __msg__ 'channel)"
+        "         (lambda (name) (Channel-wrap (pool-channel raw name))))"
+        "        ((eq? __msg__ 'shutdown)"
+        "         (lambda () (if alive (begin (set! alive #f)"
+        "           (pool-shutdown raw)))))"
+        "        ((eq? __msg__ 'close)"
+        "         (lambda () (if alive (begin (set! alive #f)"
+        "           (pool-shutdown raw)))))"
+        "        ((eq? __msg__ '__type__) '__pool__)"
+        "        ((eq? __msg__ '__raw__) raw)"
+        "        (else (error \"Pool: unknown message\" __msg__))))))",
+        -1, self->env);
+
+    /* Update __await__ to handle OO Future objects too */
+    sexp_eval_string(self->ctx,
+        "(let ((orig-await __await__))"
+        "  (set! __await__"
+        "    (lambda (x)"
+        "      (cond"
+        "        ((and (procedure? x)"
+        "              (protect (e (else #f)) (eq? (x '__type__) '__promise__)))"
+        "         (x '__await__))"
+        "        ((and (procedure? x)"
+        "              (protect (e (else #f)) (eq? (x '__type__) '__future__)))"
+        "         (x '__await__))"
+        "        (else (future-result x))))))",
+        -1, self->env);
+
     self->initialized = 1;
     return 0;
 }

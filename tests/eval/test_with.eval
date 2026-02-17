@@ -1,0 +1,106 @@
+test_begin("With (RAII)");
+
+// Helper: make a resource that logs open/work/close
+define log = [];
+define make_res = function(name) {
+    log = `cons`(`string-append`("open:", name), log);
+    interface(
+        name: name,
+        work: function() { log = `cons`(`string-append`("work:", name), log); name; },
+        close: function() { log = `cons`(`string-append`("close:", name), log); }
+    );
+};
+
+// === Basic with: close called after body ===
+log = [];
+define r1 = with(f = make_res("A")) {
+    f->work();
+};
+test("basic result", "A", r1);
+test("basic close called", true, `member`("close:A", log) != false);
+test("basic order", ["close:A", "work:A", "open:A"], log);
+
+// === with closes on error ===
+log = [];
+define r2 = try {
+    with(f = make_res("B")) {
+        f->work();
+        error("boom");
+    };
+} catch(e) "caught";
+test("error result", "caught", r2);
+test("error close called", true, `member`("close:B", log) != false);
+test("error work called", true, `member`("work:B", log) != false);
+
+// === Multiple resources: inner closes first ===
+log = [];
+define r3 = with(a = make_res("X"), b = make_res("Y")) {
+    a->work();
+    b->work();
+    99;
+};
+test("multi result", 99, r3);
+// Close order: Y (inner) before X (outer)
+// log is newest-first (cons prepends), so X (closed last) has smaller index
+define close_x = `list-index`(function(s) s == "close:X", log);
+define close_y = `list-index`(function(s) s == "close:Y", log);
+test("multi inner closes first", true, close_x < close_y);
+
+// === Multiple resources: error closes all ===
+log = [];
+define r4 = try {
+    with(a = make_res("P"), b = make_res("Q")) {
+        a->work();
+        error("fail");
+    };
+} catch(e) "caught";
+test("multi error result", "caught", r4);
+test("multi error close P", true, `member`("close:P", log) != false);
+test("multi error close Q", true, `member`("close:Q", log) != false);
+
+// === with returns body value, not close value ===
+log = [];
+define r5 = with(f = make_res("R")) 42;
+test("return body not close", 42, r5);
+
+// === Nested with ===
+log = [];
+define r6 = with(a = make_res("outer")) {
+    with(b = make_res("inner")) {
+        a->work();
+        b->work();
+        "done";
+    };
+};
+test("nested result", "done", r6);
+test("nested close inner", true, `member`("close:inner", log) != false);
+test("nested close outer", true, `member`("close:outer", log) != false);
+
+// === with + constructor (OOP resource) ===
+define FileRes = constructor(name) {
+    define opened = true;
+    interface(
+        read: function() { if(!opened) error("closed"); "data"; },
+        close: function() { opened = false; }
+    );
+};
+define r7 = with(f = FileRes("test.txt")) {
+    f->read();
+};
+test("ctor resource result", "data", r7);
+// f is now closed — accessing would error, but we can't test that directly
+// since f is out of scope. The close was called.
+
+// === with + dict resource ===
+define state = dict(closed: false);
+define DictRes = function() {
+    interface(
+        value: function() 77,
+        close: function() { state->set("closed", true); }
+    );
+};
+define r8 = with(d = DictRes()) d->value();
+test("dict resource result", 77, r8);
+test("dict resource closed", true, state->closed);
+
+test_end();

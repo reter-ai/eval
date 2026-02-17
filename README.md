@@ -1,12 +1,18 @@
 # chibi-eval
 
-An expressive infix language with first-class functions, continuations, green threads, and seamless Python interop — powered by [chibi-scheme](https://github.com/ashinn/chibi-scheme).
+An expressive infix language with first-class functions, continuations, green threads, and a thread pool — powered by [chibi-scheme](https://github.com/ashinn/chibi-scheme).
+
+Available as a **standalone CLI** (single self-contained binary, no dependencies) or as a **Python library** with seamless interop.
+
+```
+$ eval -e "map(function(x) x * x, [1, 2, 3, 4, 5])"
+(1 4 9 16 25)
+```
 
 ```python
 from chibi_eval import Eval
 
 e = Eval()
-
 e.eval("""
     define factorial = function(n)
         if(n <= 1) 1
@@ -24,25 +30,73 @@ e.eval("""
 - **Continuations** — `callcc`, serializable to bytes for checkpointing and migration
 - **Green threads** — cooperative multitasking with fuel-based VM scheduling
 - **Thread pool** — true OS-level parallelism with worker threads, futures, and channels
+- **Standalone CLI** — single binary, all scheme files embedded, runs anywhere with no dependencies
 - **Python interop** — call Python from Eval, call Eval from Python, share data bidirectionally
 - **Full numeric tower** — integers, floats, bignums, rationals
 - **Scheme power** — access any chibi-scheme primitive via backtick identifiers
 
 ## Installation
 
+### Standalone CLI
+
+Download a prebuilt binary from [Releases](../../releases) — single file, no dependencies:
+
+| Platform | Download |
+|----------|----------|
+| Linux x86_64 | `eval-linux-x86_64.tar.gz` |
+| macOS ARM (Apple Silicon) | `eval-macos-arm64.tar.gz` |
+| macOS x86_64 (Intel) | `eval-macos-x86_64.tar.gz` |
+| Windows x86_64 | `eval-windows-x86_64.zip` |
+
+Or build from source (requires a C compiler — GCC, Clang, or MSVC):
+
+```bash
+cmake -B build -DBUILD_PYTHON_MODULE=OFF -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release
+# Binary is at build/eval (or build/Release/eval.exe on Windows)
+```
+
+### Python library
+
 ```bash
 pip install chibi-eval
 ```
 
-### Build from source
-
-Requires Python 3.10+ and a C compiler (MSVC, GCC, or Clang).
+Build from source (requires Python 3.10+ and a C compiler):
 
 ```bash
 pip install -e .
 ```
 
-## Quick start
+## CLI usage
+
+```bash
+# Interactive REPL (just run with no arguments)
+eval
+> 2 ** 10
+1024
+> define double = function(x) x * 2;
+> double(21)
+42
+> exit
+
+# Run a file
+eval program.eval
+
+# Evaluate an expression
+eval -e "2 ** 10"          # => 1024
+eval -e "fold(+, 0, [1, 2, 3, 4, 5])"   # => 15
+
+# Read from stdin
+echo 'display("hello"); newline();' | eval
+
+# Options
+eval -V              # print version
+eval -h              # print help
+eval -I ./mylibs     # add module search directory
+```
+
+## Python quick start
 
 ```python
 from chibi_eval import Eval
@@ -584,7 +638,7 @@ python tools/scm2eval.py --dir chibi-scheme/lib/scheme/ -o chibi_eval/_lib/schem
 | [`examples/green_threads/`](examples/green_threads/) | Cooperative scheduling, continuation serialization, producer-consumer pipelines |
 | [`examples/objects/`](examples/objects/) | SICP-inspired object patterns: message passing, delegation, polymorphism |
 
-Run any example:
+Run examples with Python:
 
 ```bash
 python examples/bank/test_bank.py
@@ -592,11 +646,28 @@ python examples/green_threads/run_showcase.py
 python examples/objects/test_object_model.py
 ```
 
+Run the test suite with the standalone CLI:
+
+```bash
+eval tests/eval/test_arithmetic.eval
+eval tests/eval/test_functions.eval
+eval tests/eval/test_green_threads.eval
+eval tests/eval/test_pool.eval
+```
+
 ## Testing
+
+Python tests:
 
 ```bash
 pip install -e ".[test]"
 pytest tests/ -v
+```
+
+Standalone tests (all `.eval` files under `tests/eval/`):
+
+```bash
+for f in tests/eval/test_*.eval; do eval "$f"; done
 ```
 
 ### Built-in test framework
@@ -643,9 +714,9 @@ Eval source  ──→  Lexer  ──→  Lemon LALR parser  ──→  S-expres
 1. The **lexer** (`_eval_lexer.c`) tokenizes infix Eval syntax
 2. The **Lemon parser** (`eval_grammar.y`) builds S-expression ASTs using LALR parsing
 3. **chibi-scheme** compiles S-expressions to bytecode and executes on its VM
-4. The **bridge layer** (`_chibi_bridge.c`) connects Scheme I/O and functions to Python
+4. The **bridge layer** connects Scheme I/O and functions to the host (Python or standalone CLI)
 
-The entire chibi-scheme runtime is statically linked — no external dependencies at runtime.
+The entire chibi-scheme runtime is statically linked. The standalone binary embeds all 480 scheme library files — no external dependencies at runtime.
 
 ## License
 

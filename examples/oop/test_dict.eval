@@ -1,0 +1,55 @@
+// Basic dict creation and field access
+define d = dict(name: "Alice", age: 30, city: "NYC");
+display("name: "); display(d->name); newline();
+display("age: "); display(d->age); newline();
+display("city: "); display(d->city); newline();
+
+// Predicate
+display("dict?(d): "); display(dict?(d)); newline();
+display("dict?(42): "); display(dict?(42)); newline();
+
+// Dynamic get
+display("get name: "); display(d->get("name")); newline();
+display("get missing: "); display(d->get("email")); newline();
+
+// Mutation: set
+d->set("email", "alice@example.com");
+display("email after set: "); display(d->email); newline();
+
+// Overwrite
+d->set("age", 31);
+display("age after set: "); display(d->age); newline();
+
+// Delete
+d->delete("city");
+display("city after delete: "); display(d->city); newline();
+display("has? city: "); display(d->has?("city")); newline();
+display("has? name: "); display(d->has?("name")); newline();
+
+// Keys, values, size
+display("keys: "); display(d->keys()); newline();
+display("size: "); display(d->size()); newline();
+display("values: "); display(d->values()); newline();
+
+// to_list (alist)
+display("to_list: "); display(d->to_list()); newline();
+
+// Empty dict
+define empty = dict();
+display("empty size: "); display(empty->size()); newline();
+display("dict?(empty): "); display(dict?(empty)); newline();
+
+// Dict in a list
+define people = [
+    dict(name: "Alice", age: 30),
+    dict(name: "Bob", age: 25),
+    dict(name: "Charlie", age: 35)
+];
+display("=== People ==="); newline();
+`for-each`(function(p) {
+    display(p->name);
+    display(" (");
+    display(p->age);
+    display(")");
+    newline();
+}, people);

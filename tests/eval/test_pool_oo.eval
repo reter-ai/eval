@@ -1,0 +1,85 @@
+test_begin("Pool & Channel OO");
+
+// === Pool with -> access ===
+{
+    with(pool = Pool(2));
+
+    define f = pool->submit("2 + 3;");
+    test("pool submit", 5, await(f));
+
+    // Pool submit returns OO Future
+    define f2 = pool->submit("6 * 7;");
+    test("future result method", 42, f2->result());
+    test("future ready?", true, f2->ready?);
+
+    // Multiple pool tasks
+    define fa = pool->submit("100;");
+    define fb = pool->submit("200;");
+    test("pool multi a", 100, await(fa));
+    test("pool multi b", 200, await(fb));
+};
+
+// === Pool with expression-form RAII ===
+define pool_result = with(p = Pool(2)) {
+    define f = p->submit("42;");
+    await(f);
+};
+test("pool expr RAII", 42, pool_result);
+
+// === Pool with statement-form RAII ===
+define stmt_result = {
+    with(p = Pool(2));
+    define f = p->submit("99;");
+    await(f);
+};
+test("pool stmt RAII", 99, stmt_result);
+
+// === Channel via pool with -> access ===
+{
+    with(p = Pool(2));
+    with(ch = p->channel("test"));
+
+    ch->send("hello");
+    ch->send("world");
+    test("channel recv 1", "hello", ch->recv());
+    test("channel recv 2", "world", ch->recv());
+    test("channel try_recv empty", false, ch->try_recv());
+};
+
+// === Channel RAII statement form ===
+define ch_result = {
+    with(p = Pool(2));
+    with(ch = p->channel("data"));
+    ch->send(42);
+    ch->recv();
+};
+test("channel RAII stmt", 42, ch_result);
+
+// === Pool + parallel computation ===
+define parallel_result = {
+    with(p = Pool(2));
+    define f1 = p->submit("10 * 10;");
+    define f2 = p->submit("20 + 5;");
+    await(f1) + await(f2);
+};
+test("pool parallel", 125, parallel_result);
+
+// === Double shutdown is safe ===
+define p2 = Pool(1);
+p2->shutdown();
+p2->shutdown();  // no-op, no crash
+test("double shutdown safe", true, true);
+
+// === Future from pool works with await keyword ===
+{
+    with(p = Pool(2));
+    define futures = [
+        p->submit("1 + 1;"),
+        p->submit("2 + 2;"),
+        p->submit("3 + 3;")
+    ];
+    define results = map(function(f) await(f), futures);
+    test("await list of futures", [2, 4, 6], results);
+};
+
+test_end();

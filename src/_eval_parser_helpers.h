@@ -67,6 +67,21 @@ sexp ps_make_try_catch(sexp ctx, sexp body, sexp var, sexp handler);
 /* Build (guard (var (test1 handler1) ...) body) for multi-clause catch */
 sexp ps_make_try_catch_multi(sexp ctx, sexp body, sexp var, sexp clauses);
 
+/* try/catch/finally — wraps try/catch in dynamic-wind for cleanup */
+sexp ps_make_try_catch_finally(sexp ctx, sexp body, sexp var, sexp handler, sexp cleanup);
+
+/* try/catch(multi)/finally */
+sexp ps_make_try_catch_multi_finally(sexp ctx, sexp body, sexp var, sexp clauses, sexp cleanup);
+
+/* try/finally (no catch) — guaranteed cleanup via dynamic-wind */
+sexp ps_make_try_finally(sexp ctx, sexp body, sexp cleanup);
+
+/* with(r = expr) body — RAII: calls r->close() on scope exit via dynamic-wind */
+sexp ps_make_with(sexp ctx, sexp bindings, sexp body);
+
+/* async expr — spawn green thread, return promise */
+sexp ps_make_async(sexp ctx, sexp expr);
+
 /* Build (call-with-values (lambda () expr) (lambda params body)) */
 sexp ps_make_receive(sexp ctx, sexp params, sexp expr, sexp body);
 
@@ -103,6 +118,8 @@ sexp ps_expr_safe(sexp ctx, sexp expr);
 
 /* Map an operator token type to its Scheme symbol (for op-as-value) */
 sexp ps_intern_op(sexp ctx, int token_type);
+sexp ps_make_include(sexp ctx, sexp string_list);
+sexp ps_make_dict(sexp ctx, sexp entries);
 
 /* Parse Eval source code into a chibi sexp.
    Returns the parsed sexp, or SEXP_VOID on error.

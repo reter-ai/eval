@@ -1,0 +1,62 @@
+// main.eval — multi-file OOP demo
+//
+// Dependency graph (diamond on vec2):
+//   main.eval → canvas.eval → shape.eval → vec2.eval
+//   main.eval → transform.eval → vec2.eval
+
+include("examples/oop/canvas.eval");
+include("examples/oop/transform.eval");
+
+// Create some shapes
+define c1 = Circle(Vec2(0, 0), 5);
+define c2 = Circle(Vec2(10, 0), 3);
+define r1 = Rect(Vec2(1, 1), 4, 6);
+define r2 = Rect(Vec2(-2, 3), 10, 2);
+
+// Build a canvas
+define cv = Canvas();
+cv->add(c1);
+cv->add(c2);
+cv->add(r1);
+cv->add(r2);
+
+display("=== All shapes ==="); newline();
+cv->print_all();
+
+newline();
+display("Total shapes: "); display(cv->count()); newline();
+display("Total area: "); display(cv->total_area()); newline();
+
+newline();
+define biggest = cv->find_largest();
+display("Largest: "); display(biggest->describe());
+display(" (area="); display(biggest->area()); display(")");
+newline();
+
+// Test mutation via move
+newline();
+display("Moving c1 to (7, 7)..."); newline();
+c1->move_to(Vec2(7, 7));
+display("c1 now at "); display(c1->pos()->to_string()); newline();
+
+// Test vector math
+newline();
+define v1 = Vec2(3, 4);
+define v2 = Vec2(1, 2);
+define v3 = v1->add(v2);
+display("Vec2(3,4) + Vec2(1,2) = "); display(v3->to_string()); newline();
+display("length = "); display(v3->length()); newline();
+define v4 = v1->scale(2);
+display("Vec2(3,4) * 2 = "); display(v4->to_string()); newline();
+
+// Test transform (uses diamond-included vec2)
+newline();
+display("=== Translate all shapes by (100, 100) ==="); newline();
+translate_all([c1, c2, r1, r2], 100, 100);
+cv->print_all();
+
+// Test reflect
+newline();
+define v5 = Vec2(3, 4);
+display("reflect_x(Vec2(3,4)) = "); display(reflect_x(v5)->to_string()); newline();
+display("reflect_y(Vec2(3,4)) = "); display(reflect_y(v5)->to_string()); newline();

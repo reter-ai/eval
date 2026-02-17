@@ -1,7 +1,12 @@
 cmake_minimum_required(VERSION 3.17)
 project(chibi_eval C)
 
-find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
+option(BUILD_PYTHON_MODULE "Build the Python C extension module" ON)
+option(BUILD_EVAL_STANDALONE "Build the standalone eval executable" ON)
+
+if(BUILD_PYTHON_MODULE)
+    find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
+endif()
 
 # ---------- Generate install.h from platform detection ----------
 include(CheckTypeSize)
@@ -38,6 +43,17 @@ configure_file(
     ${CMAKE_BINARY_DIR}/include/chibi/install.h
 )
 
+# ---------- Common compile definitions ----------
+set(CHIBI_COMPILE_DEFS
+    SEXP_STATIC_LIBRARY=1
+    SEXP_USE_STATIC_LIBS=0
+    SEXP_USE_DL=0
+    SEXP_USE_GREEN_THREADS=1
+    SEXP_USE_MMAP=0
+    SEXP_USE_BOEHM=0
+    BUILDING_EVAL_POOL=1
+)
+
 # ---------- Chibi-scheme core sources (statically compiled in) ----------
 set(CHIBI_SOURCES
     chibi-scheme/gc.c
@@ -69,81 +85,155 @@ set(CHIBI_LIB_SOURCES
     chibi-scheme/lib/srfi/151/bit.c
 )
 
-# ---------- Extension module sources ----------
-set(EXT_SOURCES
-    src/_chibi_module.c
-    src/_chibi_context.c
-    src/_chibi_sexp.c
-    src/_chibi_convert.c
-    src/_chibi_pyobject_type.c
-    src/_chibi_bridge.c
-    src/_eval_writer.c
-    src/_eval_lexer.c
-    src/eval_grammar.c
-    src/_eval_parser_helpers.c
-    src/_chibi_serialize.c
-    src/_eval_pool.c
-    src/_eval_lib_init.c
-)
-
-# ---------- Build the Python C extension ----------
-python_add_library(_chibi MODULE ${CHIBI_SOURCES} ${CHIBI_LIB_SOURCES} ${EXT_SOURCES})
-
-target_include_directories(_chibi PRIVATE
+# ---------- Common include directories ----------
+set(CHIBI_INCLUDE_DIRS
     ${CMAKE_SOURCE_DIR}/chibi-scheme/include
     ${CMAKE_BINARY_DIR}/include
     ${CMAKE_SOURCE_DIR}/src
 )
 
-# Win_compat headers provide sys/time.h, unistd.h, poll.h shims for Windows.
-# Must come AFTER system includes so #include_next works on POSIX.
-if(WIN32)
-    target_include_directories(_chibi PRIVATE
-        ${CMAKE_SOURCE_DIR}/src/win_compat
+# ============================================================
+# Python C extension module
+# ============================================================
+if(BUILD_PYTHON_MODULE)
+    set(EXT_SOURCES
+        src/_chibi_module.c
+        src/_chibi_context.c
+        src/_chibi_sexp.c
+        src/_chibi_convert.c
+        src/_chibi_pyobject_type.c
+        src/_chibi_bridge.c
+        src/_eval_writer.c
+        src/_eval_lexer.c
+        src/eval_grammar.c
+        src/_eval_parser_helpers.c
+        src/_chibi_serialize.c
+        src/_eval_pool.c
+        src/_eval_lib_init.c
+    )
+
+    python_add_library(_chibi MODULE ${CHIBI_SOURCES} ${CHIBI_LIB_SOURCES} ${EXT_SOURCES})
+
+    target_include_directories(_chibi PRIVATE ${CHIBI_INCLUDE_DIRS})
+
+    if(WIN32)
+        target_include_directories(_chibi PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/win_compat
+        )
+    endif()
+
+    target_compile_definitions(_chibi PRIVATE ${CHIBI_COMPILE_DEFS})
+
+    if(WIN32)
+        target_link_libraries(_chibi PRIVATE ws2_32)
+        target_compile_definitions(_chibi PRIVATE
+            _CRT_SECURE_NO_WARNINGS
+            SEXP_USE_STRING_STREAMS=0
+        )
+    elseif(UNIX)
+        target_link_libraries(_chibi PRIVATE m)
+    endif()
+
+    if(MSVC)
+        target_compile_options(_chibi PRIVATE /W3 /wd4244 /wd4267 /wd4996)
+    else()
+        target_compile_options(_chibi PRIVATE -Wno-unused-parameter -Wno-sign-compare)
+    endif()
+
+    install(TARGETS _chibi LIBRARY DESTINATION chibi_eval)
+
+    install(DIRECTORY ${CMAKE_SOURCE_DIR}/chibi-scheme/lib/
+        DESTINATION chibi_eval/_scheme_lib
+        PATTERN "*.c" EXCLUDE
+        PATTERN "*.stub" EXCLUDE
+        PATTERN "*test.sld" EXCLUDE
+    )
+
+    install(FILES
+        ${CMAKE_SOURCE_DIR}/chibi-scheme/lib/init-7.scm
+        DESTINATION chibi_eval/_scheme_lib
     )
 endif()
 
-target_compile_definitions(_chibi PRIVATE
-    SEXP_STATIC_LIBRARY=1
-    SEXP_USE_STATIC_LIBS=0
-    SEXP_USE_DL=0
-    SEXP_USE_GREEN_THREADS=1
-    SEXP_USE_MMAP=0
-    SEXP_USE_BOEHM=0
-    BUILDING_EVAL_POOL=1
-)
-
-# Platform-specific settings
-if(WIN32)
-    target_link_libraries(_chibi PRIVATE ws2_32)
-    target_compile_definitions(_chibi PRIVATE
-        _CRT_SECURE_NO_WARNINGS
-        SEXP_USE_STRING_STREAMS=0
+# ============================================================
+# Standalone eval executable
+# ============================================================
+if(BUILD_EVAL_STANDALONE)
+    # Generate embedded scheme files at configure time
+    set(EMBEDDED_SCM_C "${CMAKE_BINARY_DIR}/eval_embedded_scm.c")
+    execute_process(
+        COMMAND ${CMAKE_COMMAND}
+            -DLIB_DIR=${CMAKE_SOURCE_DIR}/chibi-scheme/lib
+            -DOUTPUT=${EMBEDDED_SCM_C}
+            -P ${CMAKE_SOURCE_DIR}/tools/generate_embedded.cmake
+        RESULT_VARIABLE _embed_result
     )
-elseif(UNIX)
-    target_link_libraries(_chibi PRIVATE m)
+    if(NOT _embed_result EQUAL 0)
+        message(FATAL_ERROR "Failed to generate embedded scheme files")
+    endif()
+
+    set(STANDALONE_SOURCES
+        src/eval_main.c
+        src/eval_embedded_extract.c
+        ${EMBEDDED_SCM_C}
+        src/_eval_writer.c
+        src/_eval_lexer.c
+        src/eval_grammar.c
+        src/_eval_parser_helpers.c
+        src/_chibi_serialize.c
+        src/_eval_pool.c
+        src/_eval_lib_init.c
+    )
+
+    add_executable(eval_standalone
+        ${CHIBI_SOURCES}
+        ${CHIBI_LIB_SOURCES}
+        ${STANDALONE_SOURCES}
+    )
+
+    set_target_properties(eval_standalone PROPERTIES OUTPUT_NAME eval)
+
+    target_include_directories(eval_standalone PRIVATE ${CHIBI_INCLUDE_DIRS})
+
+    if(WIN32)
+        target_include_directories(eval_standalone PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/win_compat
+        )
+    endif()
+
+    target_compile_definitions(eval_standalone PRIVATE
+        ${CHIBI_COMPILE_DEFS}
+        EVAL_STANDALONE=1
+    )
+
+    if(WIN32)
+        target_link_libraries(eval_standalone PRIVATE ws2_32)
+        target_compile_definitions(eval_standalone PRIVATE
+            _CRT_SECURE_NO_WARNINGS
+            SEXP_USE_STRING_STREAMS=0
+        )
+    elseif(UNIX)
+        target_link_libraries(eval_standalone PRIVATE m pthread)
+    endif()
+
+    if(MSVC)
+        target_compile_options(eval_standalone PRIVATE /W3 /wd4244 /wd4267 /wd4996)
+    else()
+        target_compile_options(eval_standalone PRIVATE -Wno-unused-parameter -Wno-sign-compare)
+    endif()
+
+    # Install standalone executable and scheme library files
+    install(TARGETS eval_standalone RUNTIME DESTINATION bin)
+
+    install(DIRECTORY ${CMAKE_SOURCE_DIR}/chibi-scheme/lib/
+        DESTINATION lib
+        PATTERN "*.c" EXCLUDE
+        PATTERN "*.stub" EXCLUDE
+        PATTERN "*test.sld" EXCLUDE
+    )
+
+    install(FILES
+        ${CMAKE_SOURCE_DIR}/chibi-scheme/lib/init-7.scm
+        DESTINATION lib
+    )
 endif()
-
-# Suppress warnings for chibi-scheme C code
-if(MSVC)
-    target_compile_options(_chibi PRIVATE /W3 /wd4244 /wd4267 /wd4996)
-else()
-    target_compile_options(_chibi PRIVATE -Wno-unused-parameter -Wno-sign-compare)
-endif()
-
-# ---------- Install into Python package ----------
-install(TARGETS _chibi LIBRARY DESTINATION chibi_eval)
-
-# Install scheme library files as package data
-install(DIRECTORY ${CMAKE_SOURCE_DIR}/chibi-scheme/lib/
-    DESTINATION chibi_eval/_scheme_lib
-    PATTERN "*.c" EXCLUDE
-    PATTERN "*.stub" EXCLUDE
-    PATTERN "*test.sld" EXCLUDE
-)
-
-# Install init files needed by chibi
-install(FILES
-    ${CMAKE_SOURCE_DIR}/chibi-scheme/lib/init-7.scm
-    DESTINATION chibi_eval/_scheme_lib
-)

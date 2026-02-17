@@ -36,7 +36,7 @@
 %nonassoc ARGLIST_PREC.
 %right ASSIGN PLUS_ASSIGN MINUS_ASSIGN.
 %nonassoc IF_WITHOUT_ELSE.
-%nonassoc ELSE.
+%nonassoc ELSE FINALLY.
 %right RETURN_PREC SUPER_PREC.
 %left OR.
 %left AND.
@@ -53,7 +53,7 @@
 %nonassoc RPAREN COMMA DOTDOT RBRACKET RBRACE SEMICOLON COLON.
 /* Additional keyword tokens recognized by the lexer.
    Declaring them here makes lemon generate their TOK_ defines. */
-%token LIBRARY EXPORT INCLUDE MACRO SYNTAX_RULES OPVAL TEST_GROUP DEFINE IN.
+%token LIBRARY EXPORT INCLUDE MACRO SYNTAX_RULES OPVAL TEST_GROUP DEFINE IN DICT WITH ASYNC AWAIT.
 
 /* Non-terminal types - all are sexp */
 %type program { sexp }
@@ -78,6 +78,7 @@
 %type string_list { sexp }
 %type sr_clauses { sexp }
 %type sr_pattern { sexp }
+%type member_name { EvalToken }
 
 /* ===== PROGRAM ===== */
 
@@ -92,6 +93,9 @@ stmt_list(A) ::= stmt_list(B) stmt(S). { A = ps_sexp_begin(ctx, B, S); }
 /* ===== STATEMENT ===== */
 
 stmt(A) ::= expr(E) SEMICOLON. { A = E; }
+stmt(A) ::= WITH LPAREN bindings(B) RPAREN SEMICOLON. {
+    A = sexp_list2(ctx, ps_intern(ctx, "__with_stmt__"), B);
+}
 
 /* ===== EXPRESSIONS ===== */
 
@@ -203,11 +207,32 @@ expr(A) ::= expr(E) LPAREN arglist(L) RPAREN. {
 }
 
 /* --- Postfix: member access --- */
-expr(A) ::= expr(E) ARROW IDENT(M). {
+expr(A) ::= expr(E) ARROW member_name(M). {
     A = sexp_list2(ctx, E,
         sexp_list2(ctx, ps_intern(ctx, "quote"),
                    ps_make_ident(ctx, M.start, M.length)));
 }
+
+/* member_name: IDENT plus keywords valid as field/method names after -> */
+member_name(A) ::= IDENT(T).  { A = T; }
+member_name(A) ::= VALUES(T). { A = T; }
+member_name(A) ::= DEFINE(T). { A = T; }
+member_name(A) ::= IMPORT(T). { A = T; }
+member_name(A) ::= EXPORT(T). { A = T; }
+member_name(A) ::= FROM(T).   { A = T; }
+member_name(A) ::= IN(T).     { A = T; }
+member_name(A) ::= DO(T).     { A = T; }
+member_name(A) ::= DICT(T).   { A = T; }
+member_name(A) ::= RECORD(T). { A = T; }
+member_name(A) ::= INCLUDE(T). { A = T; }
+member_name(A) ::= SUPER(T).  { A = T; }
+member_name(A) ::= CASE(T).   { A = T; }
+member_name(A) ::= BREAK(T).  { A = T; }
+member_name(A) ::= RETURN(T).  { A = T; }
+member_name(A) ::= FINALLY(T). { A = T; }
+member_name(A) ::= WITH(T).   { A = T; }
+member_name(A) ::= ASYNC(T).  { A = T; }
+member_name(A) ::= AWAIT(T).  { A = T; }
 
 /* --- Postfix: increment/decrement --- */
 expr(A) ::= IDENT(N) PLUSPLUS. {
@@ -398,12 +423,36 @@ expr(A) ::= LETREC LPAREN bindings(B) RPAREN expr(E). [ARGLIST_PREC] {
     A = ps_make_let(ctx, "letrec", B, E);
 }
 
+/* --- With (RAII-style resource management) --- */
+expr(A) ::= WITH LPAREN bindings(B) RPAREN expr(E). [ARGLIST_PREC] {
+    A = ps_make_with(ctx, B, E);
+}
+
+/* --- Async / Await --- */
+expr(A) ::= ASYNC expr(E). [RETURN_PREC] {
+    A = ps_make_async(ctx, E);
+}
+expr(A) ::= AWAIT LPAREN arglist(L) RPAREN. {
+    A = sexp_cons(ctx, ps_intern(ctx, "__await__"), L);
+}
+
 /* --- Try/Catch --- */
 expr(A) ::= TRY expr(B) CATCH LPAREN IDENT(E) RPAREN expr(H). [ARGLIST_PREC] {
     A = ps_make_try_catch(ctx, B, ps_make_ident(ctx, E.start, E.length), H);
 }
 expr(A) ::= TRY expr(B) CATCH LPAREN IDENT(E) COMMA catch_clauses(C) RPAREN. {
     A = ps_make_try_catch_multi(ctx, B, ps_make_ident(ctx, E.start, E.length), C);
+}
+/* --- Try/Catch/Finally --- */
+expr(A) ::= TRY expr(B) CATCH LPAREN IDENT(E) RPAREN expr(H) FINALLY expr(F). [ARGLIST_PREC] {
+    A = ps_make_try_catch_finally(ctx, B, ps_make_ident(ctx, E.start, E.length), H, F);
+}
+expr(A) ::= TRY expr(B) CATCH LPAREN IDENT(E) COMMA catch_clauses(C) RPAREN FINALLY expr(F). [ARGLIST_PREC] {
+    A = ps_make_try_catch_multi_finally(ctx, B, ps_make_ident(ctx, E.start, E.length), C, F);
+}
+/* --- Try/Finally (no catch) --- */
+expr(A) ::= TRY expr(B) FINALLY expr(F). [ARGLIST_PREC] {
+    A = ps_make_try_finally(ctx, B, F);
 }
 
 /* --- Import --- */
@@ -449,7 +498,7 @@ expr(A) ::= EXPORT LPAREN ident_list(L) RPAREN. {
 
 /* --- Include --- */
 expr(A) ::= INCLUDE LPAREN string_list(L) RPAREN. {
-    A = sexp_cons(ctx, ps_intern(ctx, "include"), L);
+    A = ps_make_include(ctx, L);
 }
 
 /* --- Library --- */
@@ -484,6 +533,14 @@ expr(A) ::= SYNTAX_RULES LPAREN RPAREN LBRACE sr_clauses(C) RBRACE. {
 /* --- Record --- */
 expr(A) ::= RECORD IDENT(N) LPAREN field_list(F) RPAREN. {
     A = ps_make_record(ctx, ps_make_ident(ctx, N.start, N.length), F);
+}
+
+/* --- Dict --- */
+expr(A) ::= DICT LPAREN iface_entries(E) RPAREN. {
+    A = ps_make_dict(ctx, E);
+}
+expr(A) ::= DICT LPAREN RPAREN. {
+    A = ps_make_dict(ctx, SEXP_NULL);
 }
 
 /* --- Test group --- */

@@ -1,0 +1,19 @@
+// transform.eval — transform utilities that directly use Vec2
+// Creates a diamond dependency: main -> transform -> vec2
+//                               main -> canvas -> shape -> vec2
+
+include("examples/oop/vec2.eval");
+
+define translate_all = function(shapes, dx, dy) {
+    define offset = Vec2(dx, dy);
+    `for-each`(function(s) {
+        define old = s->pos();
+        s->move_to(old->add(offset));
+    }, shapes);
+};
+
+define reflect_x = function(v)
+    Vec2(0 - v->x(), v->y());
+
+define reflect_y = function(v)
+    Vec2(v->x(), 0 - v->y());

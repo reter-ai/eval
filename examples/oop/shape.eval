@@ -1,0 +1,47 @@
+// shape.eval — base Shape and concrete shapes (Circle, Rectangle)
+
+include("examples/oop/vec2.eval");
+
+define PI = 3.14159265358979;
+
+// Base shape — just a position
+define Shape = constructor(pos)
+    interface(
+        pos: function() pos,
+        move_to: function(new_pos) { pos = new_pos; },
+        describe: function() "Shape"
+    );
+
+// Circle — inherits from Shape
+define Circle = constructor(pos, radius) {
+    super Shape(pos);
+    interface(
+        radius: function() radius,
+        area: function() PI * radius * radius,
+        perimeter: function() 2 * PI * radius,
+        describe: function() {
+            define p = `open-output-string`();
+            `write`(radius, p);
+            `string-append`("Circle(r=", `get-output-string`(p), ")");
+        }
+    );
+};
+
+// Rectangle — inherits from Shape
+define Rect = constructor(pos, w, h) {
+    super Shape(pos);
+    interface(
+        width: function() w,
+        height: function() h,
+        area: function() w * h,
+        perimeter: function() 2 * (w + h),
+        describe: function() {
+            define pw = `open-output-string`();
+            `write`(w, pw);
+            define ph = `open-output-string`();
+            `write`(h, ph);
+            `string-append`("Rect(", `get-output-string`(pw),
+                            "x", `get-output-string`(ph), ")");
+        }
+    );
+};

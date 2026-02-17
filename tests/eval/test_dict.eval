@@ -1,0 +1,154 @@
+test_begin("Dictionaries");
+
+// === Creation and field access ===
+define d = dict(x: 10, y: 20, z: 30);
+test("field x", 10, d->x);
+test("field y", 20, d->y);
+test("field z", 30, d->z);
+
+// String values
+define person = dict(name: "Alice", age: 30, city: "NYC");
+test("string field", "Alice", person->name);
+test("int field", 30, person->age);
+
+// Empty dict
+define empty = dict();
+test("empty size", 0, empty->size());
+
+// Single entry
+define single = dict(only: 42);
+test("single field", 42, single->only);
+test("single size", 1, single->size());
+
+// === Predicate ===
+test("dict? true", true, dict?(d));
+test("dict? empty", true, dict?(empty));
+test("dict? number", false, dict?(42));
+test("dict? string", false, dict?("hello"));
+test("dict? list", false, dict?([1, 2, 3]));
+test("dict? false", false, dict?(false));
+
+// === Dynamic get ===
+test("get existing", 10, d->get("x"));
+test("get existing str", "Alice", person->get("name"));
+test("get missing", false, d->get("missing"));
+test("get from empty", false, empty->get("foo"));
+
+// === Set (add new key) ===
+define m = dict(a: 1);
+m->set("b", 2);
+test("set new key", 2, m->b);
+test("set size grows", 2, m->size());
+
+// Set overwrite existing
+m->set("a", 99);
+test("set overwrite", 99, m->a);
+test("set overwrite size", 2, m->size());
+
+// === Delete ===
+define del = dict(a: 1, b: 2, c: 3);
+del->delete("b");
+test("delete removes key", false, del->has?("b"));
+test("delete size shrinks", 2, del->size());
+test("delete keeps others a", 1, del->a);
+test("delete keeps others c", 3, del->c);
+test("deleted field returns #f", false, del->b);
+
+// Delete non-existent (no error)
+del->delete("zzz");
+test("delete non-existent size", 2, del->size());
+
+// === has? ===
+define h = dict(present: 1);
+test("has? true", true, h->has?("present"));
+test("has? false", false, h->has?("absent"));
+
+// === keys ===
+define k = dict(a: 1, b: 2, c: 3);
+test("keys is list", true, `list?`(k->keys()));
+test("keys length", 3, `length`(k->keys()));
+// Each key should be present
+test("keys has a", true, `memq`('a, k->keys()) != false);
+test("keys has b", true, `memq`('b, k->keys()) != false);
+test("keys has c", true, `memq`('c, k->keys()) != false);
+
+// === values ===
+define v = dict(x: 10, y: 20);
+test("values is list", true, `list?`(v->values()));
+test("values length", 2, `length`(v->values()));
+
+// === size ===
+test("size 0", 0, dict()->size());
+test("size 1", 1, dict(a: 1)->size());
+test("size 3", 3, dict(a: 1, b: 2, c: 3)->size());
+
+// === to_list (alist) ===
+define al = dict(x: 10);
+define alist = al->to_list();
+test("to_list is list", true, `list?`(alist));
+test("to_list length", 1, `length`(alist));
+test("to_list entry is pair", true, `pair?`(`car`(alist)));
+
+// === Mixed value types ===
+define mixed = dict(
+    num: 42,
+    str: "hello",
+    bool_val: true,
+    lst: [1, 2, 3],
+    nested: dict(inner: 99)
+);
+test("mixed num", 42, mixed->num);
+test("mixed str", "hello", mixed->str);
+test("mixed bool", true, mixed->bool_val);
+test("mixed list", [1, 2, 3], mixed->lst);
+test("nested dict access", 99, mixed->nested->inner);
+
+// === Mutation workflow ===
+define counter = dict(count: 0);
+counter->set("count", counter->get("count") + 1);
+counter->set("count", counter->get("count") + 1);
+counter->set("count", counter->get("count") + 1);
+test("mutation workflow", 3, counter->count);
+
+// === Dict as function argument ===
+define get_name = function(d) d->name;
+define p1 = dict(name: "Alice");
+define p2 = dict(name: "Bob");
+test("dict as arg 1", "Alice", get_name(p1));
+test("dict as arg 2", "Bob", get_name(p2));
+
+// === Dict in list ===
+define people = [
+    dict(name: "Alice", age: 30),
+    dict(name: "Bob", age: 25),
+    dict(name: "Charlie", age: 35)
+];
+test("dict list len", 3, `length`(people));
+test("dict list first name", "Alice", `car`(people)->name);
+test("dict list second age", 25, `cadr`(people)->age);
+
+// === Dict returned from function ===
+define make_point = function(x, y) dict(x: x, y: y);
+define pt = make_point(3, 4);
+test("dict from fn x", 3, pt->x);
+test("dict from fn y", 4, pt->y);
+
+// === Accumulate into dict ===
+define acc = dict();
+acc->set("a", 1);
+acc->set("b", 2);
+acc->set("c", 3);
+test("accumulate size", 3, acc->size());
+test("accumulate a", 1, acc->a);
+test("accumulate b", 2, acc->b);
+test("accumulate c", 3, acc->c);
+
+// === Symbol key access matches string key access ===
+define sym = dict(foo: 42);
+test("arrow access", 42, sym->foo);
+test("get string access", 42, sym->get("foo"));
+
+// === __type__ (via arrow, not get) ===
+test("dict type tag", '__dict__, d->__type__);
+
+test_end();

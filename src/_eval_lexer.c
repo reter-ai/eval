@@ -112,6 +112,10 @@ static const Keyword keywords[] = {
     {"letrec",      TOK_LETREC},
     {"try",         TOK_TRY},
     {"catch",       TOK_CATCH},
+    {"finally",     TOK_FINALLY},
+    {"with",        TOK_WITH},
+    {"async",       TOK_ASYNC},
+    {"await",       TOK_AWAIT},
     {"import",      TOK_IMPORT},
     {"cond",        TOK_COND},
     {"case",        TOK_CASE},
@@ -121,6 +125,7 @@ static const Keyword keywords[] = {
     {"receive",     TOK_RECEIVE},
     {"from",        TOK_FROM},
     {"record",      TOK_RECORD},
+    {"dict",        TOK_DICT},
     {"library",     TOK_LIBRARY},
     {"export",      TOK_EXPORT},
     {"include",     TOK_INCLUDE},
@@ -631,6 +636,10 @@ const char *eval_token_name(int type) {
     case TOK_LETREC:        return "letrec";
     case TOK_TRY:           return "try";
     case TOK_CATCH:         return "catch";
+    case TOK_FINALLY:       return "finally";
+    case TOK_WITH:          return "with";
+    case TOK_ASYNC:         return "async";
+    case TOK_AWAIT:         return "await";
     case TOK_IMPORT:        return "import";
     case TOK_COND:          return "cond";
     case TOK_CASE:          return "case";
@@ -640,6 +649,7 @@ const char *eval_token_name(int type) {
     case TOK_RECEIVE:       return "receive";
     case TOK_FROM:          return "from";
     case TOK_RECORD:        return "record";
+    case TOK_DICT:          return "dict";
     case TOK_LIBRARY:       return "library";
     case TOK_EXPORT:        return "export";
     case TOK_INCLUDE:       return "include";

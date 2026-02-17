@@ -12,7 +12,7 @@
 #define TOK_EOF 0
 
 /* TOK_COUNT: one past the highest token value (for debug name arrays etc.) */
-#define TOK_COUNT (TOK_RECORD + 1)
+#define TOK_COUNT (TOK_AWAIT + 1)
 
 /* Token structure */
 typedef struct {

@@ -1,0 +1,29 @@
+// canvas.eval — a collection of shapes with operations
+
+include("examples/oop/shape.eval");
+
+define Canvas = constructor() {
+    define shapes = [];
+
+    interface(
+        add: function(s) { shapes = cons(s, shapes); },
+        count: function() length(shapes),
+        total_area: function()
+            fold(function(s, acc) acc + s->area(), 0, shapes),
+        print_all: function() {
+            `for-each`(function(s) {
+                display(s->describe());
+                display(" at ");
+                display(s->pos()->to_string());
+                display(" area=");
+                display(s->area());
+                newline();
+            }, `reverse`(shapes));
+        },
+        find_largest: function() {
+            fold(function(s, best)
+                if(s->area() > best->area()) s else best,
+                car(shapes), cdr(shapes));
+        }
+    );
+};

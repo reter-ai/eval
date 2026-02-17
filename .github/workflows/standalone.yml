@@ -1,0 +1,94 @@
+name: Build standalone executables
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux-x86_64
+            cmake_args: ""
+          - os: macos-latest
+            name: macos-arm64
+            cmake_args: ""
+          - os: macos-13
+            name: macos-x86_64
+            cmake_args: ""
+          - os: windows-latest
+            name: windows-x86_64
+            cmake_args: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -B build -DBUILD_PYTHON_MODULE=OFF -DCMAKE_BUILD_TYPE=Release ${{ matrix.cmake_args }}
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Smoke test (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          ./build/eval -V
+          ./build/eval -e "2 + 3"
+          test "$(./build/eval -e '2 + 3')" = "5"
+          echo 'test_begin("smoke"); test("add", 5, 2 + 3); test_end();' | ./build/eval
+
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          ./build/Release/eval.exe -V
+          ./build/Release/eval.exe -e "2 + 3"
+          result=$(./build/Release/eval.exe -e "2 + 3")
+          test "$result" = "5"
+
+      - name: Prepare artifact (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist
+          cp build/eval dist/eval
+          chmod +x dist/eval
+
+      - name: Prepare artifact (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp build/Release/eval.exe dist/eval.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eval-${{ matrix.name }}
+          path: dist/
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Package release archives
+        run: |
+          mkdir release
+          for dir in artifacts/eval-*; do
+            name=$(basename "$dir")
+            if [[ "$name" == *windows* ]]; then
+              (cd "$dir" && zip "../../release/${name}.zip" eval.exe)
+            else
+              tar -czf "release/${name}.tar.gz" -C "$dir" eval
+            fi
+          done
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true

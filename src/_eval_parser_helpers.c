@@ -385,6 +385,114 @@ sexp ps_make_try_catch_multi(sexp ctx, sexp body, sexp var, sexp clauses) {
     return sexp_list3(ctx, ps_intern(ctx, "protect"), protect_args, body);
 }
 
+/* Helper: wrap an expression in (dynamic-wind (lambda () #f) (lambda () expr) (lambda () cleanup)) */
+static sexp wrap_dynamic_wind(sexp ctx, sexp expr, sexp cleanup) {
+    sexp dw = ps_intern(ctx, "dynamic-wind");
+    sexp lam = ps_intern(ctx, "lambda");
+    sexp before = sexp_list3(ctx, lam, SEXP_NULL, SEXP_FALSE);
+    sexp thunk  = sexp_list3(ctx, lam, SEXP_NULL, expr);
+    sexp after  = sexp_list3(ctx, lam, SEXP_NULL, cleanup);
+    /* (dynamic-wind before thunk after) — no sexp_list4, build manually */
+    return sexp_cons(ctx, dw,
+               sexp_cons(ctx, before,
+                   sexp_cons(ctx, thunk,
+                       sexp_cons(ctx, after, SEXP_NULL))));
+}
+
+/*  with(r1 = e1, r2 = e2) body  →  nested let + dynamic-wind
+    Each resource gets its own dynamic-wind that calls (r 'close) on exit.
+    Inner resources are closed before outer ones. */
+sexp ps_make_with(sexp ctx, sexp bindings, sexp body) {
+    /* bindings is a list of (name value) pairs.
+       Process from right to left: innermost binding wraps body first. */
+    sexp pairs[64];  /* max 64 bindings */
+    int n = 0;
+    sexp p = bindings;
+    while (sexp_pairp(p) && n < 64) {
+        pairs[n++] = sexp_car(p);
+        p = sexp_cdr(p);
+    }
+
+    sexp result = body;
+    sexp lam = ps_intern(ctx, "lambda");
+    sexp dw = ps_intern(ctx, "dynamic-wind");
+    sexp close_sym = sexp_list2(ctx, ps_intern(ctx, "quote"),
+                                ps_intern(ctx, "close"));
+
+    for (int i = n - 1; i >= 0; i--) {
+        sexp pair = pairs[i];
+        sexp name = sexp_car(pair);
+        sexp init = sexp_cadr(pair);
+
+        /* ((name 'close)) — dispatch then call the returned function */
+        sexp close_dispatch = sexp_list2(ctx, name, close_sym);
+        sexp close_call = sexp_list1(ctx, close_dispatch);
+        /* (lambda () #f) */
+        sexp before = sexp_list3(ctx, lam, SEXP_NULL, SEXP_FALSE);
+        /* (lambda () result) */
+        sexp thunk = sexp_list3(ctx, lam, SEXP_NULL, result);
+        /* (lambda () (name 'close)) */
+        sexp after = sexp_list3(ctx, lam, SEXP_NULL, close_call);
+        /* (dynamic-wind before thunk after) */
+        sexp dw_call = sexp_cons(ctx, dw,
+                           sexp_cons(ctx, before,
+                               sexp_cons(ctx, thunk,
+                                   sexp_cons(ctx, after, SEXP_NULL))));
+        /* (let ((name init)) dw_call) */
+        sexp binding = sexp_list1(ctx, sexp_list2(ctx, name, init));
+        result = sexp_list3(ctx, ps_intern(ctx, "let"), binding, dw_call);
+    }
+
+    return result;
+}
+
+/*  async expr  →
+    (let ((p (__make-promise__)))
+      (thread-start! (make-thread (lambda ()
+        (protect (__async_e__
+          (else ((p '__reject__) __async_e__)))
+          ((p '__resolve__) expr)))))
+      p) */
+sexp ps_make_async(sexp ctx, sexp expr) {
+    sexp p = ps_intern(ctx, "__async_p__");
+    sexp e = ps_intern(ctx, "__async_e__");
+    sexp make_prom = sexp_list1(ctx, ps_intern(ctx, "__make-promise__"));
+    /* ((p '__resolve__) expr) */
+    sexp q_resolve = sexp_list2(ctx, ps_intern(ctx, "quote"), ps_intern(ctx, "__resolve__"));
+    sexp get_resolve = sexp_list2(ctx, p, q_resolve);
+    sexp do_resolve = sexp_list2(ctx, get_resolve, expr);
+    /* ((p '__reject__) __async_e__) */
+    sexp q_reject = sexp_list2(ctx, ps_intern(ctx, "quote"), ps_intern(ctx, "__reject__"));
+    sexp get_reject = sexp_list2(ctx, p, q_reject);
+    sexp do_reject = sexp_list2(ctx, get_reject, e);
+    /* (else ((p '__reject__) e)) */
+    sexp else_clause = sexp_list2(ctx, ps_intern(ctx, "else"), do_reject);
+    /* (protect (e (else ...)) ((p '__resolve__) expr)) */
+    sexp protect_args = sexp_list2(ctx, e, else_clause);
+    sexp protect_form = sexp_list3(ctx, ps_intern(ctx, "protect"), protect_args, do_resolve);
+    /* (lambda () protect_form) */
+    sexp thunk = sexp_list3(ctx, ps_intern(ctx, "lambda"), SEXP_NULL, protect_form);
+    sexp mk_thread = sexp_list2(ctx, ps_intern(ctx, "make-thread"), thunk);
+    sexp start = sexp_list2(ctx, ps_intern(ctx, "thread-start!"), mk_thread);
+    sexp body = sexp_list3(ctx, ps_intern(ctx, "begin"), start, p);
+    sexp binding = sexp_list1(ctx, sexp_list2(ctx, p, make_prom));
+    return sexp_list3(ctx, ps_intern(ctx, "let"), binding, body);
+}
+
+sexp ps_make_try_catch_finally(sexp ctx, sexp body, sexp var, sexp handler, sexp cleanup) {
+    sexp try_catch = ps_make_try_catch(ctx, body, var, handler);
+    return wrap_dynamic_wind(ctx, try_catch, cleanup);
+}
+
+sexp ps_make_try_catch_multi_finally(sexp ctx, sexp body, sexp var, sexp clauses, sexp cleanup) {
+    sexp try_catch = ps_make_try_catch_multi(ctx, body, var, clauses);
+    return wrap_dynamic_wind(ctx, try_catch, cleanup);
+}
+
+sexp ps_make_try_finally(sexp ctx, sexp body, sexp cleanup) {
+    return wrap_dynamic_wind(ctx, body, cleanup);
+}
+
 /* Build (call-with-values (lambda () expr) (lambda params body)) */
 sexp ps_make_receive(sexp ctx, sexp params, sexp expr, sexp body) {
     sexp_gc_var3(producer, consumer, result);
@@ -398,77 +506,106 @@ sexp ps_make_receive(sexp ctx, sexp params, sexp expr, sexp body) {
     return result;
 }
 
-/* Build (define-record-type Name (make-Name fields...) Name? (field Name-field)...) */
-/*  Record implementation using vectors:
+/*  Record implementation — vector-backed objects with -> access:
     record Point(x, y) generates:
     (begin
-      (define (make_Point x y) (vector 'Point x y))
-      (define (Point? v) (and (vector? v) (> (vector-length v) 0) (eq? (vector-ref v 0) 'Point)))
-      (define (Point_x v) (vector-ref v 1))
-      (define (Point_y v) (vector-ref v 2)))  */
+      (define (Point x y)
+        (let ((__rec_vec__ (vector 'Point x y)))
+          (lambda (__msg__)
+            (cond
+              ((eq? __msg__ 'x) (vector-ref __rec_vec__ 1))
+              ((eq? __msg__ 'y) (vector-ref __rec_vec__ 2))
+              ((eq? __msg__ '__type__) 'Point)
+              (else (error "unknown field" __msg__))))))
+      (define (Point? v__)
+        (and (procedure? v__)
+             (protect (e__ (else #f))
+               (eq? (v__ '__type__) 'Point))))) */
 sexp ps_make_record(sexp ctx, sexp name, sexp fields) {
     sexp sym_str = sexp_symbol_to_string(ctx, name);
     const char *nstr = sexp_string_data(sym_str);
     char buf[256];
 
     sexp quoted_name = sexp_list2(ctx, ps_intern(ctx, "quote"), name);
-    sexp defs = SEXP_NULL;
+    sexp msg_sym = ps_intern(ctx, "__msg__");
+    sexp vec_sym = ps_intern(ctx, "__rec_vec__");
 
-    /* Count fields */
-    int nfields = 0;
+    /* --- Build dispatch cond clauses for each field --- */
+    sexp clauses = SEXP_NULL;
     sexp p = fields;
-    while (sexp_pairp(p)) { nfields++; p = sexp_cdr(p); }
-
-    /* Constructor: (define (make_Name f1 f2 ...) (vector 'Name f1 f2 ...)) */
-    snprintf(buf, sizeof(buf), "make_%s", nstr);
-    sexp make_sym = ps_intern(ctx, buf);
-    sexp make_call = sexp_cons(ctx, make_sym, fields);
-    sexp vec_args = sexp_cons(ctx, quoted_name, fields);
-    sexp vec_call = sexp_cons(ctx, ps_intern(ctx, "vector"), vec_args);
-    sexp make_def = sexp_list3(ctx, ps_intern(ctx, "define"), make_call, vec_call);
-    defs = sexp_cons(ctx, make_def, defs);
-
-    /* Predicate: (define (Name? v) (and (vector? v) (> (vector-length v) 0) (eq? (vector-ref v 0) 'Name))) */
-    snprintf(buf, sizeof(buf), "%s?", nstr);
-    sexp pred_sym = ps_intern(ctx, buf);
-    sexp v_sym = ps_intern(ctx, "v__");
-    sexp vec_q = sexp_list2(ctx, ps_intern(ctx, "vector?"), v_sym);
-    sexp vlen = sexp_list2(ctx, ps_intern(ctx, "vector-length"), v_sym);
-    sexp vgt = sexp_list3(ctx, ps_intern(ctx, ">"), vlen, sexp_make_fixnum(0));
-    sexp vref0 = sexp_list3(ctx, ps_intern(ctx, "vector-ref"), v_sym, sexp_make_fixnum(0));
-    sexp veq = sexp_list3(ctx, ps_intern(ctx, "eq?"), vref0, quoted_name);
-    sexp and_form = sexp_cons(ctx, ps_intern(ctx, "and"),
-                      sexp_cons(ctx, vec_q,
-                        sexp_cons(ctx, vgt,
-                          sexp_cons(ctx, veq, SEXP_NULL))));
-    sexp pred_def = sexp_list3(ctx, ps_intern(ctx, "define"),
-                               sexp_list2(ctx, pred_sym, v_sym), and_form);
-    defs = sexp_cons(ctx, pred_def, defs);
-
-    /* Accessors: (define (Name_field v) (vector-ref v idx)) */
-    p = fields;
     int idx = 1;
     while (sexp_pairp(p)) {
         sexp field = sexp_car(p);
-        sexp field_sym_str = sexp_symbol_to_string(ctx, field);
-        const char *fstr = sexp_string_data(field_sym_str);
-        snprintf(buf, sizeof(buf), "%s_%s", nstr, fstr);
-        sexp acc_sym = ps_intern(ctx, buf);
-        sexp vref = sexp_list3(ctx, ps_intern(ctx, "vector-ref"), v_sym, sexp_make_fixnum(idx));
-        sexp acc_def = sexp_list3(ctx, ps_intern(ctx, "define"),
-                                  sexp_list2(ctx, acc_sym, v_sym), vref);
-        defs = sexp_cons(ctx, acc_def, defs);
+        sexp test = sexp_list3(ctx, ps_intern(ctx, "eq?"), msg_sym,
+                               sexp_list2(ctx, ps_intern(ctx, "quote"), field));
+        sexp vref = sexp_list3(ctx, ps_intern(ctx, "vector-ref"),
+                               vec_sym, sexp_make_fixnum(idx));
+        clauses = sexp_cons(ctx, sexp_list2(ctx, test, vref), clauses);
         p = sexp_cdr(p);
         idx++;
     }
 
-    /* Wrap in (begin ...) — reverse defs first */
-    sexp result = SEXP_NULL;
-    while (sexp_pairp(defs)) {
-        result = sexp_cons(ctx, sexp_car(defs), result);
-        defs = sexp_cdr(defs);
+    /* Reverse clauses to preserve field order */
+    sexp reversed = SEXP_NULL;
+    while (sexp_pairp(clauses)) {
+        reversed = sexp_cons(ctx, sexp_car(clauses), reversed);
+        clauses = sexp_cdr(clauses);
     }
-    return sexp_cons(ctx, ps_intern(ctx, "begin"), result);
+    clauses = reversed;
+
+    /* __type__ clause: ((eq? __msg__ '__type__) 'Name) */
+    sexp type_test = sexp_list3(ctx, ps_intern(ctx, "eq?"), msg_sym,
+        sexp_list2(ctx, ps_intern(ctx, "quote"), ps_intern(ctx, "__type__")));
+    clauses = ps_append(ctx, clauses,
+        sexp_list2(ctx, type_test, quoted_name));
+
+    /* else clause: (else (error "unknown field" __msg__)) */
+    clauses = ps_append(ctx, clauses,
+        sexp_list2(ctx, ps_intern(ctx, "else"),
+            sexp_list3(ctx, ps_intern(ctx, "error"),
+                       sexp_c_string(ctx, "unknown field", -1), msg_sym)));
+
+    /* cond form */
+    sexp cond_form = sexp_cons(ctx, ps_intern(ctx, "cond"), clauses);
+
+    /* dispatch lambda: (lambda (__msg__) cond_form) */
+    sexp lambda_form = sexp_list3(ctx, ps_intern(ctx, "lambda"),
+                                  sexp_list1(ctx, msg_sym), cond_form);
+
+    /* vector creation: (vector 'Name f1 f2 ...) */
+    sexp vec_call = sexp_cons(ctx, ps_intern(ctx, "vector"),
+                              sexp_cons(ctx, quoted_name, fields));
+
+    /* let binding: (let ((__rec_vec__ vec_call)) lambda_form) */
+    sexp let_form = sexp_list3(ctx, ps_intern(ctx, "let"),
+        sexp_list1(ctx, sexp_list2(ctx, vec_sym, vec_call)),
+        lambda_form);
+
+    /* constructor: (define (Name f1 f2 ...) let_form) */
+    sexp ctor_def = sexp_list3(ctx, ps_intern(ctx, "define"),
+                               sexp_cons(ctx, name, fields), let_form);
+
+    /* --- Predicate: (define (Name? v__) (and (procedure? v__) (protect ...))) --- */
+    snprintf(buf, sizeof(buf), "%s?", nstr);
+    sexp pred_sym = ps_intern(ctx, buf);
+    sexp v_sym = ps_intern(ctx, "v__");
+    sexp e_sym = ps_intern(ctx, "e__");
+
+    sexp proc_check = sexp_list2(ctx, ps_intern(ctx, "procedure?"), v_sym);
+    sexp type_call = sexp_list2(ctx, v_sym,
+        sexp_list2(ctx, ps_intern(ctx, "quote"), ps_intern(ctx, "__type__")));
+    sexp eq_check = sexp_list3(ctx, ps_intern(ctx, "eq?"), type_call, quoted_name);
+    sexp protect_form = sexp_list3(ctx, ps_intern(ctx, "protect"),
+        sexp_list2(ctx, e_sym,
+            sexp_list2(ctx, ps_intern(ctx, "else"), SEXP_FALSE)),
+        eq_check);
+    sexp and_form = sexp_list3(ctx, ps_intern(ctx, "and"), proc_check, protect_form);
+    sexp pred_def = sexp_list3(ctx, ps_intern(ctx, "define"),
+                               sexp_list2(ctx, pred_sym, v_sym), and_form);
+
+    /* (begin ctor_def pred_def) */
+    return sexp_cons(ctx, ps_intern(ctx, "begin"),
+                     sexp_list2(ctx, ctor_def, pred_def));
 }
 
 /* Build a begin form: if a is already a begin, extend it; otherwise create new */
@@ -564,6 +701,63 @@ sexp ps_make_case_clause(sexp ctx, sexp datums, sexp expr) {
     return sexp_list2(ctx, datums, expr);
 }
 
+/* include("a.eval", "b.eval") →
+   (begin (eval-include "a.eval") (eval-include "b.eval"))
+   Single file: just (eval-include "a.eval") */
+sexp ps_make_include(sexp ctx, sexp string_list) {
+    sexp inc_sym = ps_intern(ctx, "eval-include");
+
+    /* Single file — no begin wrapper needed */
+    if (sexp_pairp(string_list) && sexp_nullp(sexp_cdr(string_list)))
+        return sexp_list2(ctx, inc_sym, sexp_car(string_list));
+
+    /* Multiple files — wrap in begin */
+    sexp_gc_var2(result, cur);
+    sexp_gc_preserve2(ctx, result, cur);
+    result = SEXP_NULL;
+    for (cur = string_list; sexp_pairp(cur); cur = sexp_cdr(cur)) {
+        sexp call = sexp_list2(ctx, inc_sym, sexp_car(cur));
+        result = sexp_cons(ctx, call, result);
+    }
+    result = sexp_cons(ctx, ps_intern(ctx, "begin"), sexp_nreverse(ctx, result));
+    sexp_gc_release2(ctx);
+    return result;
+}
+
+/* dict(k1: v1, k2: v2) → (__make_eval_dict__ (list (cons 'k1 v1) (cons 'k2 v2)))
+   dict() → (__make_eval_dict__ '()) */
+sexp ps_make_dict(sexp ctx, sexp entries) {
+    sexp dict_fn = ps_intern(ctx, "__make_eval_dict__");
+
+    if (sexp_nullp(entries) || entries == SEXP_NULL) {
+        return sexp_list2(ctx, dict_fn,
+            sexp_list2(ctx, ps_intern(ctx, "quote"), SEXP_NULL));
+    }
+
+    /* Build (list (cons 'k1 v1) (cons 'k2 v2) ...) */
+    sexp items = SEXP_NULL;
+    sexp p = entries;
+    while (sexp_pairp(p)) {
+        sexp entry = sexp_car(p);
+        sexp key = sexp_car(entry);    /* symbol */
+        sexp val = sexp_cdr(entry);    /* expr */
+        sexp quoted_key = sexp_list2(ctx, ps_intern(ctx, "quote"), key);
+        sexp cons_form = sexp_list3(ctx, ps_intern(ctx, "cons"), quoted_key, val);
+        items = sexp_cons(ctx, cons_form, items);
+        p = sexp_cdr(p);
+    }
+
+    /* Reverse to preserve order */
+    sexp reversed = SEXP_NULL;
+    while (sexp_pairp(items)) {
+        reversed = sexp_cons(ctx, sexp_car(items), reversed);
+        items = sexp_cdr(items);
+    }
+
+    sexp list_form = sexp_cons(ctx, ps_intern(ctx, "list"), reversed);
+    return sexp_list2(ctx, dict_fn, list_form);
+}
+
 /* Build (define-library (name...) body-forms...)
    The body is a begin form; unwrap it into separate library declarations. */
 sexp ps_make_library(sexp ctx, sexp name, sexp body) {
@@ -602,9 +796,69 @@ sexp ps_expr_safe(sexp ctx, sexp expr) {
     if (sexp_car(expr) != ps_intern(ctx, "begin"))
         return expr;
 
+    sexp with_stmt_sym = ps_intern(ctx, "__with_stmt__");
+    sexp begin_sym = ps_intern(ctx, "begin");
+
+    /* First pass: process __with_stmt__ markers from right to left.
+       Each with_stmt wraps everything after it in let + dynamic-wind. */
+    {
+        /* Collect stmts into an array for right-to-left processing */
+        sexp stmts[256];
+        int nstmts = 0;
+        sexp p = sexp_cdr(expr);
+        while (sexp_pairp(p) && nstmts < 256) {
+            stmts[nstmts++] = sexp_car(p);
+            p = sexp_cdr(p);
+        }
+
+        /* Scan right-to-left for __with_stmt__ markers */
+        int has_with = 0;
+        for (int i = 0; i < nstmts; i++) {
+            if (sexp_pairp(stmts[i]) && sexp_car(stmts[i]) == with_stmt_sym) {
+                has_with = 1;
+                break;
+            }
+        }
+
+        if (has_with) {
+            /* Process from the last with_stmt backward */
+            /* Build the tail (everything after the last statement) */
+            sexp tail = SEXP_VOID;
+
+            for (int i = nstmts - 1; i >= 0; i--) {
+                if (sexp_pairp(stmts[i]) && sexp_car(stmts[i]) == with_stmt_sym) {
+                    /* This is a with_stmt — wrap tail in let+dynamic-wind */
+                    sexp bindings = sexp_cadr(stmts[i]);  /* the bindings list */
+
+                    /* Build body from stmts[i+1..end] if tail is VOID,
+                       otherwise tail already includes them */
+                    sexp body = tail;
+                    if (body == SEXP_VOID) {
+                        /* No statements after this with — body is void */
+                        body = SEXP_VOID;
+                    }
+
+                    /* Wrap body with with-bindings (reuse ps_make_with) */
+                    tail = ps_make_with(ctx, bindings, body);
+                } else {
+                    /* Regular statement — prepend to tail as (begin stmt tail) */
+                    if (tail == SEXP_VOID) {
+                        tail = stmts[i];
+                    } else {
+                        tail = sexp_list3(ctx, begin_sym, stmts[i], tail);
+                    }
+                }
+            }
+
+            /* Recurse to handle defines in the result */
+            if (sexp_pairp(tail) && sexp_car(tail) == begin_sym)
+                return ps_expr_safe(ctx, tail);
+            return tail;
+        }
+    }
+
     sexp define_sym = ps_intern(ctx, "define");
     sexp letstar_sym = ps_intern(ctx, "letrec");
-    sexp begin_sym = ps_intern(ctx, "begin");
 
     /* Check if any element is a define */
     int has_define = 0;

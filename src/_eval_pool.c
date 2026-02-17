@@ -8,8 +8,37 @@
 #include "_eval_pool.h"
 #include "_eval_parser_helpers.h"
 
+#ifdef EVAL_STANDALONE
+/* Standalone pyobject type stub — allocates a type tag with no-op finalizer */
+sexp_tag_t pyobject_type_tag = 0;
+static sexp standalone_pyobject_finalize(sexp ctx, sexp self, sexp_sint_t n, sexp obj) {
+    return SEXP_VOID;
+}
+void register_pyobject_type(sexp ctx) {
+    sexp_gc_var2(name, type);
+    sexp_gc_preserve2(ctx, name, type);
+    name = sexp_c_string(ctx, "python-object", -1);
+    type = sexp_register_c_type(ctx, name, standalone_pyobject_finalize);
+    if (sexp_typep(type)) {
+        pyobject_type_tag = sexp_type_tag(type);
+        sexp_preserve_object(ctx, type);
+    }
+    sexp_gc_release2(ctx);
+}
+int sexp_pyobjectp(sexp x) {
+    return sexp_pointerp(x) && sexp_pointer_tag(x) == pyobject_type_tag;
+}
+/* Standalone bridge_eval_scheme — pure C, no Python */
+sexp bridge_eval_scheme(sexp ctx, sexp self, sexp_sint_t n, sexp s) {
+    if (!sexp_stringp(s))
+        return sexp_type_exception(ctx, self, SEXP_STRING, s);
+    return sexp_eval_string(ctx, sexp_string_data(s), sexp_string_size(s),
+                            sexp_context_env(ctx));
+}
+#else
 /* Forward declaration for pyobject_type registration (defined in _chibi_pyobject_type.c) */
 extern void register_pyobject_type(sexp ctx);
+#endif
 
 /* Forward declarations for binary serialization (defined in _chibi_serialize.c) */
 extern int ser_sexp_to_buf(sexp ctx, sexp env, sexp val,
@@ -468,6 +497,84 @@ static sexp bridge_newline_c(sexp ctx, sexp self, sexp_sint_t n) {
     return SEXP_VOID;
 }
 
+/* eval-include(filename) — include with extension-based dispatch:
+   .eval files are parsed with the Eval parser; everything else uses Scheme include. */
+static sexp bridge_eval_include(sexp ctx, sexp self, sexp_sint_t n, sexp filename) {
+    if (!sexp_stringp(filename))
+        return sexp_type_exception(ctx, self, SEXP_STRING, filename);
+
+    const char *name = sexp_string_data(filename);
+    sexp env = sexp_context_env(ctx);
+
+    /* Try to resolve file via chibi module path search */
+    char *resolved = sexp_find_module_file_raw(ctx, name);
+    const char *path = resolved ? resolved : name;
+
+    /* Check extension */
+    size_t len = strlen(path);
+    int is_eval = (len >= 5 &&
+                   path[len-5] == '.' &&
+                   path[len-4] == 'e' &&
+                   path[len-3] == 'v' &&
+                   path[len-2] == 'a' &&
+                   path[len-1] == 'l');
+
+    if (is_eval) {
+        /* Read file */
+        FILE *f = fopen(path, "rb");
+        if (!f) {
+            if (resolved) free(resolved);
+            return sexp_user_exception(ctx, self, "cannot open file", filename);
+        }
+        fseek(f, 0, SEEK_END);
+        long size = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        if (size < 0) {
+            fclose(f);
+            if (resolved) free(resolved);
+            return sexp_user_exception(ctx, self, "cannot read file", filename);
+        }
+        char *source = (char *)malloc(size + 1);
+        size_t nread = fread(source, 1, size, f);
+        fclose(f);
+        source[nread] = '\0';
+
+        /* Parse as Eval */
+        char *error_msg = NULL;
+        int error_line = 0, error_col = 0;
+        sexp_gc_var2(parsed, result);
+        sexp_gc_preserve2(ctx, parsed, result);
+
+        parsed = eval_parse(ctx, env, source, &error_msg, &error_line, &error_col);
+        free(source);
+        if (resolved) free(resolved);
+
+        if (error_msg) {
+            /* Build error message with filename context */
+            char errbuf[512];
+            snprintf(errbuf, sizeof(errbuf), "%s:%d:%d: %s",
+                     name, error_line, error_col, error_msg);
+            free(error_msg);
+            sexp_gc_release2(ctx);
+            return sexp_user_exception(ctx, self, errbuf, SEXP_NULL);
+        }
+
+        if (parsed == SEXP_VOID) {
+            sexp_gc_release2(ctx);
+            return SEXP_VOID;
+        }
+
+        result = sexp_eval(ctx, parsed, env);
+        sexp_gc_release2(ctx);
+        return result;
+    } else {
+        /* Scheme file — use chibi's loader */
+        sexp result = sexp_load_module_file(ctx, path, env);
+        if (resolved) free(resolved);
+        return result;
+    }
+}
+
 /* channel_send(ch, val) */
 static sexp bridge_channel_send(sexp ctx, sexp self, sexp_sint_t n,
                                  sexp ch, sexp val) {
@@ -824,11 +931,18 @@ static sexp bridge_pool_apply_explicit(sexp ctx, sexp self, sexp_sint_t n,
 }
 
 /* Register all pure-C bridge functions in a worker context */
+#ifdef EVAL_STANDALONE
+void register_bridge_functions_c(sexp ctx, sexp env) {
+#else
 static void register_bridge_functions_c(sexp ctx, sexp env) {
+#endif
     /* I/O */
     sexp_define_foreign(ctx, env, "display", 1, bridge_display_c);
     sexp_define_foreign(ctx, env, "print", 1, bridge_print_c);
     sexp_define_foreign(ctx, env, "newline", 0, bridge_newline_c);
+
+    /* Include */
+    sexp_define_foreign(ctx, env, "eval-include", 1, bridge_eval_include);
 
     /* Channels */
     sexp_define_foreign(ctx, env, "channel-send", 2, bridge_channel_send);
@@ -888,9 +1002,11 @@ static void register_bridge_functions_c(sexp ctx, sexp env) {
                             bridge_deserialize_continuation);
     }
 
-    /* Evaluate Scheme string in isolated eval context (defined in _chibi_bridge.c) */
+    /* Evaluate Scheme string in isolated eval context */
     {
+#ifndef EVAL_STANDALONE
         extern sexp bridge_eval_scheme(sexp, sexp, sexp_sint_t, sexp);
+#endif
         sexp_define_foreign(ctx, env, "eval-scheme", 1, bridge_eval_scheme);
         sexp_define_foreign(ctx, env, "eval_scheme", 1, bridge_eval_scheme);
     }
@@ -933,7 +1049,11 @@ void register_pool_eval_functions(sexp ctx, sexp env) {
 }
 
 /* Standard scheme aliases loaded in both Python and worker contexts */
+#ifdef EVAL_STANDALONE
+void eval_standard_aliases(sexp ctx, sexp env) {
+#else
 static void eval_standard_aliases(sexp ctx, sexp env) {
+#endif
     sexp_eval_string(ctx,
         "(define error-object? exception?)", -1, env);
     sexp_eval_string(ctx,
@@ -1095,6 +1215,175 @@ static void eval_standard_aliases(sexp ctx, sexp env) {
         "(define test_error test-error)", -1, env);
     sexp_eval_string(ctx,
         "(define test_group test-group)", -1, env);
+
+    /* Dict runtime: __make_eval_dict__ creates a closure wrapping a hash table */
+    sexp_eval_string(ctx,
+        "(define (__make_eval_dict__ pairs)"
+        "  (let ((ht (make-hash-table)))"
+        "    (for-each (lambda (p) (hash-table-set! ht (car p) (cdr p))) pairs)"
+        "    (lambda (__msg__)"
+        "      (cond"
+        "        ((eq? __msg__ 'get)"
+        "         (lambda (k) (hash-table-ref/default ht"
+        "           (if (string? k) (string->symbol k) k) #f)))"
+        "        ((eq? __msg__ 'set)"
+        "         (lambda (k v) (hash-table-set! ht"
+        "           (if (string? k) (string->symbol k) k) v)))"
+        "        ((eq? __msg__ 'delete)"
+        "         (lambda (k) (hash-table-delete! ht"
+        "           (if (string? k) (string->symbol k) k))))"
+        "        ((eq? __msg__ 'keys)"
+        "         (lambda () (hash-table-keys ht)))"
+        "        ((eq? __msg__ 'values)"
+        "         (lambda () (hash-table-values ht)))"
+        "        ((eq? __msg__ 'has?)"
+        "         (lambda (k) (hash-table-exists? ht"
+        "           (if (string? k) (string->symbol k) k))))"
+        "        ((eq? __msg__ 'size)"
+        "         (lambda () (hash-table-size ht)))"
+        "        ((eq? __msg__ 'to_list)"
+        "         (lambda () (hash-table->alist ht)))"
+        "        ((eq? __msg__ '__type__) '__dict__)"
+        "        ((hash-table-exists? ht __msg__)"
+        "         (hash-table-ref ht __msg__))"
+        "        (else #f)))))", -1, env);
+    sexp_eval_string(ctx,
+        "(define (dict? v)"
+        "  (and (procedure? v)"
+        "       (protect (e (else #f))"
+        "         (eq? (v '__type__) '__dict__))))", -1, env);
+
+    /* Async/await runtime: promise type backed by mutex+condvar */
+    sexp_eval_string(ctx,
+        "(define (__make-promise__)"
+        "  (let ((m (make-mutex)) (cv (make-condition-variable))"
+        "        (resolved #f) (value #f) (err #f))"
+        "    (lambda (__msg__)"
+        "      (cond"
+        "        ((eq? __msg__ '__resolve__)"
+        "         (lambda (v)"
+        "           (mutex-lock! m)"
+        "           (set! resolved #t) (set! value v)"
+        "           (condition-variable-broadcast! cv)"
+        "           (mutex-unlock! m)))"
+        "        ((eq? __msg__ '__reject__)"
+        "         (lambda (e)"
+        "           (mutex-lock! m)"
+        "           (set! resolved #t) (set! err e)"
+        "           (condition-variable-broadcast! cv)"
+        "           (mutex-unlock! m)))"
+        "        ((eq? __msg__ '__await__)"
+        "         (mutex-lock! m)"
+        "         (let loop ()"
+        "           (if resolved"
+        "               (begin (mutex-unlock! m)"
+        "                      (if err (raise err) value))"
+        "               (begin (mutex-unlock! m cv)"
+        "                      (mutex-lock! m)"
+        "                      (loop)))))"
+        "        ((eq? __msg__ 'ready?)"
+        "         (mutex-lock! m)"
+        "         (let ((r resolved)) (mutex-unlock! m) r))"
+        "        ((eq? __msg__ '__type__) '__promise__)"
+        "        (else (error \"promise: unknown message\" __msg__))))))", -1, env);
+    sexp_eval_string(ctx,
+        "(define (__promise-resolve!__ p val)"
+        "  (protect (e (else ((p '__reject__) e)))"
+        "    ((p '__resolve__) val)))", -1, env);
+    sexp_eval_string(ctx,
+        "(define (promise? v)"
+        "  (and (procedure? v)"
+        "       (protect (e (else #f))"
+        "         (eq? (v '__type__) '__promise__))))", -1, env);
+    /* __await__: dispatches on type — promise or pool future (cpointer) */
+    sexp_eval_string(ctx,
+        "(define (__await__ x)"
+        "  (cond"
+        "    ((and (procedure? x)"
+        "          (protect (e (else #f)) (eq? (x '__type__) '__promise__)))"
+        "     (x '__await__))"
+        "    (else (future-result x))))", -1, env);
+
+}
+
+/* OO wrappers for Pool, Channel, Future — only for main context
+ * (workers don't have make-pool and use different pool-submit arity) */
+#ifdef EVAL_STANDALONE
+void eval_oo_wrappers(sexp ctx, sexp env) {
+#else
+static void eval_oo_wrappers(sexp ctx, sexp env) {
+#endif
+    /* OO wrapper: Channel-wrap — wraps raw channel cpointer */
+    sexp_eval_string(ctx,
+        "(define (Channel-wrap raw)"
+        "  (lambda (__msg__)"
+        "    (cond"
+        "      ((eq? __msg__ 'send)"
+        "       (lambda (val) (channel-send raw val)))"
+        "      ((eq? __msg__ 'recv)"
+        "       (lambda () (channel-recv raw)))"
+        "      ((eq? __msg__ 'try_recv)"
+        "       (lambda () (channel-try-recv raw)))"
+        "      ((eq? __msg__ 'close)"
+        "       (lambda () (channel-close raw)))"
+        "      ((eq? __msg__ '__type__) '__channel__)"
+        "      ((eq? __msg__ '__raw__) raw)"
+        "      (else (error \"Channel: unknown message\" __msg__)))))",
+        -1, env);
+
+    /* OO wrapper: Future-wrap — wraps raw cpointer future */
+    sexp_eval_string(ctx,
+        "(define (Future-wrap raw)"
+        "  (lambda (__msg__)"
+        "    (cond"
+        "      ((eq? __msg__ 'result)"
+        "       (lambda () (future-result raw)))"
+        "      ((eq? __msg__ 'ready?)"
+        "       (future-ready? raw))"
+        "      ((eq? __msg__ '__await__)"
+        "       (future-result raw))"
+        "      ((eq? __msg__ '__type__) '__future__)"
+        "      ((eq? __msg__ '__raw__) raw)"
+        "      (else (error \"Future: unknown message\" __msg__)))))",
+        -1, env);
+
+    /* OO wrapper: Pool(n) — wraps raw pool with -> access and RAII close */
+    sexp_eval_string(ctx,
+        "(define (Pool n)"
+        "  (let ((raw (make-pool n)) (alive #t))"
+        "    (lambda (__msg__)"
+        "      (cond"
+        "        ((eq? __msg__ 'submit)"
+        "         (lambda (code) (Future-wrap (pool-submit raw code))))"
+        "        ((eq? __msg__ 'apply)"
+        "         (lambda (fn args) (Future-wrap (pool-apply raw fn args))))"
+        "        ((eq? __msg__ 'channel)"
+        "         (lambda (name) (Channel-wrap (pool-channel raw name))))"
+        "        ((eq? __msg__ 'shutdown)"
+        "         (lambda () (if alive (begin (set! alive #f)"
+        "           (pool-shutdown raw)))))"
+        "        ((eq? __msg__ 'close)"
+        "         (lambda () (if alive (begin (set! alive #f)"
+        "           (pool-shutdown raw)))))"
+        "        ((eq? __msg__ '__type__) '__pool__)"
+        "        ((eq? __msg__ '__raw__) raw)"
+        "        (else (error \"Pool: unknown message\" __msg__))))))",
+        -1, env);
+
+    /* Update __await__ to handle OO Future objects too */
+    sexp_eval_string(ctx,
+        "(let ((orig-await __await__))"
+        "  (set! __await__"
+        "    (lambda (x)"
+        "      (cond"
+        "        ((and (procedure? x)"
+        "              (protect (e (else #f)) (eq? (x '__type__) '__promise__)))"
+        "         (x '__await__))"
+        "        ((and (procedure? x)"
+        "              (protect (e (else #f)) (eq? (x '__type__) '__future__)))"
+        "         (x '__await__))"
+        "        (else (future-result x))))))",
+        -1, env);
 }
 
 /* Parse and evaluate Eval code in a worker context */

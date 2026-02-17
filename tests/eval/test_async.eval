@@ -1,0 +1,115 @@
+test_begin("Async/Await");
+
+// === Basic async/await ===
+define p = async 42;
+test("basic await", 42, await(p));
+
+// === Async block ===
+define p2 = async {
+    define x = 10;
+    define y = 20;
+    x + y;
+};
+test("async block", 30, await(p2));
+
+// === Async function call ===
+define double = function(x) x * 2;
+define p3 = async double(21);
+test("async fn call", 42, await(p3));
+
+// === Promise is a promise ===
+define p4 = async 1;
+test("promise? true", true, promise?(p4));
+test("promise? number", false, promise?(42));
+
+// === Await on already-resolved ===
+define p5 = async 99;
+thread_yield();  // let green thread run
+test("already resolved", 99, await(p5));
+
+// === Multiple concurrent async tasks ===
+define results = [];
+define pa = async { thread_yield(); results = `cons`("a", results); "A"; };
+define pb = async { thread_yield(); results = `cons`("b", results); "B"; };
+define pc = async { thread_yield(); results = `cons`("c", results); "C"; };
+test("await a", "A", await(pa));
+test("await b", "B", await(pb));
+test("await c", "C", await(pc));
+test("all ran", 3, `length`(results));
+
+// === Async with computation ===
+define fib = function(n) if(n <= 1) n else fib(n - 1) + fib(n - 2);
+define pf1 = async fib(10);
+define pf2 = async fib(12);
+test("async fib 10", 55, await(pf1));
+test("async fib 12", 144, await(pf2));
+
+// === Async error propagation ===
+define perr = async { error("async boom"); };
+define caught = try { await(perr); } catch(e) "caught";
+test("async error propagates", "caught", caught);
+
+// === ready? check ===
+define pr = async 1;
+await(pr);  // ensure resolved
+test("ready? after await", true, pr->ready?);
+
+// === Async returns closure result ===
+define make_adder = function(n) function(x) x + n;
+define add5 = make_adder(5);
+define p_add = async add5(10);
+test("async closure", 15, await(p_add));
+
+// === Async in loop (capture value via let) ===
+define promises = [];
+for(let i = 0, i < 5, i++) {
+    let(val = i * i) {
+        promises = `cons`(async val, promises);
+    };
+};
+define squares = map(function(p) await(p), `reverse`(promises));
+test("async in loop", [0, 1, 4, 9, 16], squares);
+
+// === Nested async ===
+define outer = async {
+    define inner = async 42;
+    await(inner) + 8;
+};
+test("nested async", 50, await(outer));
+
+// === Async with shared mutable state ===
+define counter = 0;
+define p_inc1 = async { counter += 1; };
+define p_inc2 = async { counter += 1; };
+define p_inc3 = async { counter += 1; };
+await(p_inc1);
+await(p_inc2);
+await(p_inc3);
+test("shared state", 3, counter);
+
+// === Thread pool: explicit API ===
+define pool = make_pool(2);
+
+define f1 = pool_submit(pool, "10 + 20;");
+test("pool basic", 30, future_result(f1));
+
+// await works with pool futures too
+define f2 = pool_submit(pool, "6 * 7;");
+test("pool await", 42, await(f2));
+
+// Multiple pool tasks in parallel
+define fa = pool_submit(pool, "100;");
+define fb = pool_submit(pool, "200;");
+define fc = pool_submit(pool, "300;");
+test("pool parallel a", 100, await(fa));
+test("pool parallel b", 200, await(fb));
+test("pool parallel c", 300, await(fc));
+
+// Pool future ready? check
+define f3 = pool_submit(pool, "1;");
+await(f3);
+test("pool future_ready?", true, future_ready?(f3));
+
+pool_shutdown(pool);
+
+test_end();

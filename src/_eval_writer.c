@@ -1,7 +1,9 @@
 /*  _eval_writer.c -- Eval-syntax serializer  */
 
 #include "_eval_writer.h"
+#ifndef EVAL_STANDALONE
 #include "_chibi_pyobject_type.h"
+#endif
 #include <stdio.h>
 #include <string.h>
 
@@ -162,6 +164,7 @@ static void eval_write_recursive(sexp ctx, sexp x, StrBuf *buf, int depth) {
         return;
     }
 
+#ifndef EVAL_STANDALONE
     /* python-object */
     if (sexp_pyobjectp(x)) {
         PyObject *obj = unwrap_pyobject(x);
@@ -182,6 +185,7 @@ static void eval_write_recursive(sexp ctx, sexp x, StrBuf *buf, int depth) {
         }
         return;
     }
+#endif
 
     /* vector */
     if (sexp_vectorp(x)) {
@@ -258,6 +262,7 @@ static void eval_write_recursive(sexp ctx, sexp x, StrBuf *buf, int depth) {
 }
 
 /* Public API: Write sexp to Python string */
+#ifndef EVAL_STANDALONE
 PyObject *eval_write_to_string(sexp ctx, sexp x) {
     StrBuf buf;
     strbuf_init(&buf);
@@ -266,6 +271,7 @@ PyObject *eval_write_to_string(sexp ctx, sexp x) {
     strbuf_free(&buf);
     return result;
 }
+#endif
 
 /* Public API: Write sexp to C buffer */
 int eval_write_to_buf(sexp ctx, sexp x, char *outbuf, int size) {

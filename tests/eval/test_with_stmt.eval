@@ -1,0 +1,86 @@
+test_begin("With Statement");
+
+// Helper: make a resource that logs open/close
+define log = [];
+define make_res = function(name) {
+    log = `cons`(`string-append`("open:", name), log);
+    interface(
+        name: name,
+        work: function() { log = `cons`(`string-append`("work:", name), log); name; },
+        close: function() { log = `cons`(`string-append`("close:", name), log); }
+    );
+};
+
+// === Basic with-statement in block ===
+log = [];
+define r1 = {
+    with(f = make_res("A"));
+    f->work();
+};
+test("stmt basic result", "A", r1);
+test("stmt basic close", true, `member`("close:A", log) != false);
+test("stmt basic order", ["close:A", "work:A", "open:A"], log);
+
+// === with-statement closes on error ===
+log = [];
+define r2 = try {
+    {
+        with(f = make_res("B"));
+        f->work();
+        error("boom");
+    };
+} catch(e) "caught";
+test("stmt error result", "caught", r2);
+test("stmt error close", true, `member`("close:B", log) != false);
+
+// === Multiple with-statements in same block ===
+log = [];
+define r3 = {
+    with(a = make_res("X"));
+    with(b = make_res("Y"));
+    a->work();
+    b->work();
+    99;
+};
+test("stmt multi result", 99, r3);
+test("stmt multi close X", true, `member`("close:X", log) != false);
+test("stmt multi close Y", true, `member`("close:Y", log) != false);
+// Y (inner) should close before X (outer)
+define cx = `list-index`(function(s) s == "close:X", log);
+define cy = `list-index`(function(s) s == "close:Y", log);
+test("stmt multi Y closes before X", true, cy > cx);
+
+// === with-statement with define in same block ===
+log = [];
+define r4 = {
+    define x = 10;
+    with(f = make_res("D"));
+    define y = 20;
+    x + y;
+};
+test("stmt with defines", 30, r4);
+test("stmt with defines close", true, `member`("close:D", log) != false);
+
+// === with-statement at top level (block wrapping) ===
+log = [];
+define r5 = {
+    with(f = make_res("E"));
+    42;
+};
+test("stmt toplevel result", 42, r5);
+test("stmt toplevel close", ["close:E", "open:E"], log);
+
+// === with-statement: resource used after with ===
+log = [];
+define r6 = {
+    define x = 5;
+    with(f = make_res("F"));
+    f->work();
+    f->work();
+    x;
+};
+test("stmt multi use", 5, r6);
+test("stmt multi use work count", 2,
+    `length`(`filter`(function(s) s == "work:F", log)));
+
+test_end();

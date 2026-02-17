@@ -1,0 +1,19 @@
+// vec2.eval — 2D vector type
+
+define Vec2 = constructor(x, y)
+    interface(
+        x: function() x,
+        y: function() y,
+        add: function(other) Vec2(x + other->x(), y + other->y()),
+        scale: function(s) Vec2(x * s, y * s),
+        length: function() (x * x + y * y) ** 0.5,
+        to_string: function() {
+            define px = `open-output-string`();
+            `write`(x, px);
+            define sx = `get-output-string`(px);
+            define py = `open-output-string`();
+            `write`(y, py);
+            define sy = `get-output-string`(py);
+            `string-append`("Vec2(", sx, ", ", sy, ")");
+        }
+    );

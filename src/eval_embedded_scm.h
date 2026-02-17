@@ -1,0 +1,26 @@
+/*  eval_embedded_scm.h -- Embedded scheme files for standalone eval  */
+
+#ifndef EVAL_EMBEDDED_SCM_H
+#define EVAL_EMBEDDED_SCM_H
+
+#include <stddef.h>
+
+typedef struct {
+    const char *path;       /* relative path, e.g. "init-7.scm" */
+    const char *content;    /* file content (NUL-terminated) */
+    size_t size;            /* size including NUL terminator */
+} EmbeddedSchemeFile;
+
+/* Table of all embedded files (NULL-terminated) */
+extern const EmbeddedSchemeFile embedded_scheme_files[];
+extern const int embedded_scheme_file_count;
+
+/* Extract all embedded .scm files to a temp directory.
+ * Returns the path to the temp directory (caller must free with
+ * embedded_scm_cleanup). Returns NULL on failure. */
+char *embedded_scm_extract(void);
+
+/* Remove the temp directory and all extracted files. */
+void embedded_scm_cleanup(char *tmpdir);
+
+#endif /* EVAL_EMBEDDED_SCM_H */

@@ -727,6 +727,7 @@ static void ser_assemble_buf(SerState *s, Buffer *out) {
     }
 }
 
+#ifndef EVAL_STANDALONE
 static PyObject *ser_assemble(SerState *s) {
     Buffer out;
     ser_assemble_buf(s, &out);
@@ -734,6 +735,7 @@ static PyObject *ser_assemble(SerState *s) {
     buf_free(&out);
     return result;
 }
+#endif
 
 /* ================================================================
  *  Pure-C serialization API (no Python dependency)
@@ -770,6 +772,7 @@ int ser_sexp_to_buf(sexp ctx, sexp env, sexp val,
  *  Public serialization API (Python wrappers)
  * ================================================================ */
 
+#ifndef EVAL_STANDALONE
 PyObject *chibi_serialize_continuation(sexp ctx, sexp env, sexp cont) {
     /* Validate: must be a procedure.
      * In chibi-scheme, user-visible continuations from call/cc are
@@ -813,6 +816,7 @@ PyObject *chibi_serialize_continuation(sexp ctx, sexp env, sexp cont) {
     ser_free(&s);
     return result;
 }
+#endif /* !EVAL_STANDALONE */
 
 /* ================================================================
  *  Deserialization
@@ -822,7 +826,7 @@ typedef struct {
     sexp ctx;
     sexp env;
     const unsigned char *data;
-    Py_ssize_t data_len;
+    size_t data_len;
 
     /* Header fields */
     uint32_t version;
@@ -1230,7 +1234,7 @@ sexp deser_sexp_from_buf(sexp ctx, sexp env,
     d.ctx = ctx;
     d.env = env;
     d.data = data;
-    d.data_len = (Py_ssize_t)len;
+    d.data_len = len;
 
     /* Parse header */
     if (!deser_parse_header(&d)) goto fail;
@@ -1303,6 +1307,7 @@ fail:
     }
 }
 
+#ifndef EVAL_STANDALONE
 sexp chibi_deserialize_continuation(sexp ctx, sexp env,
                                     const unsigned char *data,
                                     Py_ssize_t len) {
@@ -1381,6 +1386,7 @@ fail:
         return SEXP_FALSE;
     }
 }
+#endif /* !EVAL_STANDALONE */
 
 /* ================================================================
  *  sexp-level API (callable from Eval as bridge functions)
@@ -1430,7 +1436,17 @@ sexp bridge_deserialize_continuation(sexp ctx, sexp self, sexp_sint_t n, sexp bv
     }
 
     sexp env = sexp_context_env(ctx);
+#ifndef EVAL_STANDALONE
     return chibi_deserialize_continuation(ctx, env,
         (const unsigned char *)sexp_bytes_data(bv),
         (Py_ssize_t)sexp_bytes_length(bv));
+#else
+    char err_msg[256] = {0};
+    sexp result = deser_sexp_from_buf(ctx, env,
+        (const unsigned char *)sexp_bytes_data(bv),
+        (size_t)sexp_bytes_length(bv), err_msg, sizeof(err_msg));
+    if (result == SEXP_FALSE && err_msg[0])
+        return sexp_user_exception(ctx, self, err_msg, bv);
+    return result;
+#endif
 }

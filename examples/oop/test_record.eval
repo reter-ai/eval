@@ -1,0 +1,38 @@
+// Basic record
+record Point(x, y);
+define p = Point(3, 4);
+display("p->x = "); display(p->x); newline();
+display("p->y = "); display(p->y); newline();
+display("Point?(p) = "); display(Point?(p)); newline();
+display("Point?(42) = "); display(Point?(42)); newline();
+
+// Multiple record types
+record Pair(a, b);
+define pr = Pair(10, 20);
+display("pr->a = "); display(pr->a); newline();
+display("pr->b = "); display(pr->b); newline();
+display("Pair?(pr) = "); display(Pair?(pr)); newline();
+display("Point?(pr) = "); display(Point?(pr)); newline();
+display("Pair?(p) = "); display(Pair?(p)); newline();
+
+// Record with different value types
+record Entry(key, value);
+define e = Entry("name", 42);
+display("e->key = "); display(e->key); newline();
+display("e->value = "); display(e->value); newline();
+
+// Unknown field error
+try {
+    p->z;
+} catch(err) {
+    display("caught: "); display(`exception-message`(err)); newline();
+};
+
+// Records in a list with polymorphic access
+define points = [Point(0, 0), Point(1, 1), Point(3, 4)];
+display("distances: ");
+`for-each`(function(pt) {
+    display((pt->x ** 2 + pt->y ** 2) ** 0.5);
+    display(" ");
+}, points);
+newline();
