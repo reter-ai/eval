@@ -353,19 +353,17 @@ void eval_init_all_libs(sexp ctx, sexp env) {
     sexp_load_module_file(ctx, "chibi/bytevector.scm", env);  /* u16/u32 ref, integer<->bv */
 
     /* ================================================================
-     * Layer 6: Pattern matching and iteration.
+     * Layer 6+7: Pattern matching, iteration, AST optimizer.
+     * Disabled: match.scm (~1.6s) and loop.scm (~1.3s) are expensive
+     * macro-heavy files only needed by the optimizer.  The optimizer's
+     * rest.scm has bugs (replace-param returns #f for lambda/app nodes,
+     * segfaults with supplied rest args).  Disabling the whole stack
+     * saves ~4.5s per context init with no functional impact.
      * ================================================================ */
-    sexp_load_module_file(ctx, "chibi/match/match.scm", env); /* match */
-    sexp_load_module_file(ctx, "chibi/loop/loop.scm", env);   /* loop iterators */
-
-    /* ================================================================
-     * Layer 7: AST optimizer (depends on match + ast + srfi/1).
-     * ================================================================ */
-    sexp_load_module_file(ctx, "chibi/optimize.scm", env);
-    sexp_load_module_file(ctx, "chibi/optimize/profile.scm", env);
-    /* rest.scm disabled: its replace-param returns #f for lambda/app nodes,
-       causing let-binding values to become #f.  Also segfaults when rest
-       args are actually supplied.  TODO: fix upstream. */
+    /* sexp_load_module_file(ctx, "chibi/match/match.scm", env); */
+    /* sexp_load_module_file(ctx, "chibi/loop/loop.scm", env); */
+    /* sexp_load_module_file(ctx, "chibi/optimize.scm", env); */
+    /* sexp_load_module_file(ctx, "chibi/optimize/profile.scm", env); */
     /* sexp_load_module_file(ctx, "chibi/optimize/rest.scm", env); */
 
     /* ================================================================

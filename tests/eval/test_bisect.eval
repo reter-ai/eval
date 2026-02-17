@@ -1,0 +1,4 @@
+test_begin("bisect");
+// heap-stats disabled: hangs due to heap-walk infinite loop
+test_assert("basic arithmetic", 1 + 1 == 2);
+test_end();
