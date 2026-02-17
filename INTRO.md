@@ -1290,6 +1290,165 @@ total();            // => 18 (8 + 10)
 
 The accumulator starts at the initial value and only updates when the source changes (uses `watch` internally, so the initial value is skipped).
 
+### scope
+
+Group reactive nodes for bulk disposal. All Signals, Computeds, and Effects created inside the scope function are tracked and disposed together:
+
+```
+define handle = scope(function() {
+    define x = Signal(1);
+    define doubled = Computed(function() x() * 2);
+    Effect(function() print(doubled()));
+});
+// prints: 2
+
+dispose(handle);
+// effect stopped, all nodes cleaned up
+```
+
+Works with `with` for automatic cleanup:
+
+```
+define s = Signal(0);
+with(h = scope(function() {
+    Effect(function() print(s()));
+})) {
+    s->set(1);
+};
+// After with block, scope is disposed — effect stops
+```
+
+Scopes nest — disposing an inner scope doesn't affect the outer:
+
+```
+define outer = scope(function() {
+    Effect(function() print("outer"));
+    define inner = scope(function() {
+        Effect(function() print("inner"));
+    });
+    dispose(inner);  // only inner effect stops
+});
+```
+
+Type predicate: `scope?(handle)` returns `true`.
+
+### Custom equality
+
+Signal and Computed accept an optional equality function as a second argument. The equality function determines when updates are skipped:
+
+```
+// Identity equality — notify even for same-content objects
+define s = Signal([1, 2, 3], =?);
+s->set([1, 2, 3]);   // notifies! (different object)
+
+// Default (structural equality) would skip:
+define s2 = Signal([1, 2, 3]);
+s2->set([1, 2, 3]);  // skipped — same content
+
+// Always-notify (no dedup)
+define s3 = Signal(0, function(a, b) false);
+s3->set(0);           // notifies even though value unchanged
+```
+
+For Computed, custom equality prevents downstream propagation when the derived value hasn't meaningfully changed:
+
+```
+define precise = Signal(3.14);
+define rounded = Computed(
+    function() `floor`(precise()),
+    function(a, b) a == b
+);
+
+precise->set(3.99);
+// rounded recomputes to 3, same as before — downstream NOT notified
+
+precise->set(4.5);
+// rounded is now 4, different — downstream notified
+```
+
+### WritableComputed
+
+A two-way computed: reads derive from sources, writes dispatch through a setter:
+
+```
+define celsius = Signal(0);
+define fahrenheit = WritableComputed(
+    function() celsius() * 9 / 5 + 32,
+    function(f) celsius->set((f - 32) * 5 / 9)
+);
+
+fahrenheit();           // => 32
+fahrenheit->set(212);
+celsius();              // => 100
+fahrenheit();           // => 212
+```
+
+Type predicate: `writable_computed?(fahrenheit)` returns `true`.
+
+### combine
+
+Merge multiple signals into a single computed value:
+
+```
+define x = Signal(1);
+define y = Signal(2);
+define z = Signal(3);
+define sum = combine([x, y, z], function(a, b, c) a + b + c);
+sum();   // => 6
+
+x->set(10);
+sum();   // => 15
+```
+
+### select
+
+Extract a slice from a signal, only propagating when the selected portion changes:
+
+```
+define state = Signal([10, 20, 30]);
+define first = select(state, function(lst) car(lst));
+first();   // => 10
+
+state->set([10, 99, 99]);
+// first is still 10 — no propagation
+
+state->set([42, 99, 99]);
+// first is now 42 — propagates
+```
+
+Accepts an optional custom equality as a third argument.
+
+### prev
+
+Signal that holds the previous value of a source (one step behind):
+
+```
+define count = Signal(0);
+define prevCount = prev(count);
+
+prevCount();     // => false (no previous yet)
+count->set(1);
+prevCount();     // => 0
+count->set(5);
+prevCount();     // => 1
+```
+
+Accepts an optional initial value: `prev(source, "none")`. Returns a readonly signal.
+
+### trace
+
+Attach debug logging to a signal — logs every change to stdout:
+
+```
+define count = Signal(0);
+trace(count, "count");
+
+count->set(5);    // prints: [count] 0 -> 5
+count->set(10);   // prints: [count] 5 -> 10
+```
+
+Returns the source signal unchanged, so it can be inserted inline without affecting behavior.
+
 ## Continuation Serialization
 
 Continuations can be serialized to bytes and restored later:

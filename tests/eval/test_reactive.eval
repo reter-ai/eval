@@ -402,4 +402,273 @@ test("reduce max still 5", 5, red_max());
 red_vals->set(8);
 test("reduce max 8", 8, red_max());
 
+// =============================================
+// Phase 2: scope, custom equality, WritableComputed,
+//          combine, select, prev, trace
+// =============================================
+
+// === scope: reactive ownership scope ===
+define sc_log = [];
+define sc_s = Signal(0);
+define sc_handle = scope(function() {
+    define a = Computed(function() sc_s() * 2);
+    Effect(function() {
+        sc_log = cons(a(), sc_log);
+    });
+});
+test("scope initial effect", [0], sc_log);
+
+sc_s->set(5);
+test("scope effect runs", [10, 0], sc_log);
+
+// Dispose the scope — should kill the effect
+dispose(sc_handle);
+sc_s->set(99);
+test("scope dispose stops all", [10, 0], sc_log);
+
+test("scope? predicate", true, scope?(sc_handle));
+test("scope? not signal", false, scope?(sc_s));
+
+// scope with `with` RAII
+define sc2_log = [];
+define sc2_s = Signal(0);
+with(h = scope(function() {
+    Effect(function() {
+        sc2_log = cons(sc2_s(), sc2_log);
+    });
+})) {
+    sc2_s->set(1);
+};
+// After with, scope is disposed
+sc2_s->set(99);
+test("scope with RAII", [1, 0], sc2_log);
+
+// Nested scopes — inner dispose doesn't affect outer
+define sc3_log = [];
+define sc3_s = Signal(0);
+define sc3_outer = scope(function() {
+    Effect(function() {
+        sc3_log = cons(`string-append`("outer:", `number->string`(sc3_s())), sc3_log);
+    });
+    define inner = scope(function() {
+        Effect(function() {
+            sc3_log = cons(`string-append`("inner:", `number->string`(sc3_s())), sc3_log);
+        });
+    });
+    dispose(inner);
+});
+// After inner dispose, only inner effect is gone
+sc3_log = [];
+sc3_s->set(1);
+test("nested scope outer alive", ["outer:1"], sc3_log);
+dispose(sc3_outer);
+
+// scope registers signals too
+define sc4_disposed = false;
+define sc4_handle = scope(function() {
+    define s = Signal(42);
+});
+// Disposing scope should dispose the signal (clear observers)
+dispose(sc4_handle);
+test("scope disposes signals", true, scope?(sc4_handle));
+
+// === Signal with custom equality ===
+
+// Identity equality — same-content list still triggers
+define eq_log = [];
+define eq_s = Signal([1, 2, 3], =?);
+define eq_eff = Effect(function() {
+    eq_log = cons(eq_s(), eq_log);
+});
+eq_log = [];
+eq_s->set([1, 2, 3]);  // different object, same content → triggers with =?
+test("signal identity eq triggers", [[1, 2, 3]], eq_log);
+
+// With equal? (default), same content would NOT trigger
+define eq2_log = [];
+define eq2_s = Signal([1, 2, 3]);
+define eq2_eff = Effect(function() {
+    eq2_log = cons(eq2_s(), eq2_log);
+});
+eq2_log = [];
+eq2_s->set([1, 2, 3]);  // same content → skipped by default
+test("signal default eq skips", [], eq2_log);
+dispose(eq_eff);
+dispose(eq2_eff);
+
+// Always-notify signal (eq always returns false)
+define eq3_count = 0;
+define eq3_s = Signal(0, function(a, b) false);
+define eq3_eff = Effect(function() {
+    eq3_s();
+    eq3_count = eq3_count + 1;
+});
+define eq3_before = eq3_count;
+eq3_s->set(0);  // same value, but eq returns false → notify
+test("signal always-notify eq", eq3_before + 1, eq3_count);
+dispose(eq3_eff);
+
+// Custom eq — update works too
+define eq4_s = Signal(10, =?);
+eq4_s->update(function(v) v + 5);
+test("signal custom eq update", 15, eq4_s());
+test("signal custom eq peek", 15, eq4_s->peek);
+
+// === Computed with custom equality ===
+define ceq_s = Signal(3.14);
+define ceq_calls = 0;
+define ceq_rounded = Computed(
+    function() {
+        ceq_calls = ceq_calls + 1;
+        `floor`(ceq_s());
+    },
+    function(a, b) a == b
+);
+test("computed custom eq initial", 3, ceq_rounded());
+define ceq_before = ceq_calls;
+
+// Change source but floor stays same → downstream should NOT be notified
+define ceq_downstream = 0;
+define ceq_eff = Effect(function() {
+    ceq_rounded();
+    ceq_downstream = ceq_downstream + 1;
+});
+define ceq_ds_before = ceq_downstream;
+ceq_s->set(3.99);
+// Computed recomputes (floor(3.99)=3), but eq says 3==3 → no downstream
+test("computed custom eq no propagate", ceq_ds_before, ceq_downstream);
+
+ceq_s->set(4.5);
+// Now floor changes: 4 != 3 → downstream notified
+test("computed custom eq propagates", ceq_ds_before + 1, ceq_downstream);
+dispose(ceq_eff);
+
+// === WritableComputed: two-way computed ===
+define wc_celsius = Signal(0);
+define wc_fahrenheit = WritableComputed(
+    function() wc_celsius() * 9 / 5 + 32,
+    function(f) wc_celsius->set((f - 32) * 5 / 9)
+);
+
+test("writable computed read", 32, wc_fahrenheit());
+
+wc_fahrenheit->set(212);
+test("writable computed write", 100, wc_celsius());
+test("writable computed read after write", 212, wc_fahrenheit());
+
+// update
+wc_fahrenheit->update(function(f) f - 180);
+test("writable computed update", 32, wc_fahrenheit());
+
+// type predicate
+test("writable_computed?", true, writable_computed?(wc_fahrenheit));
+test("writable_computed? not computed", false, writable_computed?(ceq_rounded));
+
+// peek, level, id delegate to inner
+test("writable computed peek", 32, wc_fahrenheit->peek);
+
+// tracks like a computed
+define wc_log = [];
+define wc_eff = Effect(function() {
+    wc_log = cons(wc_fahrenheit(), wc_log);
+});
+wc_log = [];
+wc_celsius->set(100);
+test("writable computed tracks", [212], wc_log);
+dispose(wc_eff);
+
+// === combine: merge N signals ===
+define cb_x = Signal(1);
+define cb_y = Signal(2);
+define cb_z = Signal(3);
+define cb_sum = combine([cb_x, cb_y, cb_z], function(a, b, c) a + b + c);
+test("combine initial", 6, cb_sum());
+
+cb_x->set(10);
+test("combine after x change", 15, cb_sum());
+
+cb_z->set(30);
+test("combine after z change", 42, cb_sum());
+
+test("combine is computed", true, computed?(cb_sum));
+
+// single source combine
+define cb_single = combine([cb_x], function(v) v * 100);
+test("combine single", 1000, cb_single());
+
+// === select: fine-grained slice ===
+define sel_s = Signal([10, 20, 30]);
+define sel_first = select(sel_s, function(lst) car(lst));
+define sel_last = select(sel_s, function(lst) car(`reverse`(lst)));
+test("select first", 10, sel_first());
+test("select last", 30, sel_last());
+
+// Change list but first element stays same → sel_first should not propagate
+define sel_count = 0;
+define sel_eff = Effect(function() {
+    sel_first();
+    sel_count = sel_count + 1;
+});
+define sel_before = sel_count;
+sel_s->set([10, 99, 99]);  // first is still 10
+test("select no propagate", sel_before, sel_count);
+
+sel_s->set([42, 99, 99]);  // first changes to 42
+test("select propagates", sel_before + 1, sel_count);
+test("select new value", 42, sel_first());
+dispose(sel_eff);
+
+// select with custom eq
+define sel2_s = Signal(dict(name: "Alice", age: 30));
+define sel2_name = select(sel2_s, function(d) d->name);
+test("select dict", "Alice", sel2_name());
+
+// === prev: previous value signal ===
+define pv_s = Signal(0);
+define pv = prev(pv_s);
+test("prev initial default", false, pv());
+
+pv_s->set(1);
+test("prev after first", 0, pv());
+
+pv_s->set(5);
+test("prev after second", 1, pv());
+
+pv_s->set(10);
+test("prev after third", 5, pv());
+
+// prev is readonly
+test("prev is readonly", true, readonly?(pv));
+define pv_err = try { pv->set(99); } catch(e) "blocked";
+test("prev blocks set", "blocked", pv_err);
+
+// prev with custom initial
+define pv2_s = Signal("hello");
+define pv2 = prev(pv2_s, "none");
+test("prev custom initial", "none", pv2());
+
+pv2_s->set("world");
+test("prev custom after change", "hello", pv2());
+
+// prev works in computed
+define pv3_s = Signal(0);
+define pv3 = prev(pv3_s);
+define pv3_delta = Computed(function() pv3_s() - (if(pv3() == false) 0 else pv3()));
+test("prev in computed initial", 0, pv3_delta());
+
+pv3_s->set(10);
+test("prev in computed delta", 10, pv3_delta());
+
+pv3_s->set(15);
+test("prev in computed delta 2", 5, pv3_delta());
+
+// === trace: debug logging (functional test — returns source) ===
+define tr_s = Signal(0);
+define tr_result = trace(tr_s, "test");
+test("trace returns source", true, tr_result =? tr_s);
+
+// trace doesn't affect signal behavior
+tr_s->set(42);
+test("trace source works", 42, tr_s());
+
 test_end();

@@ -1405,6 +1405,10 @@ void eval_reactive_runtime(sexp ctx, sexp env) {
     sexp_eval_string(ctx,
         "(define __current-observer__ (make-parameter #f))", -1, env);
 
+    /* --- Scope tracking --- */
+    sexp_eval_string(ctx,
+        "(define __reactive-current-scope__ #f)", -1, env);
+
     /* --- Batch state --- */
     sexp_eval_string(ctx,
         "(define __reactive-batch-depth__ 0)", -1, env);
@@ -1448,8 +1452,9 @@ void eval_reactive_runtime(sexp ctx, sexp env) {
 
     /* --- Signal --- */
     sexp_eval_string(ctx,
-        "(define (Signal initial-value)"
+        "(define (Signal initial-value . rest)"
         "  (let ((value initial-value)"
+        "        (eq-fn (if (null? rest) equal? (car rest)))"
         "        (observers (make-hash-table))"
         "        (id (__reactive-gensym__ \"sig\")))"
         "    (letrec"
@@ -1476,13 +1481,13 @@ void eval_reactive_runtime(sexp ctx, sexp env) {
         "              (cond"
         "                ((eq? msg 'set)"
         "                 (lambda (new-val)"
-        "                   (if (not (equal? value new-val))"
+        "                   (if (not (eq-fn value new-val))"
         "                     (begin (set! value new-val)"
         "                            (notify!)))))"
         "                ((eq? msg 'update)"
         "                 (lambda (fn)"
         "                   (let ((new-val (fn value)))"
-        "                     (if (not (equal? value new-val))"
+        "                     (if (not (eq-fn value new-val))"
         "                       (begin (set! value new-val)"
         "                              (notify!))))))"
         "                ((eq? msg 'peek) value)"
@@ -1504,12 +1509,15 @@ void eval_reactive_runtime(sexp ctx, sexp env) {
         "                  (for-each (lambda (k) (hash-table-delete! observers k))"
         "                    (hash-table-keys observers))))"
         "                (else (error \"Signal: unknown message\" msg))))))))"
+        "      (if __reactive-current-scope__"
+        "        ((__reactive-current-scope__ 'register-child) self))"
         "      self)))", -1, env);
 
     /* --- Computed --- */
     sexp_eval_string(ctx,
-        "(define (Computed fn)"
+        "(define (Computed fn . rest)"
         "  (let ((value #f)"
+        "        (eq-fn (if (null? rest) equal? (car rest)))"
         "        (dirty #t)"
         "        (computing #f)"
         "        (disposed #f)"
@@ -1541,7 +1549,7 @@ void eval_reactive_runtime(sexp ctx, sexp env) {
         "                     (fn)))))"
         "            (set! computing #f)"
         "            (set! dirty #f)"
-        "            (let ((changed (not (equal? value new-val))))"
+        "            (let ((changed (not (eq-fn value new-val))))"
         "              (set! value new-val)"
         "              changed))))"
         "       (self"
@@ -1569,8 +1577,7 @@ void eval_reactive_runtime(sexp ctx, sexp env) {
         "                 (if (not dirty)"
         "                   (begin"
         "                     (set! dirty #t)"
-        "                     (__reactive-notify__"
-        "                       (hash-table-values observers)))))"
+        "                     (__reactive-schedule-effect__ self))))"
         "                ((eq? msg '__run!__)"
         "                 (if (and dirty (not disposed))"
         "                   (let ((changed (recompute!)))"
@@ -1601,6 +1608,8 @@ void eval_reactive_runtime(sexp ctx, sexp env) {
         "                  (error \"Computed: unknown message\" msg))))))))"
         "      (protect (e (else (set! computing #f) (set! dirty #t)))"
         "        (recompute!))"
+        "      (if __reactive-current-scope__"
+        "        ((__reactive-current-scope__ 'register-child) self))"
         "      self)))", -1, env);
 
     /* --- Effect --- */
@@ -1672,6 +1681,8 @@ void eval_reactive_runtime(sexp ctx, sexp env) {
         "                (else"
         "                  (error \"Effect: unknown message\" msg))))))))"
         "      (run!)"
+        "      (if __reactive-current-scope__"
+        "        ((__reactive-current-scope__ 'register-child) self))"
         "      self)))", -1, env);
 
     /* --- batch --- */
@@ -1787,6 +1798,108 @@ void eval_reactive_runtime(sexp ctx, sexp env) {
         "    (watch src (lambda (new-val old-val)"
         "      ((acc 'set) (fn (acc 'peek) new-val))))"
         "    acc))", -1, env);
+
+    /* --- scope: reactive ownership scope --- */
+    sexp_eval_string(ctx,
+        "(define (scope fn)"
+        "  (let ((children '())"
+        "        (id (__reactive-gensym__ \"scope\"))"
+        "        (disposed #f)"
+        "        (prev-scope __reactive-current-scope__))"
+        "    (letrec"
+        "      ((self"
+        "        (lambda args"
+        "          (if (null? args)"
+        "            children"
+        "            (let ((msg (car args)))"
+        "              (cond"
+        "                ((eq? msg 'register-child)"
+        "                 (lambda (child)"
+        "                   (if (not disposed)"
+        "                     (set! children (cons child children)))))"
+        "                ((eq? msg 'dispose) (lambda ()"
+        "                  (if (not disposed)"
+        "                    (begin"
+        "                      (set! disposed #t)"
+        "                      (for-each (lambda (child)"
+        "                        (protect (e (else (if #f #f)))"
+        "                          ((child 'dispose))))"
+        "                        children)"
+        "                      (set! children '())))))"
+        "                ((eq? msg 'close) (lambda ()"
+        "                  ((self 'dispose))))"
+        "                ((eq? msg '__type__) '__scope__)"
+        "                ((eq? msg 'id) id)"
+        "                (else (error \"scope: unknown message\" msg))))))))"
+        "      (set! __reactive-current-scope__ self)"
+        "      (protect (e (else"
+        "        (set! __reactive-current-scope__ prev-scope)"
+        "        (raise e)))"
+        "        (fn))"
+        "      (set! __reactive-current-scope__ prev-scope)"
+        "      self)))", -1, env);
+
+    /* --- scope? predicate --- */
+    sexp_eval_string(ctx,
+        "(define (scope? v)"
+        "  (and (procedure? v)"
+        "       (protect (e (else #f))"
+        "         (eq? (v '__type__) '__scope__))))", -1, env);
+
+    /* --- WritableComputed: two-way computed --- */
+    sexp_eval_string(ctx,
+        "(define (WritableComputed getter setter)"
+        "  (let ((inner (Computed getter)))"
+        "    (lambda args"
+        "      (if (null? args)"
+        "        (inner)"
+        "        (let ((msg (car args)))"
+        "          (cond"
+        "            ((eq? msg 'set)"
+        "             (lambda (new-val) (setter new-val)))"
+        "            ((eq? msg 'update)"
+        "             (lambda (fn) (setter (fn (inner 'peek)))))"
+        "            ((eq? msg '__type__) '__writable-computed__)"
+        "            (else (inner msg))))))))", -1, env);
+
+    /* --- writable_computed? predicate --- */
+    sexp_eval_string(ctx,
+        "(define (writable_computed? v)"
+        "  (and (procedure? v)"
+        "       (protect (e (else #f))"
+        "         (eq? (v '__type__) '__writable-computed__))))", -1, env);
+
+    /* --- combine: merge N signals into one computed --- */
+    sexp_eval_string(ctx,
+        "(define (combine sources fn)"
+        "  (Computed (lambda ()"
+        "    (apply fn (map (lambda (s) (s)) sources)))))", -1, env);
+
+    /* --- select: fine-grained slice with optional custom equality --- */
+    sexp_eval_string(ctx,
+        "(define (select src selector . rest)"
+        "  (let ((eq-fn (if (null? rest) equal? (car rest))))"
+        "    (Computed (lambda () (selector (src))) eq-fn)))", -1, env);
+
+    /* --- prev: previous value signal --- */
+    sexp_eval_string(ctx,
+        "(define (prev src . rest)"
+        "  (let ((initial (if (null? rest) #f (car rest))))"
+        "    (let ((p (Signal initial)))"
+        "      (watch src (lambda (new-val old-val)"
+        "        ((p 'set) old-val)))"
+        "      (readonly p))))", -1, env);
+
+    /* --- trace: debug logging --- */
+    sexp_eval_string(ctx,
+        "(define (trace src label)"
+        "  (watch src (lambda (new-val old-val)"
+        "    (display (string-append \"[\" label \"] \"))"
+        "    (display old-val)"
+        "    (display \" -> \")"
+        "    (display new-val)"
+        "    (newline)))"
+        "  src)", -1, env);
 
 }
 
