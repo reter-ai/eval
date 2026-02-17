@@ -45,7 +45,7 @@
 %left EQEQ EQQ BANGEQ.
 %left LT GT LTE GTE.
 %left SHL SHR.
-%left PLUS MINUS.
+%left PLUS MINUS CONCAT.
 %left STAR SLASH PERCENT.
 %right STARSTAR.
 %right UMINUS BANG BITNOT BANGBANG QUOTE_PREC.
@@ -180,6 +180,9 @@ expr(A) ::= expr(L) PERCENT expr(R). {
 }
 expr(A) ::= expr(L) STARSTAR expr(R). {
     A = sexp_list3(ctx, ps_intern(ctx, "expt"), L, R);
+}
+expr(A) ::= expr(L) CONCAT expr(R). {
+    A = sexp_list3(ctx, ps_intern(ctx, "string-append"), L, R);
 }
 
 /* --- Unary --- */

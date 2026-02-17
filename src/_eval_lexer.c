@@ -287,7 +287,12 @@ static void lexer_post_process(EvalLexer *lexer, EvalToken *token) {
         case TOK_BITOR:
         case TOK_SHL:
         case TOK_SHR:
+        case TOK_CONCAT:
             token->value.int_val = token->type;
+            token->type = TOK_OPVAL;
+            break;
+        case TOK_PLUSPLUS:
+            token->value.int_val = TOK_CONCAT;
             token->type = TOK_OPVAL;
             break;
         /* Ambiguous: also has unary form. Only OPVAL if followed by
@@ -301,6 +306,14 @@ static void lexer_post_process(EvalLexer *lexer, EvalToken *token) {
                 token->type = TOK_OPVAL;
             }
             break;
+        }
+    }
+
+    /* ++ disambiguation: in binary position (prev ends expr) and followed
+       by an expression-starting token, convert PLUSPLUS → CONCAT. */
+    if (lexer->prev_ends_expr && token->type == TOK_PLUSPLUS) {
+        if (!peek_is_expr_terminator(lexer)) {
+            token->type = TOK_CONCAT;
         }
     }
 
@@ -602,6 +615,7 @@ const char *eval_token_name(int type) {
     case TOK_RPAREN:        return ")";
     case TOK_ARROW:         return "->";
     case TOK_PLUSPLUS:      return "++";
+    case TOK_CONCAT:        return "++";
     case TOK_MINUSMINUS:    return "--";
     case TOK_SEMICOLON:     return ";";
     case TOK_IDENT:         return "IDENT";

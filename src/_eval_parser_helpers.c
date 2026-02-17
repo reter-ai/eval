@@ -38,6 +38,7 @@ sexp ps_intern_op(sexp ctx, int token_type) {
     case TOK_BITNOT:  name = "bitwise-not"; break;
     case TOK_SHL:     name = "arithmetic-shift"; break;
     case TOK_SHR:     name = "shift-right"; break;
+    case TOK_CONCAT:  name = "string-append"; break;
     default:          name = "+"; break;  /* shouldn't happen */
     }
     return sexp_intern(ctx, name, -1);

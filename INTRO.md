@@ -123,6 +123,20 @@ x--;                 // decrement              -> (set! x (- x 1))
 | `a << b` | shift left | `(arithmetic-shift a b)` |
 | `a >> b` | shift right | `(arithmetic-shift a (- b))` |
 
+### String
+
+| Syntax | Meaning | Scheme |
+|--------|---------|--------|
+| `a ++ b` | string concatenation | `(string-append a b)` |
+
+The `++` operator is contextually distinguished from the postfix increment `x++`. When followed by an expression it's concatenation; when followed by `;`, `)`, etc. it's increment:
+
+```
+"hello" ++ " world";    // => "hello world"
+x ++ y;                 // (string-append x y)
+i++;                    // (set! i (+ i 1))
+```
+
 ### Operators as values
 
 Operators can be used as first-class values when they appear in value position (after `(`, `,`, etc.):
@@ -131,7 +145,7 @@ Operators can be used as first-class values when they appear in value position (
 fold(+, 0, [1, 2, 3])           // => 6
 map(-, [1, 2, 3])               // => [-1, -2, -3]
 sort([3, 1, 2], <)              // => [1, 2, 3]
-filter(function(x) x > 2, [1, 2, 3, 4])  // => [3, 4]
+fold(++, "", ["a", "b", "c"])   // => "abc"
 ```
 
 The string-based alternative `op("+")` also works.
@@ -147,7 +161,7 @@ The string-based alternative `op("+")` also works.
 ==  =?  !=             (left)
 <  >  <=  >=           (left)
 <<  >>                 (left)
-+  -                   (left)
++  -  ++               (left)
 *  /  %                (left)
 **                     (right)
 -  !  ~  '             (right, unary)
@@ -829,6 +843,8 @@ thread_join(t);
 
 Available functions: `make_thread`, `thread_start`, `thread_join`, `thread_yield`, `thread_sleep`, `thread_terminate`, `current_thread`, `make_mutex`, `mutex_lock`, `mutex_unlock`, `make_condvar`, `condvar_signal`, `condvar_broadcast`.
 
+See [THREADS.md](THREADS.md) for a comprehensive guide to green threads, mutexes, condition variables, and cross-thread continuations.
+
 ## Async / Await
 
 `async` spawns a green thread and returns a promise. `await` blocks until the promise resolves.
@@ -890,6 +906,8 @@ pool_shutdown(pool);
 | **Context** | Shared — can access local variables | Separate — code runs as string in isolated context |
 | **Overhead** | Very low | Higher (serialization, thread creation) |
 | **Use case** | Concurrent I/O, structured concurrency | CPU-bound parallelism |
+
+See [ASYNC.md](ASYNC.md) for a comprehensive guide to async programming, thread pools, channels, and pipelines.
 
 ## Thread Pool
 
@@ -976,6 +994,8 @@ channel_send(ch, 42);
 channel_recv(ch);             // => 42
 pool_shutdown(pool);
 ```
+
+See [ASYNC.md](ASYNC.md) and [THREADS.md](THREADS.md) for comprehensive guides covering pool_apply, closures across threads, continuation exchange, and multi-stage pipelines.
 
 ## Reactive Programming
 
@@ -1448,6 +1468,39 @@ count->set(10);   // prints: [count] 5 -> 10
 ```
 
 Returns the source signal unchanged, so it can be inserted inline without affecting behavior.
+
+### resource
+
+Async data loading primitive that fetches data in a green thread:
+
+```
+// Without source — fetches once
+define r = resource(function() fetch_data());
+r->settle();       // wait for fetch to complete
+r();               // => fetched value
+r->loading;        // => false
+r->error;          // => #f (or error object)
+
+// With source — re-fetches when source changes
+define id = Signal(1);
+define user = resource(id, function(v) load_user(v));
+user->settle();
+user();            // => user for id 1
+
+id->set(2);        // triggers re-fetch
+user->settle();
+user();            // => user for id 2
+```
+
+Messages: `loading` (bool signal), `error` (signal), `settle` (wait for fetch), `refetch` (force re-fetch), `mutate(v)` (set value directly), `peek`, `dispose`.
+
+The optional third argument sets an initial value before the first fetch completes:
+
+```
+define r = resource(src, fetcher, default_value);
+```
+
+Stale fetches are automatically ignored — if the source changes while a fetch is in progress, only the latest result is used.
 
 ## Continuation Serialization
 

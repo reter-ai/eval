@@ -671,4 +671,125 @@ test("trace returns source", true, tr_result =? tr_s);
 tr_s->set(42);
 test("trace source works", 42, tr_s());
 
+// =============================================
+// resource: async data loading primitive
+// =============================================
+
+// === resource (no source) — basic fetch ===
+define res1 = resource(function() 42);
+test("resource loading initially", true, res1->loading);
+test("resource initial value", false, res1());  // default initial
+
+// settle waits for the green thread to complete
+res1->settle();
+test("resource value after fetch", 42, res1());
+test("resource loading done", false, res1->loading);
+test("resource no error", false, res1->error);
+
+// type predicate
+test("resource?", true, resource?(res1));
+test("resource? not signal", false, resource?(Signal(0)));
+
+// === resource with source — re-fetches on change ===
+define res2_src = Signal(5);
+define res2 = resource(res2_src, function(v) v * 10);
+res2->settle();
+test("resource with source", 50, res2());
+test("resource with source loaded", false, res2->loading);
+
+// Change source → re-fetch
+res2_src->set(3);
+test("resource refetch loading", true, res2->loading);
+res2->settle();
+test("resource refetch value", 30, res2());
+test("resource refetch done", false, res2->loading);
+
+// === resource with source and initial ===
+define res3_src = Signal("hello");
+define res3 = resource(res3_src, function(v) `string-length`(v), -1);
+res3->settle();
+test("resource custom initial loaded", 5, res3());
+
+// === resource error handling ===
+define res4 = resource(function() error("boom"));
+res4->settle();
+test("resource error loading done", false, res4->loading);
+test("resource error value unchanged", false, res4());
+test("resource has error", true, res4->error != false);
+
+// === resource mutate (optimistic update) ===
+define res5 = resource(function() 42);
+res5->settle();
+test("resource mutate before", 42, res5());
+
+res5->mutate(99);
+test("resource mutate", 99, res5());
+
+// refetch restores original
+res5->refetch();
+res5->settle();
+test("resource refetch after mutate", 42, res5());
+
+// === resource tracks in Effect ===
+define res6 = resource(function() "data");
+res6->settle();
+define res6_log = [];
+define res6_eff = Effect(function() {
+    res6_log = cons(res6(), res6_log);
+});
+test("resource effect tracks value", ["data"], res6_log);
+dispose(res6_eff);
+
+// === resource loading tracked in Effect ===
+define res7 = resource(function() 100);
+res7->settle();
+test("resource loading effect settled", false, res7->loading);
+test("resource loading effect value", 100, res7());
+
+// === resource dispose cancels pending fetch ===
+define res8 = resource(function() 42);
+dispose(res8);
+// After dispose, version is bumped — even if thread runs, results are ignored
+test("resource dispose type", true, resource?(res8));
+
+// === resource with source: stale fetch ignored ===
+define res9_src = Signal(1);
+define res9 = resource(res9_src, function(v) v * 100);
+// Quickly change source multiple times
+res9_src->set(2);
+res9_src->set(3);
+res9->settle();
+// Final value should be from the latest source
+test("resource stale ignored value", 300, res9());
+
+// === resource peek (no tracking) ===
+define res10 = resource(function() "hello");
+res10->settle();
+test("resource peek", "hello", res10->peek);
+
+// === resource in scope ===
+define res11_src = Signal(0);
+define res11_val = false;
+define res11_scope = scope(function() {
+    define r = resource(res11_src, function(v) v + 1);
+    r->settle();
+    res11_val = r();
+});
+test("resource in scope", 1, res11_val);
+dispose(res11_scope);
+
+// === resource: multiple source changes with settle ===
+define res12_src = Signal("a");
+define res12 = resource(res12_src, function(v) { v ++ v });
+res12->settle();
+test("resource multi src initial", "aa", res12());
+
+res12_src->set("b");
+res12->settle();
+test("resource multi src update", "bb", res12());
+
+res12_src->set("c");
+res12->settle();
+test("resource multi src update 2", "cc", res12());
+
 test_end();

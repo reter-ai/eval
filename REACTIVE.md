@@ -740,6 +740,113 @@ count->set(10);
 
 `trace` returns the source signal unchanged, so you can sprinkle it in without modifying behavior. Remove the `trace` call when you're done debugging.
 
+## Resource: Async Data Loading
+
+`resource` fetches data asynchronously using green threads. It's the reactive way to handle async operations — the result is a reactive node that tracks loading state, errors, and the fetched value.
+
+### Basic Resource (No Source)
+
+A resource with just a fetcher runs once on creation:
+
+```
+define data = resource(function() {
+    // This runs in a green thread
+    expensive_computation()
+});
+
+data->loading;     // true while fetching
+data->settle();    // wait for completion
+data();            // => the result
+data->loading;     // false
+data->error;       // #f (no error)
+```
+
+### Resource with Source
+
+When given a source signal, the resource re-fetches whenever the source changes:
+
+```
+define userId = Signal(1);
+define user = resource(userId, function(id) {
+    load_user(id)
+});
+
+user->settle();
+user();            // => user data for id 1
+
+userId->set(2);    // triggers re-fetch automatically
+user->settle();
+user();            // => user data for id 2
+```
+
+### Stale Fetch Protection
+
+If the source changes while a fetch is in progress, the old result is automatically discarded:
+
+```
+define query = Signal("hello");
+define results = resource(query, function(q) search(q));
+
+query->set("world");     // previous "hello" fetch is now stale
+results->settle();
+results();               // => results for "world", not "hello"
+```
+
+### Error Handling
+
+If the fetcher throws, the error is captured reactively:
+
+```
+define r = resource(function() {
+    error("fetch failed")
+});
+
+r->settle();
+r->error;          // => the error object
+r->loading;        // false
+```
+
+### Resource API
+
+| Message | Description |
+|---------|-------------|
+| `r()` | Read current value (with dependency tracking) |
+| `r->loading` | Whether a fetch is in progress |
+| `r->error` | Error from last fetch, or `#f` |
+| `r->settle()` | Wait for current fetch to complete |
+| `r->refetch()` | Force a new fetch |
+| `r->mutate(v)` | Set value directly (optimistic update) |
+| `r->peek` | Read value without tracking |
+| `dispose(r)` | Cancel pending fetch and clean up |
+
+### Using Resource in Effects
+
+Resource values are reactive — you can use them in Computed and Effect:
+
+```
+define id = Signal(1);
+define data = resource(id, function(v) fetch(v));
+
+// Effect that reacts to both loading state and value
+Effect(function() {
+    if(data->loading) {
+        display("Loading...")
+    } else {
+        display("Got: ");
+        display(data())
+    }
+});
+```
+
+### Resource with Initial Value
+
+Pass a third argument to set the value before the first fetch completes:
+
+```
+define r = resource(src, fetcher, "default");
+r->peek;           // => "default" (before fetch completes)
+```
+
 ## Type Predicates
 
 Every reactive type has a predicate:
@@ -752,6 +859,7 @@ readonly?(readonly(Signal(0)));            // => true
 scope?(scope(function() {}));              // => true
 writable_computed?(WritableComputed(
     function() 1, function(v) v));         // => true
+resource?(resource(function() 1));        // => true
 ```
 
 These work by checking the internal `__type__` message, so they're safe to call on any value — non-reactive values return `false`.

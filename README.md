@@ -1,6 +1,6 @@
 # chibi-eval
 
-An expressive infix language with first-class functions, continuations, green threads, and a thread pool — powered by [chibi-scheme](https://github.com/ashinn/chibi-scheme).
+An expressive infix language with first-class functions, continuations, reactive programming, green threads, and a thread pool — powered by [chibi-scheme](https://github.com/ashinn/chibi-scheme).
 
 Available as a **standalone CLI** (single self-contained binary, no dependencies) or as a **Python library** with seamless interop.
 
@@ -27,6 +27,7 @@ e.eval("""
 
 - **Infix syntax** — familiar C-style expressions with `define`, `let`, `if/else`, `while`, `for`, `{ blocks }`
 - **First-class functions** — closures, higher-order functions, `map`, `filter`, `fold`
+- **Reactive programming** — signals, computed values, effects, scopes, async resources
 - **Continuations** — `callcc`, serializable to bytes for checkpointing and migration
 - **Green threads** — cooperative multitasking with fuel-based VM scheduling
 - **Thread pool** — true OS-level parallelism with worker threads, futures, and channels
@@ -156,6 +157,7 @@ x--;                  // decrement
 | Category   | Operators                          |
 |------------|------------------------------------|
 | Arithmetic | `+`  `-`  `*`  `/`  `%`  `**`     |
+| String     | `++` (concatenation)               |
 | Comparison | `==`  `!=`  `<`  `>`  `<=`  `>=`  |
 | Logical    | `&&`  `\|\|`  `!`                  |
 | Bitwise    | `&`  `\|`  `~`  `<<`  `>>`        |
@@ -165,6 +167,7 @@ Operators are first-class values — pass them to higher-order functions:
 ```
 fold(+, 0, [1, 2, 3, 4, 5]);    // => 15
 apply(*, [3, 4, 5]);             // => 60
+fold(++, "", ["a", "b", "c"]);   // => "abc"
 define ops = [+, -, *];
 car(ops);                        // => + (the function)
 ```
@@ -307,7 +310,7 @@ apply(+, [3, 4]);                              // => 7
 try
     risky_operation()
 catch(err)
-    print(cat("Error: ", err));
+    print("Error: " ++ err);
 ```
 
 ### Continuations
@@ -382,6 +385,7 @@ include("library.scm");
 Use backtick identifiers to call any chibi-scheme function:
 
 ```
+"hello" ++ " " ++ "world";                // => "hello world" (or use backtick:)
 `string-append`("hello", " ", "world");   // => "hello world"
 `number->string`(42);                      // => "42"
 `list->vector`([1, 2, 3]);                // => #[1, 2, 3]
@@ -426,173 +430,211 @@ Serialize a captured continuation to bytes.
 
 Restore a continuation from bytes. The continuation is callable.
 
-## Green threads
+## Continuations
 
-Eval includes cooperative green threads powered by chibi-scheme's fuel-based VM scheduler. Threads yield control after a quantum of VM instructions, enabling concurrent programming with continuations:
+First-class, serializable continuations — capture "the rest of the computation" and resume later:
 
 ```
-// Cooperative scheduler
-spawn(function() {
+// Early exit
+callcc(function(exit) {
     define i = 0;
-    while(i < 3) { print(cat("A:", i)); yield(); i++; };
+    while(i < 100) {
+        if(i == 5) exit(i);
+        i++;
+    };
 });
-spawn(function() {
-    define i = 0;
-    while(i < 3) { print(cat("B:", i)); yield(); i++; };
-});
-run();
-// Output interleaved: A:0, B:0, A:1, B:1, A:2, B:2
+// => 5
+
+// Save and resume
+define saved = false;
+define result = callcc(function(k) { saved = k; "first"; });
+saved("second");    // result is now "second"
 ```
 
-Continuations can be frozen mid-execution, serialized to bytes, and resumed later — even in a different process:
+Continuations can be serialized to bytes and restored in a different process:
 
 ```python
 e = Eval()
-e.eval("...")  # capture continuation mid-thread
-data = e.serialize_continuation(e["frozen_k"])
+e.eval("define k = callcc(function(k) k);")
+data = e.serialize_continuation(e["k"])
 
-# Later, possibly different process:
 e2 = Eval()
 k = e2.deserialize_continuation(data)
-e2.eval("k();")  # resumes exactly where it left off
+e2.eval('k("resumed");')    # resumes where captured
 ```
 
-See [`examples/green_threads/`](examples/green_threads/) for complete demos.
+## Green threads and async/await
+
+Cooperative green threads with fuel-based VM scheduling, plus async/await sugar:
+
+```
+// Lightweight async tasks
+define a = async fib(10);
+define b = async fib(12);
+[await(a), await(b)];    // => [55, 144]
+
+// SRFI-18 threads with shared state
+define counter = 0;
+define m = make_mutex();
+define inc = function() {
+    for(let i = 0, i < 50, i++) {
+        mutex_lock(m);
+        counter += 1;
+        mutex_unlock(m);
+    };
+};
+define t1 = make_thread(inc);
+define t2 = make_thread(inc);
+thread_start(t1); thread_start(t2);
+thread_join(t1); thread_join(t2);
+counter;    // => 100
+```
+
+See [`examples/green_threads/`](examples/green_threads/) for complete demos, [THREADS.md](THREADS.md) for the full green threads and continuations guide, and [ASYNC.md](ASYNC.md) for the async programming guide.
+
+## Reactive programming
+
+Fine-grained reactivity with automatic dependency tracking — signals hold state, computed values derive from signals, and effects run side effects when dependencies change:
+
+```
+define count = Signal(0);
+define doubled = Computed(function() count() * 2);
+
+Effect(function() {
+    display("doubled is ");
+    display(doubled());
+    newline();
+});
+// prints: doubled is 0
+
+count->set(5);
+// prints: doubled is 10
+```
+
+### Signals, Computed, Effects
+
+```
+define name = Signal("world");
+define greeting = Computed(function() "Hello, " ++ name() ++ "!");
+
+greeting();          // => "Hello, world!"
+name->set("Eval");
+greeting();          // => "Hello, Eval!"
+
+// Effects react to changes automatically
+Effect(function() print(greeting()));
+
+// Batch multiple updates into a single flush
+batch(function() {
+    count->set(1);
+    name->set("test");
+});
+// Effects fire once after all updates
+```
+
+### Derived utilities
+
+```
+// Watch: callback on changes with old/new values
+define w = watch(count, function(new_val, old_val) {
+    print("count: " ++ `number->string`(old_val) ++ " -> " ++ `number->string`(new_val));
+});
+
+// Readonly: expose a signal without write access
+define public_count = readonly(count);
+public_count();          // => 0  (reading works)
+public_count->set(5);    // ERROR: readonly: cannot set
+
+// Reduce: accumulate over signal changes
+define total = reduce(count, function(acc, v) acc + v, 0);
+
+// Scope: ownership group — dispose all children at once
+define sc = scope(function() {
+    define a = Signal(1);
+    define b = Computed(function() a() * 2);
+    Effect(function() display(b()));
+});
+dispose(sc);    // disposes a, b, and the effect
+```
+
+### Custom equality, combine, select, prev
+
+```
+// Custom equality — only propagate when truly different
+define pos = Signal([0, 0], function(a, b) car(a) == car(b) && cadr(a) == cadr(b));
+
+// Combine multiple signals
+define full = combine([first, last], function(f, l) f ++ " " ++ l);
+
+// Select a slice with fine-grained updates
+define x = select(point, function(p) car(p));
+
+// Track previous value
+define p = prev(count);
+```
+
+### Async resource
+
+Fetch data asynchronously with green threads — re-fetches when the source changes:
+
+```
+define userId = Signal(1);
+define user = resource(userId, function(id) load_user(id));
+
+user->settle();          // wait for fetch
+user();                  // => user data
+user->loading;           // => false
+
+userId->set(2);          // triggers re-fetch
+user->settle();
+user();                  // => new user data
+```
+
+See [REACTIVE.md](REACTIVE.md) for the full reactive programming guide, and [INTRO.md](INTRO.md) for the complete language reference.
 
 ## Thread pool
 
-`EvalPool` provides true OS-level parallelism with a pool of worker threads, each running an independent chibi-scheme VM. Workers communicate through named channels.
+True OS-level parallelism with worker threads, each running an independent chibi-scheme VM. Workers communicate through channels and futures. Closures can be serialized across thread boundaries.
+
+### Pure-Eval API (OO)
+
+```
+// Pool with RAII — auto-shutdown on scope exit
+define result = with(pool = Pool(4)) {
+    define f1 = pool->submit("10 * 10;");
+    define f2 = pool->submit("20 + 5;");
+    await(f1) + await(f2);
+};
+result;    // => 125
+
+// Channels
+{
+    with(pool = Pool(2));
+    with(ch = pool->channel("data"));
+    ch->send("hello");
+    ch->recv();    // => "hello"
+};
+
+// Send closures (binary-serialized)
+define square = function(x) x * x;
+define pool = make_pool(2);
+future_result(pool_apply(pool, square, [7]));    // => 49
+pool_shutdown(pool);
+```
+
+### Python API
 
 ```python
 from chibi_eval import EvalPool
 
 with EvalPool(workers=4) as pool:
-    # Submit code for async execution — returns a future
-    f = pool.submit("define fib = function(n) if(n <= 1) n else fib(n-1) + fib(n-2); fib(30);")
-    print(f.result())  # => 832040
+    f = pool.submit("fold(+, 0, [1, 2, 3, 4, 5]);")
+    print(f.result())  # => 15
 
-    # Map over multiple tasks in parallel
-    results = pool.map([
-        "2 ** 10;",
-        "fold(+, 0, [1, 2, 3, 4, 5]);",
-        "map(function(x) x * x, [1, 2, 3]);",
-    ])
-    print(results)  # => [1024, 15, [1, 4, 9]]
-```
-
-### Channels
-
-Named channels allow workers to send and receive values. Data is automatically serialized across thread boundaries.
-
-```python
-with EvalPool(workers=3) as pool:
-    ch = pool.channel("results")
-
-    # Worker sends to channel
-    pool.submit('channel_send(results, 42);')
-
-    # Python receives from channel
+    ch = pool.channel("data")
+    pool.submit('channel_send(data, 42);')
     print(ch.recv())  # => 42
-
-    # Python sends, worker receives
-    input_ch = pool.channel("input")
-    input_ch.send(100)
-    f = pool.submit("define x = channel_recv(input); x * 2;")
-    print(f.result())  # => 200
 ```
-
-### Producer-consumer pipeline
-
-```python
-with EvalPool(workers=3) as pool:
-    pipe = pool.channel("pipe")
-    out = pool.channel("out")
-
-    # Producer: generate values
-    pool.submit("""
-        define i = 0;
-        while(i < 5) { i++; channel_send(pipe, i * i); };
-    """)
-
-    # Consumer: collect and sum
-    pool.submit("""
-        define total = 0; define count = 0; define val = 0;
-        while(count < 5) { val = channel_recv(pipe); total += val; count++; };
-        channel_send(out, total);
-    """)
-
-    print(out.recv())  # => 55 (1 + 4 + 9 + 16 + 25)
-```
-
-### Pure-Eval pool API
-
-Pools can be created and used entirely from Eval code — no Python required:
-
-```
-define pool = make_pool(4);
-define f = pool_submit(pool, "define fib = function(n) if(n <= 1) n else fib(n-1) + fib(n-2); fib(30);");
-future_result(f);            // => 832040
-pool_shutdown(pool);
-```
-
-Submit closures directly to workers with `pool_apply` — the function and arguments are binary-serialized across thread boundaries (no code strings):
-
-```
-define pool = make_pool(4);
-
-define square = function(x) x * x;
-define f = pool_apply(pool, square, [7]);
-future_result(f);            // => 49
-
-// Closures with captured state work too
-define make_adder = function(n) function(x) n + x;
-define add100 = make_adder(100);
-future_result(pool_apply(pool, add100, [23]));   // => 123
-
-// Workers can return closures back
-define multiplier = function(n) function(x) n * x;
-define triple = future_result(pool_apply(pool, multiplier, [3]));
-triple(10);                  // => 30
-
-pool_shutdown(pool);
-```
-
-Channels work across the main context and workers:
-
-```
-define pool = make_pool(2);
-define ch = pool_channel(pool, "data");
-
-// Send from main, receive in worker
-channel_send(ch, 42);
-define f = pool_submit(pool, "define x = channel_recv(data); x * 2;");
-future_result(f);            // => 84
-
-// Non-blocking receive
-channel_try_recv(ch);        // => false (empty)
-channel_send(ch, 99);
-channel_try_recv(ch);        // => (99) — one-element list
-
-// Check future without blocking
-define f2 = pool_submit(pool, "1 + 1;");
-future_ready?(f2);           // => true or false
-
-pool_shutdown(pool);
-```
-
-| Function | Description |
-|----------|-------------|
-| `make_pool(n)` | Create a pool with `n` worker threads |
-| `pool_submit(pool, code)` | Submit code string, returns a future |
-| `pool_apply(pool, fn, args)` | Submit a function with args (binary serialized), returns a future |
-| `pool_channel(pool, name)` | Get or create a named channel |
-| `future_result(f)` | Block until done, return result |
-| `future_ready?(f)` | Non-blocking: `true` if done, `false` otherwise |
-| `channel_send(ch, val)` | Send a value to a channel |
-| `channel_recv(ch)` | Blocking receive from a channel |
-| `channel_try_recv(ch)` | Non-blocking: `(value)` list or `false` |
-| `channel_close(ch)` | Close a channel |
-| `pool_shutdown(pool)` | Shut down all workers and free the pool |
 
 ### `EvalPool(workers=None, prelude=None)`
 
@@ -616,7 +658,9 @@ Block until the worker finishes, then return the result. Raises `EvalError` on f
 
 ### `channel.send(value)` / `channel.recv()` / `channel.try_recv()`
 
-Send or receive values through a channel. `recv()` blocks until a value is available. `try_recv()` returns `(ok, value)` without blocking — `ok` is `True` if a value was received. From Eval code, use `channel_send(ch, value)`, `channel_recv(ch)`, and `channel_try_recv(ch)`.
+Send or receive values through a channel. `recv()` blocks until a value is available. `try_recv()` returns `(ok, value)` without blocking — `ok` is `True` if a value was received.
+
+See [ASYNC.md](ASYNC.md) for the full async programming guide and [THREADS.md](THREADS.md) for the complete threads and continuations guide.
 
 ## Scheme-to-Eval transpiler
 
