@@ -211,7 +211,7 @@ expr(A) ::= expr(E) LPAREN arglist(L) RPAREN. {
 
 /* --- Postfix: member access --- */
 expr(A) ::= expr(E) ARROW member_name(M). {
-    A = sexp_list2(ctx, E,
+    A = sexp_list3(ctx, ps_intern(ctx, "__send__"), E,
         sexp_list2(ctx, ps_intern(ctx, "quote"),
                    ps_make_ident(ctx, M.start, M.length)));
 }

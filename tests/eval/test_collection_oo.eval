@@ -1,0 +1,189 @@
+test_begin("Collection OO Methods");
+
+// ============================================================
+// LIST PROPERTIES
+// ============================================================
+test("list length", 3, [1, 2, 3]->length);
+test_assert("list empty? false", !([1, 2]->empty?));
+test("list first", 1, [1, 2, 3]->first);
+test("list second", 2, [1, 2, 3]->second);
+test("list third", 3, [1, 2, 3]->third);
+test("list rest", [2, 3], [1, 2, 3]->rest);
+test("list last", 3, [1, 2, 3]->last);
+
+// ============================================================
+// LIST METHODS - element access
+// ============================================================
+test("list ref", 20, [10, 20, 30]->ref(1));
+test("list ref negative", 30, [10, 20, 30]->ref(-1));
+test("list slice", [20, 30], [10, 20, 30, 40]->slice(1, 3));
+
+// ============================================================
+// LIST METHODS - transformation
+// ============================================================
+test("list map", [2, 4, 6], [1, 2, 3]->map(function(x) x * 2));
+test("list filter", [2, 4], [1, 2, 3, 4]->filter(function(x) x % 2 == 0));
+test("list reject", [1, 3], [1, 2, 3, 4]->reject(function(x) x % 2 == 0));
+test("list reverse", [3, 2, 1], [1, 2, 3]->reverse());
+test("list flatten", [1, 2, 3, 4], [[1, 2], [3, 4]]->flatten());
+test("list unique", [1, 2, 3], [1, 2, 2, 3, 1]->unique());
+test("list copy", [1, 2, 3], [1, 2, 3]->copy());
+
+// ============================================================
+// LIST METHODS - folding
+// ============================================================
+test("list fold sum", 10, [1, 2, 3, 4]->fold(+, 0));
+test("list fold_right", [1, 2, 3], [1, 2, 3]->fold_right(function(x, acc) cons(x, acc), []));
+
+// ============================================================
+// LIST METHODS - searching
+// ============================================================
+test_assert("list any true", [1, 2, 3]->any(function(x) x > 2));
+test_assert("list any false", !([1, 2, 3]->any(function(x) x > 5)));
+test_assert("list every true", [2, 4, 6]->every(function(x) x % 2 == 0));
+test_assert("list every false", !([2, 3, 6]->every(function(x) x % 2 == 0)));
+test("list find", 3, [1, 2, 3, 4]->find(function(x) x > 2));
+test("list find none", false, [1, 2, 3]->find(function(x) x > 10));
+test("list count", 2, [1, 2, 3, 4]->count(function(x) x > 2));
+test("list index_of", 2, [10, 20, 30, 40]->index_of(function(x) x == 30));
+test("list index_of none", false, [10, 20, 30]->index_of(function(x) x == 99));
+test_assert("list contains true", [1, 2, 3]->contains(2));
+test_assert("list contains false", !([1, 2, 3]->contains(5)));
+
+// ============================================================
+// LIST METHODS - take/drop
+// ============================================================
+test("list take", [1, 2], [1, 2, 3, 4]->take(2));
+test("list drop", [3, 4], [1, 2, 3, 4]->drop(2));
+test("list take_while", [1, 2], [1, 2, 5, 3]->take_while(function(x) x < 4));
+test("list drop_while", [5, 3], [1, 2, 5, 3]->drop_while(function(x) x < 4));
+
+// ============================================================
+// LIST METHODS - sorting & combining
+// ============================================================
+test("list sort", [1, 2, 3], [3, 1, 2]->sort(<));
+test("list sort desc", [3, 2, 1], [3, 1, 2]->sort(>));
+test("list append", [1, 2, 3, 4], [1, 2]->append([3, 4]));
+test("list zip", [[1, "a"], [2, "b"]], [1, 2]->zip(["a", "b"]));
+test("list flat_map", [1, 1, 2, 2, 3, 3], [1, 2, 3]->flat_map(function(x) [x, x]));
+
+// ============================================================
+// LIST METHODS - partition
+// ============================================================
+define parts = [1, 2, 3, 4, 5]->partition(function(x) x % 2 == 0);
+test("partition evens", [2, 4], ref(parts, 0));
+test("partition odds", [1, 3, 5], ref(parts, 1));
+
+// ============================================================
+// LIST METHODS - join & conversion
+// ============================================================
+test("list join", "a,b,c", ["a", "b", "c"]->join(","));
+test("list join space", "hello world", ["hello", "world"]->join(" "));
+test("list join empty sep", "abc", ["a", "b", "c"]->join(""));
+test("list to_vector length", 3, [1, 2, 3]->to_vector()->length);
+
+// ============================================================
+// LIST METHODS - for_each side effects
+// ============================================================
+define sum = 0;
+[1, 2, 3]->for_each(function(x) { sum = sum + x; });
+test("list for_each side effect", 6, sum);
+
+// ============================================================
+// LIST CHAINING
+// ============================================================
+test("filter then map", [4, 8], [1, 2, 3, 4]->filter(function(x) x % 2 == 0)->map(function(x) x * 2));
+test("sort then take", [1, 2], [3, 1, 4, 2]->sort(<)->take(2));
+test("map then join", "2,4,6", [1, 2, 3]->map(function(x) `number->string`(x * 2))->join(","));
+
+// ============================================================
+// VECTOR PROPERTIES
+// ============================================================
+test("vector length", 3, #[1, 2, 3]->length);
+test("empty vector length", 0, #[]->length);
+test_assert("vector empty? false", !(#[1, 2]->empty?));
+test_assert("vector empty? true", #[]->empty?);
+test("vector first", 1, #[1, 2, 3]->first);
+test("vector second", 2, #[1, 2, 3]->second);
+test("vector third", 3, #[1, 2, 3]->third);
+test("vector last", 3, #[1, 2, 3]->last);
+test("vector rest", #[2, 3], #[1, 2, 3]->rest);
+
+// ============================================================
+// VECTOR METHODS - element access
+// ============================================================
+test("vector ref", 20, #[10, 20, 30]->ref(1));
+test("vector ref negative", 30, #[10, 20, 30]->ref(-1));
+
+// ============================================================
+// VECTOR METHODS - transformation
+// ============================================================
+test("vector map", #[2, 4, 6], #[1, 2, 3]->map(function(x) x * 2));
+test("vector filter", #[2, 4], #[1, 2, 3, 4]->filter(function(x) x % 2 == 0));
+test("vector reject", #[1, 3], #[1, 2, 3, 4]->reject(function(x) x % 2 == 0));
+test("vector reverse", #[3, 2, 1], #[1, 2, 3]->reverse());
+test("vector unique", #[1, 2, 3], #[1, 2, 2, 3, 1]->unique());
+test("vector copy", #[1, 2, 3], #[1, 2, 3]->copy());
+
+// ============================================================
+// VECTOR METHODS - folding & searching
+// ============================================================
+test("vector fold sum", 10, #[1, 2, 3, 4]->fold(+, 0));
+test_assert("vector any true", #[1, 2, 3]->any(function(x) x > 2));
+test_assert("vector any false", !(#[1, 2, 3]->any(function(x) x > 5)));
+test_assert("vector every true", #[2, 4, 6]->every(function(x) x % 2 == 0));
+test_assert("vector every false", !(#[2, 3, 6]->every(function(x) x % 2 == 0)));
+test("vector find", 3, #[1, 2, 3, 4]->find(function(x) x > 2));
+test("vector find none", false, #[1, 2, 3]->find(function(x) x > 10));
+test("vector count", 2, #[1, 2, 3, 4]->count(function(x) x > 2));
+test("vector index_of", 2, #[10, 20, 30, 40]->index_of(function(x) x == 30));
+test_assert("vector contains true", #[1, 2, 3]->contains(2));
+test_assert("vector contains false", !(#[1, 2, 3]->contains(5)));
+
+// ============================================================
+// VECTOR METHODS - sort & combine
+// ============================================================
+test("vector sort", #[1, 2, 3], #[3, 1, 2]->sort(<));
+test("vector append", #[1, 2, 3, 4], #[1, 2]->append(#[3, 4]));
+
+// ============================================================
+// VECTOR METHODS - conversion
+// ============================================================
+test("vector to_list", [1, 2, 3], #[1, 2, 3]->to_list());
+test("vector to_list then filter", [2, 3], #[1, 2, 3]->to_list()->filter(function(x) x > 1));
+
+// ============================================================
+// VECTOR METHODS - mutation
+// ============================================================
+define v = #[10, 20, 30];
+v->set(1, 99);
+test("vector set", 99, v->ref(1));
+
+// ============================================================
+// VECTOR METHODS - for_each
+// ============================================================
+define vsum = 0;
+#[1, 2, 3]->for_each(function(x) { vsum = vsum + x; });
+test("vector for_each side effect", 6, vsum);
+
+// ============================================================
+// VECTOR CHAINING
+// ============================================================
+test("to_list filter", [2, 3], #[1, 2, 3]->to_list()->filter(function(x) x > 1));
+
+// ============================================================
+// STRING OO STILL WORKS (backward compat)
+// ============================================================
+test("string upper", "HELLO", "hello"->upper());
+test("string length", 5, "hello"->length);
+test("string split", ["a", "b"], "a,b"->split(","));
+
+// ============================================================
+// INTERFACE/CALLABLE STILL WORKS (backward compat)
+// ============================================================
+define Point = constructor(x, y)
+    interface(x: function() x, y: function() y);
+define p = Point(3, 4);
+test("interface arrow", 3, p->x());
+
+test_end();

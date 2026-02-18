@@ -301,6 +301,12 @@ static sexp init_context(const char *extra_module_dir) {
         eval_load_eval_file(ctx, sexp_context_env(ctx), "eval/net-oo.eval");
     }
 
+    /* OO string methods: "hello"->upper(), etc. */
+    sexp_load_module_file(ctx, "eval/string-oo.scm", sexp_context_env(ctx));
+
+    /* OO list/vector methods: [1,2,3]->map(...), #[1,2]->length, etc. */
+    sexp_load_module_file(ctx, "eval/collection-oo.scm", sexp_context_env(ctx));
+
     return ctx;
 }
 

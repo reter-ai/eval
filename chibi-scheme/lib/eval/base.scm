@@ -55,3 +55,6 @@
 
 ;; Core aliases
 (define callcc call-with-current-continuation)
+
+;; OO dispatch: procedure? → direct call (backward compat), extended later for strings
+(define (__send__ obj msg) (obj msg))

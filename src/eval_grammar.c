@@ -2552,7 +2552,7 @@ static YYACTIONTYPE yy_reduce(
       case 36: /* expr ::= expr ARROW member_name */
 #line 213 "eval_grammar.y"
 {
-    yylhsminor.yy237 = sexp_list2(ctx, yymsp[-2].minor.yy237,
+    yylhsminor.yy237 = sexp_list3(ctx, ps_intern(ctx, "__send__"), yymsp[-2].minor.yy237,
         sexp_list2(ctx, ps_intern(ctx, "quote"),
                    ps_make_ident(ctx, yymsp[0].minor.yy186.start, yymsp[0].minor.yy186.length)));
 }

@@ -1188,6 +1188,14 @@ static void eval_standard_aliases(sexp ctx, sexp env) {
     sexp_load_module_file(ctx, "eval/async.scm", env);
     env = sexp_context_env(ctx);
 
+    /* OO string methods: "hello"->upper(), etc. */
+    sexp_load_module_file(ctx, "eval/string-oo.scm", env);
+    env = sexp_context_env(ctx);
+
+    /* OO list/vector methods: [1,2,3]->map(...), #[1,2]->length, etc. */
+    sexp_load_module_file(ctx, "eval/collection-oo.scm", env);
+    env = sexp_context_env(ctx);
+
     /* Abstract class support: global flag checked by abstract constructors */
     sexp_eval_string(ctx, "(define __abstract_ok__ #f)", -1, env);
 

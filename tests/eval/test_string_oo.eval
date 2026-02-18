@@ -1,0 +1,86 @@
+test_begin("String OO Methods");
+
+// Properties
+test("string length", 5, "hello"->length);
+test("empty string length", 0, ""->length);
+test_assert("empty? true", ""->empty?);
+test_assert("empty? false", !("hello"->empty?));
+
+// Case conversion
+test("upper", "HELLO", "hello"->upper());
+test("lower", "hello", "HELLO"->lower());
+test("upper chain", "hello", "hello"->upper()->lower());
+
+// Trimming
+test("trim", "hi", "  hi  "->trim());
+test("trim_start", "hi  ", "  hi  "->trim_start());
+test("trim_end", "  hi", "  hi  "->trim_end());
+test("trim chain", "hello", "  HELLO  "->trim()->lower());
+
+// Search
+test_assert("contains true", "hello world"->contains("world"));
+test_assert("contains false", !("hello"->contains("xyz")));
+test_assert("starts_with true", "hello"->starts_with("hel"));
+test_assert("starts_with false", !("hello"->starts_with("xyz")));
+test_assert("ends_with true", "hello"->ends_with("llo"));
+test_assert("ends_with false", !("hello"->ends_with("xyz")));
+test("index_of found", 2, "hello"->index_of("ll"));
+test("index_of not found", false, "hello"->index_of("xyz"));
+
+// Replace
+test("replace", "hello there", "hello world"->replace("world", "there"));
+test("replace multiple", "a-b-c", "aXbXc"->replace("X", "-"));
+
+// Split and join
+test("split", ["a", "b", "c"], "a,b,c"->split(","));
+test("join", "a,b,c", ","->join(["a", "b", "c"]));
+test("split join round-trip", "a,b,c", ","->join("a,b,c"->split(",")));
+
+// Reverse, repeat
+test("reverse", "cba", "abc"->reverse());
+test("repeat", "ababab", "ab"->repeat(3));
+
+// Characters
+test("chars length", 3, length("abc"->chars()));
+test_assert("char_at is char", `char?`("hello"->char_at(1)));
+test("char_at value", "e", `string`("hello"->char_at(1)));
+
+// Conversion
+test("to_number", 42, "42"->to_number());
+test_assert("to_symbol", `symbol?`("hello"->to_symbol()));
+
+// Slice
+test("slice", "hello", "hello world"->slice(0, 5));
+
+// Higher-order methods
+test("map", "HELLO", "hello"->map(function(ch) `char-upcase`(ch)));
+test("fold count a", 3, "banana"->fold(function(ch, n) if(`string`(ch) == "a") n + 1 else n, 0));
+test_assert("any has digit", "abc3def"->any(function(ch) `char-numeric?`(ch)));
+test_assert("any no digit", !("abcdef"->any(function(ch) `char-numeric?`(ch))));
+test_assert("every alpha", "hello"->every(function(ch) `char-alphabetic?`(ch)));
+test_assert("every not alpha", !("hello!"->every(function(ch) `char-alphabetic?`(ch))));
+test("count spaces", 2, "a b c"->count(function(ch) `string`(ch) == " "));
+test_assert("find digit", `char?`("ab3cd"->find(function(ch) `char-numeric?`(ch))));
+test("copy", "hello", "hello"->copy());
+
+// Chaining
+test("method chain", "HELLO WORLD", "  Hello World  "->trim()->upper());
+
+// Existing -> still works on interfaces
+define Point = constructor(x, y)
+    interface(x: function() x, y: function() y, sum: function() x + y);
+define p = Point(3, 4);
+test("interface arrow x", 3, p->x());
+test("interface arrow sum", 7, p->sum());
+
+// Existing -> still works on dicts
+define d = dict(name: "test", value: 42);
+test("dict arrow", "test", d->name);
+test("dict value", 42, d->value);
+
+// Existing -> still works on records
+record Vec(a, b);
+define v = Vec(1, 2);
+test("record arrow", 1, v->a);
+
+test_end();

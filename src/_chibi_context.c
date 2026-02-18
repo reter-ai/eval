@@ -309,6 +309,14 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
         self->env = sexp_context_env(self->ctx);
     }
 
+    /* OO string methods: "hello"->upper(), etc. */
+    sexp_load_module_file(self->ctx, "eval/string-oo.scm", self->env);
+    self->env = sexp_context_env(self->ctx);
+
+    /* OO list/vector methods: [1,2,3]->map(...), #[1,2]->length, etc. */
+    sexp_load_module_file(self->ctx, "eval/collection-oo.scm", self->env);
+    self->env = sexp_context_env(self->ctx);
+
     /* Abstract class support: global flag checked by abstract constructors */
     sexp_eval_string(self->ctx, "(define __abstract_ok__ #f)", -1, self->env);
 

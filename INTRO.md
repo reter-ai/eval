@@ -109,6 +109,20 @@ Out-of-range slice bounds are clamped (no error), but out-of-range indexing rais
 
 Slicing compiles to `(slice expr start end)` where omitted bounds are `#f`.
 
+### Arrow equivalents
+
+Lists and vectors also support OO-style element access via `->`, which mirrors bracket indexing:
+
+```
+[10, 20, 30]->first      // same as [10, 20, 30][0]
+[10, 20, 30]->second     // same as [10, 20, 30][1]
+[10, 20, 30]->last       // same as [10, 20, 30][-1]
+[10, 20, 30]->rest       // same as [10, 20, 30][1:]
+[10, 20, 30]->ref(1)     // same as [10, 20, 30][1]
+```
+
+Use brackets for computed indices and slicing. Use arrows for named access (`->first`, `->second`, `->rest`) that reads like field names. See [INDEXING.md](INDEXING.md) for a detailed comparison.
+
 ### Chained indexing
 
 Indexing is a postfix operator with the same precedence as function calls and `->`, so it chains naturally:
@@ -516,7 +530,7 @@ obj->x;       // => 10
 obj->sum();   // => 30
 ```
 
-The `->` operator sends a message: `obj->x` compiles to `(obj 'x)`.
+The `->` operator sends a message: `obj->x` compiles to `(__send__ obj 'x)`. Dispatch is type-based: lists get list methods (see [LISTS.md](LISTS.md)), vectors get vector methods (see [VECTORS.md](VECTORS.md)), strings get string methods (see [STRINGS.md](STRINGS.md)), and all other types (interfaces, constructors, records, dicts) are called directly.
 
 Under the hood, `interface(...)` becomes:
 
@@ -829,6 +843,138 @@ empty->size();   // => 0
 ### Field access vs method access
 
 Direct field access (`d->name`) returns the value if the key exists, or `#f` if not. The `get`, `set`, `delete`, `keys`, `values`, `has?`, `size`, and `to_list` names are reserved as methods and cannot be used as field names.
+
+## String Methods
+
+Strings support OO-style methods via the `->` operator:
+
+### Properties
+
+```
+"hello"->length;       // => 5
+""->empty?;            // => true
+```
+
+### Case, trimming, searching
+
+```
+"hello"->upper();                     // => "HELLO"
+"HELLO"->lower();                     // => "hello"
+"  hi  "->trim();                     // => "hi"
+"hello world"->contains("world");     // => true
+"hello"->starts_with("hel");          // => true
+"hello"->ends_with("llo");            // => true
+"hello"->index_of("ll");             // => 2
+```
+
+### Replace, split, join
+
+```
+"hello world"->replace("world", "there");  // => "hello there"
+"a,b,c"->split(",");                       // => ["a", "b", "c"]
+","->join(["a", "b", "c"]);                // => "a,b,c"
+```
+
+### Substrings and conversion
+
+```
+"hello world"->slice(0, 5);     // => "hello"
+"abc"->reverse();                // => "cba"
+"ab"->repeat(3);                 // => "ababab"
+"42"->to_number();               // => 42
+```
+
+### Chaining
+
+Methods return strings, so calls chain naturally:
+
+```
+"  Hello World  "->trim()->upper();              // => "HELLO WORLD"
+"  hello  "->trim()->upper()->reverse();          // => "OLLEH"
+title->trim()->lower()->replace(" ", "-");         // slug from title
+```
+
+See [STRINGS.md](STRINGS.md) for the complete reference with all methods.
+
+## List Methods
+
+Lists support OO-style methods via the `->` operator:
+
+### Properties
+
+```
+[1, 2, 3]->length;        // => 3
+[1, 2, 3]->first;         // => 1
+[1, 2, 3]->last;          // => 3
+[1, 2]->empty?;           // => false
+```
+
+### Transformation, searching, sorting
+
+```
+[1, 2, 3]->map(function(x) x * 2);            // => [2, 4, 6]
+[1, 2, 3, 4]->filter(function(x) x > 2);      // => [3, 4]
+[1, 2, 3, 4]->reject(function(x) x <= 2);     // => [3, 4]
+[3, 1, 2]->sort(<);                            // => [1, 2, 3]
+[1, 2, 3, 4]->fold(+, 0);                     // => 10
+[1, 2, 3]->any(function(x) x > 2);            // => true
+[1, 2, 3]->find(function(x) x > 2);           // => 3
+[1, 2, 3]->contains(2);                        // => true
+[1, 2, 3]->reverse();                          // => [3, 2, 1]
+[1, 2, 2, 3]->unique();                       // => [1, 2, 3]
+```
+
+### Taking, dropping, joining
+
+```
+[1, 2, 3, 4]->take(2);                         // => [1, 2]
+[1, 2, 3, 4]->drop(2);                         // => [3, 4]
+["a", "b", "c"]->join(",");                     // => "a,b,c"
+[1, 2]->append([3, 4]);                        // => [1, 2, 3, 4]
+[1, 2, 3]->to_vector();                        // => #[1, 2, 3]
+```
+
+### Chaining
+
+```
+[3, 1, 4, 2]->sort(<)->take(2)->map(function(x) x * 10);
+// => [10, 20]
+
+"Alice, Bob, Carol"->split(",")
+    ->map(function(s) s->trim()->upper())
+    ->join(" & ");
+// => "ALICE & BOB & CAROL"
+```
+
+See [LISTS.md](LISTS.md) for the complete reference with all 30+ methods.
+
+## Vector Methods
+
+Vectors (`#[1, 2, 3]`) support OO-style methods similar to lists, with O(1) indexing and length:
+
+```
+#[1, 2, 3]->length;                            // => 3
+#[]->empty?;                                    // => true
+#[1, 2, 3]->map(function(x) x * 2);           // => #[2, 4, 6]
+#[3, 1, 2]->sort(<);                           // => #[1, 2, 3]
+#[1, 2, 3]->filter(function(x) x > 1);        // => #[2, 3]
+#[1, 2, 3]->contains(2);                       // => true
+#[1, 2, 3]->to_list();                         // => [1, 2, 3]
+
+// In-place mutation
+define v = #[10, 20, 30];
+v->set(1, 99);
+v->ref(1);                                      // => 99
+```
+
+Converting to a list unlocks the full list method set:
+
+```
+#[1, 2, 3]->to_list()->flat_map(function(x) [x, x]);
+// => [1, 1, 2, 2, 3, 3]
+```
+
+See [VECTORS.md](VECTORS.md) for the complete reference with all 20+ methods.
 
 ## Include
 
@@ -1773,6 +1919,10 @@ See [NETWORKING.md](NETWORKING.md) for the full networking guide including low-l
 
 ## Further reading
 
+- [INDEXING.md](INDEXING.md) — Bracket indexing vs arrow properties: `xs[0]` vs `xs->first`, when to use which
+- [STRINGS.md](STRINGS.md) — String methods: upper, lower, trim, split, replace, contains, and more
+- [LISTS.md](LISTS.md) — List methods: map, filter, sort, fold, join, take, drop, and more
+- [VECTORS.md](VECTORS.md) — Vector methods: map, filter, sort, fold, set, to_list, and more
 - [NETWORKING.md](NETWORKING.md) — TCP sockets, HTTP client/server, OO wrappers, non-blocking I/O
 - [FILESYS.md](FILESYS.md) — File I/O, directory operations, metadata, path utilities
 - [ASYNC.md](ASYNC.md) — Async/await, thread pools, channels, pipelines

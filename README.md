@@ -31,6 +31,8 @@ e.eval("""
 - **Continuations** — `callcc`, serializable to bytes for checkpointing and migration
 - **Green threads** — cooperative multitasking with fuel-based VM scheduling
 - **Thread pool** — true OS-level parallelism with worker threads, futures, and channels
+- **String methods** — OO-style `"hello"->upper()`, `->trim()`, `->split(",")`, `->contains()`, chaining
+- **Collection methods** — OO-style `[1,2,3]->map(f)`, `->filter()`, `->sort(<)`, `->join(",")`, `#[1,2,3]->length`
 - **Networking** — TCP sockets, HTTP client/server with OO wrappers, RAII, and reactive signals
 - **Standalone CLI** — single binary, all scheme files embedded, runs anywhere with no dependencies
 - **Python interop** — call Python from Eval, call Eval from Python, share data bidirectionally
@@ -283,12 +285,15 @@ car(xs);                  // => 1
 cdr(xs);                  // => [2, 3, 4, 5]
 cons(0, xs);              // => [0, 1, 2, 3, 4, 5]
 
-// Indexing (lists, vectors, strings)
+// Indexing (lists, vectors, strings) — brackets or arrows
 xs[0];                    // => 1
+xs->first;                // => 1 (same thing)
 xs[-1];                   // => 5 (negative = from end)
+xs->last;                 // => 5 (same thing)
 xs[1:3];                  // => [2, 3] (slice, exclusive end)
 xs[:2];                   // => [1, 2]
-xs[2:];                   // => [3, 4, 5]
+xs[1:];                   // => [2, 3, 4, 5]
+xs->rest;                 // => [2, 3, 4, 5] (same as xs[1:])
 
 // Dotted pairs
 define pair = (1 .. 2);          // => (1 . 2)
@@ -308,6 +313,46 @@ define p = make_Point(3, 4);
 Point_x(p);               // => 3
 Point?(p);                 // => true
 ```
+
+### String methods
+
+Strings support OO-style methods via `->`:
+
+```
+"hello"->upper();                    // => "HELLO"
+"  hi  "->trim();                    // => "hi"
+"hello world"->contains("world");    // => true
+"hello world"->replace("world", "there");  // => "hello there"
+"a,b,c"->split(",");                // => ["a", "b", "c"]
+","->join(["a", "b", "c"]);         // => "a,b,c"
+"hello"->length;                     // => 5
+
+// Chaining
+"  Hello World  "->trim()->upper();  // => "HELLO WORLD"
+```
+
+See [STRINGS.md](STRINGS.md) for the full list of string properties and methods.
+
+### List and vector methods
+
+Lists and vectors also support OO-style methods via `->`:
+
+```
+[3, 1, 2]->sort(<);                           // => [1, 2, 3]
+[1, 2, 3, 4]->filter(function(x) x > 2);      // => [3, 4]
+[1, 2, 3]->map(function(x) x * 2);            // => [2, 4, 6]
+["a", "b", "c"]->join(",");                     // => "a,b,c"
+[1, 2, 3]->contains(2);                        // => true
+[1, 2, 3]->length;                              // => 3
+
+#[1, 2, 3]->map(function(x) x * x);           // => #[1, 4, 9]
+#[1, 2, 3]->to_list()->filter(function(x) x > 1);  // => [2, 3]
+
+// Chaining
+[3, 1, 4, 2]->sort(<)->take(2)->map(function(x) x * 10);  // => [10, 20]
+```
+
+See [LISTS.md](LISTS.md) and [VECTORS.md](VECTORS.md) for the full reference.
 
 ### Higher-order functions
 
@@ -535,7 +580,7 @@ thread_join(t1); thread_join(t2);
 counter;    // => 100
 ```
 
-See [`examples/green_threads/`](examples/green_threads/) for complete demos, [THREADS.md](THREADS.md) for the full green threads and continuations guide, [ASYNC.md](ASYNC.md) for the async programming guide, and [NETWORKING.md](NETWORKING.md) for the networking guide.
+See [`examples/green_threads/`](examples/green_threads/) for complete demos, [THREADS.md](THREADS.md) for the full green threads and continuations guide, [ASYNC.md](ASYNC.md) for the async programming guide, [NETWORKING.md](NETWORKING.md) for the networking guide, and [LISTS.md](LISTS.md)/[VECTORS.md](VECTORS.md) for collection methods.
 
 ## Reactive programming
 
@@ -734,7 +779,7 @@ Block until the worker finishes, then return the result. Raises `EvalError` on f
 
 Send or receive values through a channel. `recv()` blocks until a value is available. `try_recv()` returns `(ok, value)` without blocking — `ok` is `True` if a value was received.
 
-See [ASYNC.md](ASYNC.md) for the full async programming guide, [THREADS.md](THREADS.md) for the complete threads and continuations guide, [NETWORKING.md](NETWORKING.md) for TCP/HTTP networking, and [FILESYS.md](FILESYS.md) for filesystem operations.
+See [ASYNC.md](ASYNC.md) for the full async programming guide, [THREADS.md](THREADS.md) for the complete threads and continuations guide, [NETWORKING.md](NETWORKING.md) for TCP/HTTP networking, [FILESYS.md](FILESYS.md) for filesystem operations, and [LISTS.md](LISTS.md)/[VECTORS.md](VECTORS.md) for collection methods.
 
 ## Scheme-to-Eval transpiler
 

@@ -19,13 +19,6 @@
 
 // ===== Helpers =====
 
-// Find needle in str, return integer index or false.
-// (string_contains returns a cursor; this converts to int for substring use.)
-define string_index = function(str, needle) {
-    define cur = string_contains(str, needle);
-    if(cur) `string-cursor->index`(str, cur) else false;
-};
-
 define tcp_send = function(sock, str) {
     send(sock, string_to_utf8(str));
 };
@@ -50,13 +43,13 @@ define stats = Computed(function() {
 
 Effect(function() {
     define s = stats();
-    define count = car(s);
+    define count = s->first;
     when(count > 0) {
         display("[server] Requests: " ++ `number->string`(count)
-            ++ "  Active: " ++ `number->string`(car(cdr(s)))
-            ++ "  Errors: " ++ `number->string`(car(cdr(cdr(s))))
-            ++ "  Last: " ++ car(cdr(cdr(cdr(s))))
-            ++ " " ++ car(cdr(cdr(cdr(cdr(s))))));
+            ++ "  Active: " ++ `number->string`(s->ref(1))
+            ++ "  Errors: " ++ `number->string`(s->ref(2))
+            ++ "  Last: " ++ s->ref(3)
+            ++ " " ++ s->ref(4));
         newline();
     };
 });
@@ -64,18 +57,18 @@ Effect(function() {
 // ===== HTTP Parsing =====
 
 define parse_request = function(data) {
-    define header_end = string_index(data, "\r\n\r\n");
-    define headers_str = if(header_end) substring(data, 0, header_end) else data;
-    define body = if(header_end) substring(data, header_end + 4, `string-length`(data)) else "";
+    define header_end = data->index_of("\r\n\r\n");
+    define headers_str = if(header_end) data->slice(0, header_end) else data;
+    define body = if(header_end) data->slice(header_end + 4, data->length) else "";
 
-    define first_line_end = string_index(headers_str, "\r\n");
-    define request_line = if(first_line_end) substring(headers_str, 0, first_line_end) else headers_str;
+    define first_line_end = headers_str->index_of("\r\n");
+    define request_line = if(first_line_end) headers_str->slice(0, first_line_end) else headers_str;
 
-    define sp1 = string_index(request_line, " ");
-    define method = if(sp1) substring(request_line, 0, sp1) else "GET";
-    define rest = if(sp1) substring(request_line, sp1 + 1, `string-length`(request_line)) else "/";
-    define sp2 = string_index(rest, " ");
-    define path = if(sp2) substring(rest, 0, sp2) else rest;
+    define sp1 = request_line->index_of(" ");
+    define method = if(sp1) request_line->slice(0, sp1) else "GET";
+    define rest = if(sp1) request_line->slice(sp1 + 1, request_line->length) else "/";
+    define sp2 = rest->index_of(" ");
+    define path = if(sp2) rest->slice(0, sp2) else rest;
 
     [method, path, body];
 };
@@ -90,7 +83,7 @@ define send_response = function(sock, status, content_type, body) {
     );
     define response = "HTTP/1.0 " ++ `number->string`(status) ++ " " ++ status_text ++ "\r\n"
         ++ "Content-Type: " ++ content_type ++ "\r\n"
-        ++ "Content-Length: " ++ `number->string`(`string-length`(body)) ++ "\r\n"
+        ++ "Content-Length: " ++ `number->string`(body->length) ++ "\r\n"
         ++ "Connection: close\r\n"
         ++ "\r\n"
         ++ body;
@@ -109,11 +102,11 @@ define handle_count = function(method, path, body) {
 
 define handle_stats = function(method, path, body) {
     define s = stats();
-    define json = "{\"requests\":" ++ `number->string`(car(s))
-        ++ ",\"active\":" ++ `number->string`(car(cdr(s)))
-        ++ ",\"errors\":" ++ `number->string`(car(cdr(cdr(s))))
-        ++ ",\"last_method\":\"" ++ car(cdr(cdr(cdr(s))))
-        ++ "\",\"last_path\":\"" ++ car(cdr(cdr(cdr(cdr(s)))))
+    define json = "{\"requests\":" ++ `number->string`(s->first)
+        ++ ",\"active\":" ++ `number->string`(s->ref(1))
+        ++ ",\"errors\":" ++ `number->string`(s->ref(2))
+        ++ ",\"last_method\":\"" ++ s->ref(3)
+        ++ "\",\"last_path\":\"" ++ s->ref(4)
         ++ "\"}";
     [200, "application/json", json];
 };
@@ -132,18 +125,9 @@ define routes = [
 ];
 
 define find_route = function(method, path) {
-    define result = false;
-    define r = routes;
-    while(r != []) {
-        define route = car(r);
-        define route_method = car(route);
-        define route_path = car(cdr(route));
-        when((route_method == false || route_method == method) && route_path == path) {
-            result = car(cdr(cdr(route)));
-        };
-        r = cdr(r);
-    };
-    result;
+    define match = routes->find(function(route)
+        (route->first == false || route->first == method) && route->ref(1) == path);
+    if(match) match->ref(2) else false;
 };
 
 // ===== Connection handler (runs in its own green thread) =====
@@ -154,9 +138,9 @@ define handle_connection = function(conn) {
     try {
         define data = tcp_recv(conn, 8192);
         define parsed = parse_request(data);
-        define method = car(parsed);
-        define path = car(cdr(parsed));
-        define body = car(cdr(cdr(parsed)));
+        define method = parsed->first;
+        define path = parsed->ref(1);
+        define body = parsed->ref(2);
 
         // Check for shutdown
         if(method == "GET" && path == "/shutdown") {
@@ -173,9 +157,9 @@ define handle_connection = function(conn) {
                 };
             } else [404, "text/plain", "Not Found\n"];
 
-            define status = car(response);
-            define ctype = car(cdr(response));
-            define rbody = car(cdr(cdr(response)));
+            define status = response->first;
+            define ctype = response->ref(1);
+            define rbody = response->ref(2);
 
             send_response(conn, status, ctype, rbody);
             close_file_descriptor(conn);

@@ -5,21 +5,15 @@
 // Usage (low-level):
 //   include("examples/http_client.eval");
 //   define r = http_get("127.0.0.1", 8080, "/");
-//   display(car(r));        // status code
-//   display(car(cdr(r)));   // body
+//   display(r->first);       // status code
+//   display(r->ref(1));      // body
 //
 // Usage (OO — no include needed, HttpClient is built-in):
 //   with(client = HttpClient("127.0.0.1", 8080)) {
 //       define r = client->get("/");
-//       display(car(r));        // status code
-//       display(car(cdr(r)));   // body
+//       display(r->first);       // status code
+//       display(r->ref(1));      // body
 //   };
-
-// Find needle in str, return integer index or false.
-define string_index = function(str, needle) {
-    define cur = string_contains(str, needle);
-    if(cur) `string-cursor->index`(str, cur) else false;
-};
 
 // Connect to host:port, returns socket fileno
 define tcp_connect = function(host, port) {
@@ -48,36 +42,36 @@ define parse_response = function(sock) {
         define chunk = tcp_recv(sock, 4096);
         if(chunk == "") return [0, ""];
         buf = buf ++ chunk;
-        header_end = string_index(buf, "\r\n\r\n");
+        header_end = buf->index_of("\r\n\r\n");
     };
 
-    define headers_str = substring(buf, 0, header_end);
-    define body_start_data = substring(buf, header_end + 4, `string-length`(buf));
+    define headers_str = buf->slice(0, header_end);
+    define body_start_data = buf->slice(header_end + 4, buf->length);
 
     // Parse status from first line: "HTTP/1.0 200 OK"
-    define sp1 = string_index(headers_str, " ");
+    define sp1 = headers_str->index_of(" ");
     define status_str = if(sp1) {
-        define rest = substring(headers_str, sp1 + 1, `string-length`(headers_str));
-        define sp2 = string_index(rest, " ");
-        if(sp2) substring(rest, 0, sp2) else rest;
+        define rest = headers_str->slice(sp1 + 1, headers_str->length);
+        define sp2 = rest->index_of(" ");
+        if(sp2) rest->slice(0, sp2) else rest;
     } else "0";
-    define status = `string->number`(status_str);
+    define status = status_str->to_number();
 
     // Find Content-Length
     define content_length = 0;
-    define lower_headers = string_downcase_ascii(headers_str);
-    define cl_idx = string_index(lower_headers, "content-length: ");
+    define lower_headers = headers_str->lower();
+    define cl_idx = lower_headers->index_of("content-length: ");
     when(cl_idx) {
-        define after_cl = substring(headers_str, cl_idx + 16, `string-length`(headers_str));
-        define eol = string_index(after_cl, "\r\n");
-        define cl_str = if(eol) substring(after_cl, 0, eol) else after_cl;
-        content_length = `string->number`(cl_str);
+        define after_cl = headers_str->slice(cl_idx + 16, headers_str->length);
+        define eol = after_cl->index_of("\r\n");
+        define cl_str = if(eol) after_cl->slice(0, eol) else after_cl;
+        content_length = cl_str->to_number();
     };
 
     // Read remaining body
     define body = body_start_data;
-    while(`string-length`(body) < content_length) {
-        define chunk = tcp_recv(sock, content_length - `string-length`(body));
+    while(body->length < content_length) {
+        define chunk = tcp_recv(sock, content_length - body->length);
         if(chunk == "") return [status, body];
         body = body ++ chunk;
     };
@@ -103,7 +97,7 @@ define http_post = function(host, port, path, body) {
     define sock = tcp_connect(host, port);
     define request = "POST " ++ path ++ " HTTP/1.0\r\n"
         ++ "Host: " ++ host ++ "\r\n"
-        ++ "Content-Length: " ++ `number->string`(`string-length`(body)) ++ "\r\n"
+        ++ "Content-Length: " ++ `number->string`(body->length) ++ "\r\n"
         ++ "Content-Type: text/plain\r\n"
         ++ "Connection: close\r\n"
         ++ "\r\n"
