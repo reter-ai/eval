@@ -196,7 +196,14 @@ sexp sexp_write_uvector(sexp ctx, sexp self, sexp_sint_t n, sexp obj, sexp write
 sexp sexp_finalize_fileno (sexp ctx, sexp self, sexp_sint_t n, sexp fileno) {
   if (sexp_fileno_openp(fileno) && !sexp_fileno_no_closep(fileno)) {
     sexp_fileno_openp(fileno) = 0;
+#ifdef _WIN32
+    /* On Windows, socket handles must use closesocket(), not close().
+     * Try closesocket first; fall back to close for regular CRT fds. */
+    if (closesocket(sexp_fileno_fd(fileno)) == SOCKET_ERROR)
+      close(sexp_fileno_fd(fileno));
+#else
     close(sexp_fileno_fd(fileno));
+#endif
   }
   return SEXP_VOID;
 }

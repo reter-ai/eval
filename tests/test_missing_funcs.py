@@ -3,10 +3,6 @@ import pytest
 from chibi_eval import Eval
 
 
-@pytest.fixture
-def e():
-    return Eval()
-
 
 class TestSchemeBaseExtras:
     """Functions from (scheme base) extras."""

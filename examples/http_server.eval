@@ -1,63 +1,56 @@
-// http_server.eval — Reactive HTTP server using chibi/net
+// http_server.eval — Concurrent HTTP server with green threads
 //
-// Demonstrates: Signal, Computed, Effect, batch, chibi/net library
+// Demonstrates: Signal, Computed, Effect, batch, green threads, nonblocking I/O
+//
+// Each incoming connection is handled in its own green thread,
+// so the server can accept new connections while others are being served.
+// accept/send/recv are nonblocking — they yield to the scheduler on WOULDBLOCK.
 //
 // Usage:
 //   eval examples/http_server.eval
 //   Then visit http://localhost:8080/ in a browser
 //   GET /shutdown to stop the server
 
-// ===== Helper functions =====
+// ===== Helpers =====
 
-define string_index_of = function(str, needle, start) {
-    define str_len = `string-length`(str);
-    define needle_len = `string-length`(needle);
-    define result = -1;
-    define i = start;
-    while(i <= str_len - needle_len && result < 0) {
-        if(substring(str, i, i + needle_len) == needle) result = i
-        else i = i + 1;
-    };
-    result;
+// Find needle in str, return integer index or false.
+// (string_contains returns a cursor; this converts to int for substring use.)
+define string_index = function(str, needle) {
+    define cur = string_contains(str, needle);
+    if(cur) `string-cursor->index`(str, cur) else false;
 };
 
-define string_downcase = function(str) {
-    `string-map`(`char-downcase`, str);
-};
-
-// Send a string over a socket as bytes
 define tcp_send = function(sock, str) {
-    send(sock, `string->utf8`(str));
+    send(sock, string_to_utf8(str));
 };
 
-// Receive up to n bytes as a string
 define tcp_recv = function(sock, n) {
     define bv = recv(sock, n);
-    if(bv == false) "" else `utf8->string`(bv);
+    if(bv == false) "" else utf8_to_string(bv);
 };
 
 // ===== Reactive State =====
 
 define request_count = Signal(0);
+define active_conns = Signal(0);
 define last_path = Signal("");
 define last_method = Signal("");
 define error_count = Signal(0);
 
-// Derived state
 define stats = Computed(function() {
-    define count = request_count();
-    define errs = error_count();
-    [count, errs, last_method(), last_path()];
+    [request_count(), active_conns(), error_count(),
+     last_method(), last_path()];
 });
 
-// Logging effect
 Effect(function() {
     define s = stats();
     define count = car(s);
     when(count > 0) {
         display("[server] Requests: " ++ `number->string`(count)
-            ++ "  Errors: " ++ `number->string`(car(cdr(s)))
-            ++ "  Last: " ++ car(cdr(cdr(s))) ++ " " ++ car(cdr(cdr(cdr(s)))));
+            ++ "  Active: " ++ `number->string`(car(cdr(s)))
+            ++ "  Errors: " ++ `number->string`(car(cdr(cdr(s))))
+            ++ "  Last: " ++ car(cdr(cdr(cdr(s))))
+            ++ " " ++ car(cdr(cdr(cdr(cdr(s))))));
         newline();
     };
 });
@@ -65,20 +58,18 @@ Effect(function() {
 // ===== HTTP Parsing =====
 
 define parse_request = function(data) {
-    // Parse request line + headers + body from raw data string
-    define header_end = string_index_of(data, "\r\n\r\n", 0);
-    define headers_str = if(header_end >= 0) substring(data, 0, header_end) else data;
-    define body = if(header_end >= 0) substring(data, header_end + 4, `string-length`(data)) else "";
+    define header_end = string_index(data, "\r\n\r\n");
+    define headers_str = if(header_end) substring(data, 0, header_end) else data;
+    define body = if(header_end) substring(data, header_end + 4, `string-length`(data)) else "";
 
-    // Parse request line: "GET /path HTTP/1.x"
-    define first_line_end = string_index_of(headers_str, "\r\n", 0);
-    define request_line = if(first_line_end >= 0) substring(headers_str, 0, first_line_end) else headers_str;
+    define first_line_end = string_index(headers_str, "\r\n");
+    define request_line = if(first_line_end) substring(headers_str, 0, first_line_end) else headers_str;
 
-    define sp1 = string_index_of(request_line, " ", 0);
-    define method = if(sp1 >= 0) substring(request_line, 0, sp1) else "GET";
-    define rest = if(sp1 >= 0) substring(request_line, sp1 + 1, `string-length`(request_line)) else "/";
-    define sp2 = string_index_of(rest, " ", 0);
-    define path = if(sp2 >= 0) substring(rest, 0, sp2) else rest;
+    define sp1 = string_index(request_line, " ");
+    define method = if(sp1) substring(request_line, 0, sp1) else "GET";
+    define rest = if(sp1) substring(request_line, sp1 + 1, `string-length`(request_line)) else "/";
+    define sp2 = string_index(rest, " ");
+    define path = if(sp2) substring(rest, 0, sp2) else rest;
 
     [method, path, body];
 };
@@ -113,9 +104,10 @@ define handle_count = function(method, path, body) {
 define handle_stats = function(method, path, body) {
     define s = stats();
     define json = "{\"requests\":" ++ `number->string`(car(s))
-        ++ ",\"errors\":" ++ `number->string`(car(cdr(s)))
-        ++ ",\"last_method\":\"" ++ car(cdr(cdr(s)))
-        ++ "\",\"last_path\":\"" ++ car(cdr(cdr(cdr(s))))
+        ++ ",\"active\":" ++ `number->string`(car(cdr(s)))
+        ++ ",\"errors\":" ++ `number->string`(car(cdr(cdr(s))))
+        ++ ",\"last_method\":\"" ++ car(cdr(cdr(cdr(s))))
+        ++ "\",\"last_path\":\"" ++ car(cdr(cdr(cdr(cdr(s)))))
         ++ "\"}";
     [200, "application/json", json];
 };
@@ -148,7 +140,55 @@ define find_route = function(method, path) {
     result;
 };
 
-// ===== Server Loop =====
+// ===== Connection handler (runs in its own green thread) =====
+
+define handle_connection = function(conn) {
+    active_conns->update(function(n) n + 1);
+
+    try {
+        define data = tcp_recv(conn, 8192);
+        define parsed = parse_request(data);
+        define method = car(parsed);
+        define path = car(cdr(parsed));
+        define body = car(cdr(cdr(parsed)));
+
+        // Check for shutdown
+        if(method == "GET" && path == "/shutdown") {
+            send_response(conn, 200, "text/plain", "Shutting down\n");
+            close_file_descriptor(conn);
+            running->set(false);
+        } else {
+            define handler = find_route(method, path);
+            define response = if(handler != false) {
+                try handler(method, path, body)
+                catch(err) {
+                    error_count->update(function(n) n + 1);
+                    [500, "text/plain", "Internal Server Error\n"];
+                };
+            } else [404, "text/plain", "Not Found\n"];
+
+            define status = car(response);
+            define ctype = car(cdr(response));
+            define rbody = car(cdr(cdr(response)));
+
+            send_response(conn, status, ctype, rbody);
+            close_file_descriptor(conn);
+
+            batch(function() {
+                request_count->update(function(n) n + 1);
+                last_method->set(method);
+                last_path->set(path);
+            });
+        };
+    } catch(err) {
+        error_count->update(function(n) n + 1);
+        try close_file_descriptor(conn) catch(e) false;
+    };
+
+    active_conns->update(function(n) n - 1);
+};
+
+// ===== Accept loop =====
 
 define port = 8080;
 define running = Signal(true);
@@ -158,47 +198,12 @@ define listener = make_listener_socket(ai);
 display("[server] Listening on port " ++ `number->string`(port));
 newline();
 
+// Main loop: accept is nonblocking (yields to green thread scheduler).
+// Each connection is dispatched to a green thread immediately.
 while(running()) {
     define sa = make_sockaddr();
     define conn = accept(listener, sa, 16);
-
-    // Receive request data
-    define data = tcp_recv(conn, 8192);
-    define parsed = parse_request(data);
-    define method = car(parsed);
-    define path = car(cdr(parsed));
-    define body = car(cdr(cdr(parsed)));
-
-    // Check for shutdown
-    if(method == "GET" && path == "/shutdown") {
-        send_response(conn, 200, "text/plain", "Shutting down\n");
-        close_file_descriptor(conn);
-        running->set(false);
-    } else {
-        // Dispatch to route handler
-        define handler = find_route(method, path);
-        define response = if(handler != false) {
-            try handler(method, path, body)
-            catch(err) {
-                error_count->update(function(n) n + 1);
-                [500, "text/plain", "Internal Server Error\n"];
-            };
-        } else [404, "text/plain", "Not Found\n"];
-
-        define status = car(response);
-        define ctype = car(cdr(response));
-        define rbody = car(cdr(cdr(response)));
-
-        send_response(conn, status, ctype, rbody);
-        close_file_descriptor(conn);
-
-        // Update reactive state
-        batch(function() {
-            request_count->update(function(n) n + 1);
-            last_method->set(method);
-            last_path->set(path);
-        });
-    };
+    thread_start(make_thread(function() handle_connection(conn)));
 };
 
 close_file_descriptor(listener);

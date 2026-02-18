@@ -9,10 +9,6 @@ import math
 from chibi_eval import Eval, EvalError
 
 
-@pytest.fixture
-def e():
-    return Eval()
-
 
 # ============================================================================
 # Chapter 1.1 — The Elements of Programming

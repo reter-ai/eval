@@ -6,10 +6,6 @@ import pytest
 from chibi_eval import Eval, EvalError, EvalSyntaxError
 
 
-@pytest.fixture
-def e():
-    return Eval()
-
 
 class TestArithmetic:
     def test_add(self, e):

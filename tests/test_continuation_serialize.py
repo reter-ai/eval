@@ -4,10 +4,6 @@ import pytest
 from chibi_eval import Eval, EvalError, ChibiSexp
 
 
-@pytest.fixture
-def e():
-    return Eval()
-
 
 class TestBasicRoundTrip:
     """Test basic serialize -> deserialize -> resume."""

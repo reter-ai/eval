@@ -2764,8 +2764,9 @@ sexp sexp_eval_op (sexp ctx, sexp self, sexp_sint_t n, sexp obj, sexp env) {
   tmp = sexp_context_child(ctx);
   sexp_context_child(ctx) = ctx2;
   res = sexp_exceptionp(ctx2) ? ctx2 : sexp_compile_op(ctx2, self, n, obj, env);
-  if (! sexp_exceptionp(res))
+  if (! sexp_exceptionp(res)) {
     res = sexp_apply(ctx2, res, SEXP_NULL);
+  }
   sexp_context_child(ctx) = tmp;
   sexp_context_params(ctx) = params;
   sexp_context_top(ctx) = top;

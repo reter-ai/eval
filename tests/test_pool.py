@@ -4,6 +4,8 @@ import time
 import pytest
 from chibi_eval import EvalPool, EvalError
 
+pytestmark = pytest.mark.slow
+
 
 class TestBasicSubmit:
     def test_simple_expression(self):

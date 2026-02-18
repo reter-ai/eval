@@ -1,0 +1,42 @@
+// Test nonblocking server in pool worker with eval client
+test_begin("Nonblocking Socket");
+
+define PORT = 18099;
+define pool = make_pool(1);
+define ch = pool_channel(pool, "ch");
+
+define server_code = "
+    define ai = get_address_info(\"0.0.0.0\", \"18099\");
+    define listener = make_listener_socket(ai);
+    channel_send(ch, \"ready\");
+    define sa = make_sockaddr();
+    define conn = accept(listener, sa, 16);
+    define bv = recv(conn, 4096);
+    define data = if(bv == false) \"\" else utf8_to_string(bv);
+    send(conn, string_to_utf8(\"HTTP/1.0 200 OK\\r\\nContent-Length: 2\\r\\n\\r\\nOK\"));
+    close_file_descriptor(conn);
+    close_file_descriptor(listener);
+    data;
+";
+
+define f = pool_submit(pool, server_code);
+channel_recv(ch);
+
+// Client
+define ai = get_address_info("127.0.0.1", `number->string`(PORT));
+define sock = socket(address_info_family(ai),
+                     address_info_socket_type(ai),
+                     address_info_protocol(ai));
+connect(sock, address_info_address(ai), address_info_address_length(ai));
+send(sock, string_to_utf8("HELLO"));
+define bv = recv(sock, 4096);
+define resp = if(bv == false) "" else utf8_to_string(bv);
+close_file_descriptor(sock);
+
+define server_data = future_result(f);
+pool_shutdown(pool);
+
+test("got response", true, `string-contains`(resp, "OK") != false);
+test("server saw data", true, `string-contains`(server_data, "HELLO") != false);
+
+test_end();

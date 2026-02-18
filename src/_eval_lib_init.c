@@ -170,6 +170,14 @@ void eval_init_all_libs(sexp ctx, sexp env) {
     sexp_init_scheme_time(ctx, SEXP_FALSE, 0, env);
     sexp_init_chibi_json(ctx, SEXP_FALSE, 0, env);
     sexp_init_chibi_ast(ctx, SEXP_FALSE, 0, env);
+
+    /* SRFI-18 interface: thread-yield!, thread-join!, thread-sleep!,
+     * mutex-lock!, mutex-unlock!, current-time, etc.
+     * Depends on: srfi18_threads (%thread-join!, %mutex-lock!, yield!),
+     *             scheme_time (get-time-of-day, make-timeval, timeval-seconds),
+     *             chibi_ast (%thread-interrupt!). */
+    sexp_load_module_file(ctx, "srfi/18/interface.scm", env);
+
     sexp_init_chibi_weak(ctx, SEXP_FALSE, 0, env);
     sexp_init_chibi_heap_stats(ctx, SEXP_FALSE, 0, env);
     sexp_init_chibi_disasm(ctx, SEXP_FALSE, 0, env);
@@ -612,4 +620,47 @@ void eval_init_all_libs(sexp ctx, sexp env) {
         }
     }
 #endif /* EVAL_HAVE_STUB_LIBS */
+
+    /* ----------------------------------------------------------------
+     * Eval-friendly underscore aliases for SRFI-18 (threads, mutexes,
+     * condition variables, time).  Always available (not stub-dependent).
+     * ---------------------------------------------------------------- */
+    {
+        static const char *aliases[][2] = {
+            /* threads */
+            {"make_thread",            "make-thread"},
+            {"thread_start",           "thread-start!"},
+            {"thread_join",            "thread-join!"},
+            {"thread_yield",           "thread-yield!"},
+            {"thread_sleep",           "thread-sleep!"},
+            {"thread_terminate",       "thread-terminate!"},
+            {"thread_name",            "thread-name"},
+            {"current_thread",         "current-thread"},
+            {"thread_specific",        "thread-specific"},
+            {"thread_specific_set",    "thread-specific-set!"},
+            /* mutexes */
+            {"make_mutex",             "make-mutex"},
+            {"mutex_lock",             "mutex-lock!"},
+            {"mutex_unlock",           "mutex-unlock!"},
+            {"mutex_name",             "mutex-name"},
+            {"mutex_specific",         "mutex-specific"},
+            {"mutex_specific_set",     "mutex-specific-set!"},
+            /* condition variables */
+            {"make_condvar",           "make-condition-variable"},
+            {"condvar_signal",         "condition-variable-signal!"},
+            {"condvar_broadcast",      "condition-variable-broadcast!"},
+            /* time */
+            {"current_time",           "current-time"},
+            {"time_to_seconds",        "time->seconds"},
+            {"seconds_to_time",        "seconds->time"},
+            {NULL, NULL}
+        };
+        for (int i = 0; aliases[i][0]; i++) {
+            sexp sym = sexp_intern(ctx, aliases[i][1], -1);
+            sexp val = sexp_env_ref(ctx, env, sym, SEXP_VOID);
+            if (val != SEXP_VOID)
+                sexp_env_define(ctx, env,
+                    sexp_intern(ctx, aliases[i][0], -1), val);
+        }
+    }
 }

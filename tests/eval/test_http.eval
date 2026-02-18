@@ -1,25 +1,13 @@
 test_begin("HTTP Server & Client");
 
-// ===== Client helper functions (main context) =====
+// ===== Client helpers (main context) =====
 
-// Helper: find substring position
-define string_index_of = function(str, needle, start) {
-    define str_len = `string-length`(str);
-    define needle_len = `string-length`(needle);
-    define result = -1;
-    define i = start;
-    while(i <= str_len - needle_len && result < 0) {
-        if(substring(str, i, i + needle_len) == needle) result = i
-        else i = i + 1;
-    };
-    result;
+// Find needle in str, return integer index or false.
+define string_index = function(str, needle) {
+    define cur = string_contains(str, needle);
+    if(cur) `string-cursor->index`(str, cur) else false;
 };
 
-define string_downcase = function(str) {
-    `string-map`(`char-downcase`, str);
-};
-
-// Connect to host:port using chibi/net
 define tcp_connect = function(host, port) {
     define ai = get_address_info(host, `number->string`(port));
     define sock = socket(address_info_family(ai),
@@ -30,42 +18,42 @@ define tcp_connect = function(host, port) {
 };
 
 define tcp_send = function(sock, str) {
-    send(sock, `string->utf8`(str));
+    send(sock, string_to_utf8(str));
 };
 
 define tcp_recv = function(sock, n) {
     define bv = recv(sock, n);
-    if(bv == false) "" else `utf8->string`(bv);
+    if(bv == false) "" else utf8_to_string(bv);
 };
 
 define parse_response = function(sock) {
     define buf = "";
-    define header_end = -1;
-    while(header_end < 0) {
+    define header_end = false;
+    while(!header_end) {
         define chunk = tcp_recv(sock, 4096);
         if(chunk == "") return [0, ""];
         buf = buf ++ chunk;
-        header_end = string_index_of(buf, "\r\n\r\n", 0);
+        header_end = string_index(buf, "\r\n\r\n");
     };
 
     define headers_str = substring(buf, 0, header_end);
     define body_start_data = substring(buf, header_end + 4, `string-length`(buf));
 
-    define sp1 = string_index_of(headers_str, " ", 0);
-    define status_str = if(sp1 >= 0) {
+    define sp1 = string_index(headers_str, " ");
+    define status_str = if(sp1) {
         define rest = substring(headers_str, sp1 + 1, `string-length`(headers_str));
-        define sp2 = string_index_of(rest, " ", 0);
-        if(sp2 >= 0) substring(rest, 0, sp2) else rest;
+        define sp2 = string_index(rest, " ");
+        if(sp2) substring(rest, 0, sp2) else rest;
     } else "0";
     define status = `string->number`(status_str);
 
     define content_length = 0;
-    define lower_headers = string_downcase(headers_str);
-    define cl_idx = string_index_of(lower_headers, "content-length: ", 0);
-    when(cl_idx >= 0) {
+    define lower_headers = string_downcase_ascii(headers_str);
+    define cl_idx = string_index(lower_headers, "content-length: ");
+    when(cl_idx) {
         define after_cl = substring(headers_str, cl_idx + 16, `string-length`(headers_str));
-        define eol = string_index_of(after_cl, "\r\n", 0);
-        define cl_str = if(eol >= 0) substring(after_cl, 0, eol) else after_cl;
+        define eol = string_index(after_cl, "\r\n");
+        define cl_str = if(eol) substring(after_cl, 0, eol) else after_cl;
         content_length = `string->number`(cl_str);
     };
 
@@ -106,7 +94,9 @@ define http_post = function(host, port, path, body) {
     result;
 };
 
-// ===== Server in pool worker =====
+// ===== Concurrent server in pool worker =====
+// The server uses green threads: accept loop spawns a thread per connection.
+// accept/send/recv are nonblocking — they yield to the scheduler on WOULDBLOCK.
 
 define PORT = 18080;
 define HOST = "127.0.0.1";
@@ -114,46 +104,39 @@ define HOST = "127.0.0.1";
 define pool = make_pool(1);
 define ready_ch = pool_channel(pool, "ready");
 
-// Server code — self-contained, runs in worker thread
-// Uses chibi/net: get_address_info, make_listener_socket, accept, send, receive, close_file_descriptor
 define server_code = "
     define port = 18080;
     define max_requests = 6;
+    define request_count = 0;
+    define accepted = 0;
 
-    define string_index_of = function(str, needle, start) {
-        define str_len = `string-length`(str);
-        define needle_len = `string-length`(needle);
-        define result = -1;
-        define i = start;
-        while(i <= str_len - needle_len && result < 0) {
-            if(substring(str, i, i + needle_len) == needle) result = i
-            else i = i + 1;
-        };
-        result;
+    define string_index = function(str, needle) {
+        define cur = string_contains(str, needle);
+        if(cur) `string-cursor->index`(str, cur) else false;
     };
 
     define tcp_send = function(sock, str) {
-        send(sock, `string->utf8`(str));
+        send(sock, string_to_utf8(str));
     };
 
     define tcp_recv = function(sock, n) {
         define bv = recv(sock, n);
-        if(bv == false) \"\" else `utf8->string`(bv);
+        if(bv == false) \"\" else utf8_to_string(bv);
     };
 
     define parse_request = function(data) {
-        define header_end = string_index_of(data, \"\\r\\n\\r\\n\", 0);
-        define headers_str = if(header_end >= 0) substring(data, 0, header_end) else data;
-        define body = if(header_end >= 0) substring(data, header_end + 4, `string-length`(data)) else \"\";
+        define header_end = string_index(data, \"\\r\\n\\r\\n\");
+        define headers_str = if(header_end) substring(data, 0, header_end) else data;
+        define body = if(header_end) substring(data, header_end + 4, `string-length`(data)) else \"\";
 
-        define first_line_end = string_index_of(headers_str, \"\\r\\n\", 0);
-        define request_line = if(first_line_end >= 0) substring(headers_str, 0, first_line_end) else headers_str;
+        define first_line_end = string_index(headers_str, \"\\r\\n\");
+        define request_line = if(first_line_end) substring(headers_str, 0, first_line_end) else headers_str;
 
-        define sp1 = string_index_of(request_line, \" \", 0);
-        define method = if(sp1 >= 0) substring(request_line, 0, sp1) else \"GET\";
-        define rest = if(sp1 >= 0) substring(request_line, sp1 + 1, `string-length`(request_line)) else \"/\";
-        define sp2 = string_index_of(rest, \" \", 0);
-        define path = if(sp2 >= 0) substring(rest, 0, sp2) else rest;
+        define sp1 = string_index(request_line, \" \");
+        define method = if(sp1) substring(request_line, 0, sp1) else \"GET\";
+        define rest = if(sp1) substring(request_line, sp1 + 1, `string-length`(request_line)) else \"/\";
+        define sp2 = string_index(rest, \" \");
+        define path = if(sp2) substring(rest, 0, sp2) else rest;
 
         [method, path, body];
     };
@@ -173,43 +156,58 @@ define server_code = "
         tcp_send(conn, header ++ body);
     };
 
-    define request_count = 0;
+    // Connection handler — runs in its own green thread
+    define handle_connection = function(conn) {
+        try {
+            define data = tcp_recv(conn, 4096);
+            define parsed = parse_request(data);
+            define method = car(parsed);
+            define path = car(cdr(parsed));
+            define body = car(cdr(cdr(parsed)));
 
+            request_count = request_count + 1;
+
+            cond(
+                method == \"GET\" && path == \"/\":
+                    send_response(conn, 200, \"text/plain\", \"Welcome to Eval HTTP Server\"),
+                method == \"GET\" && path == \"/api/count\":
+                    send_response(conn, 200, \"text/plain\", `number->string`(request_count)),
+                method == \"GET\" && path == \"/api/stats\": {
+                    define json = \"{\\\"requests\\\":\" ++ `number->string`(request_count)
+                        ++ \",\\\"last_path\\\":\\\"\" ++ path ++ \"\\\"}\";
+                    send_response(conn, 200, \"application/json\", json);
+                },
+                method == \"POST\" && path == \"/api/echo\":
+                    send_response(conn, 200, \"text/plain\", body),
+                else:
+                    send_response(conn, 404, \"text/plain\", \"Not Found\")
+            );
+
+            close_file_descriptor(conn);
+        } catch(err) {
+            try close_file_descriptor(conn) catch(e) false;
+        };
+
+    };
+
+    // Accept loop with green threads
     define ai = get_address_info(\"0.0.0.0\", `number->string`(port));
     define listener = make_listener_socket(ai);
     channel_send(ready, true);
 
-    define served = 0;
-    while(served < max_requests) {
+    define threads = [];
+    while(accepted < max_requests) {
         define sa = make_sockaddr();
         define conn = accept(listener, sa, 16);
-        define data = tcp_recv(conn, 4096);
-        define parsed = parse_request(data);
-        define method = car(parsed);
-        define path = car(cdr(parsed));
-        define body = car(cdr(cdr(parsed)));
-
-        request_count = request_count + 1;
-
-        cond(
-            method == \"GET\" && path == \"/\":
-                send_response(conn, 200, \"text/plain\", \"Welcome to Eval HTTP Server\"),
-            method == \"GET\" && path == \"/api/count\":
-                send_response(conn, 200, \"text/plain\", `number->string`(request_count)),
-            method == \"GET\" && path == \"/api/stats\": {
-                define json = \"{\\\"requests\\\":\" ++ `number->string`(request_count)
-                    ++ \",\\\"last_path\\\":\\\"\" ++ path ++ \"\\\"}\";
-                send_response(conn, 200, \"application/json\", json);
-            },
-            method == \"POST\" && path == \"/api/echo\":
-                send_response(conn, 200, \"text/plain\", body),
-            else:
-                send_response(conn, 404, \"text/plain\", \"Not Found\")
-        );
-
-        close_file_descriptor(conn);
-        served = served + 1;
+        accepted = accepted + 1;
+        // Spawn green thread for each connection
+        define t = make_thread(function() handle_connection(conn));
+        thread_start(t);
+        threads = cons(t, threads);
     };
+
+    // Wait for all handler threads to finish
+    `for-each`(thread_join, threads);
 
     close_file_descriptor(listener);
     \"server done\";
@@ -245,7 +243,7 @@ test("GET /unknown 404", 404, car(r4));
 define r5 = http_get(HOST, PORT, "/api/stats");
 test("GET /api/stats status", 200, car(r5));
 define stats_body = car(cdr(r5));
-test("stats has requests", true, string_index_of(stats_body, "requests", 0) >= 0);
+test("stats has requests", true, string_index(stats_body, "requests") != false);
 
 // Test 6: GET /api/count again -> should be 6 now (6th request)
 define r6 = http_get(HOST, PORT, "/api/count");

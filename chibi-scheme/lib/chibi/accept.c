@@ -46,7 +46,9 @@ sexp sexp_sendto (sexp ctx, sexp self, int sock, const void* buffer, size_t len,
     f = sexp_global(ctx, SEXP_G_THREADS_BLOCKER);
     if (sexp_applicablep(f)) {
       sexp_apply2(ctx, f, sexp_make_fixnum(sock), timeout);
-      return sexp_global(ctx, SEXP_G_IO_BLOCK_ONCE_ERROR);
+      return sexp_not(timeout)
+        ? sexp_global(ctx, SEXP_G_IO_BLOCK_ERROR)
+        : sexp_global(ctx, SEXP_G_IO_BLOCK_ONCE_ERROR);
     }
   }
 #endif
@@ -64,7 +66,9 @@ sexp sexp_recvfrom (sexp ctx, sexp self, int sock, void* buffer, size_t len, int
     f = sexp_global(ctx, SEXP_G_THREADS_BLOCKER);
     if (sexp_applicablep(f)) {
       sexp_apply2(ctx, f, sexp_make_fixnum(sock), timeout);
-      return sexp_global(ctx, SEXP_G_IO_BLOCK_ONCE_ERROR);
+      return sexp_not(timeout)
+        ? sexp_global(ctx, SEXP_G_IO_BLOCK_ERROR)
+        : sexp_global(ctx, SEXP_G_IO_BLOCK_ONCE_ERROR);
     }
   }
 #endif

@@ -1,8 +1,6 @@
 // http_client.eval — HTTP client helper functions using chibi/net
 //
-// Provides: http_get, http_post, parse_response
-//
-// Requires: chibi/net (make-listener-socket, accept, send, receive, etc.)
+// Provides: http_get, http_post
 //
 // Usage:
 //   include("examples/http_client.eval");
@@ -10,22 +8,10 @@
 //   display(car(r));        // status code
 //   display(car(cdr(r)));   // body
 
-// Helper: find substring position (returns -1 if not found)
-define string_index_of = function(str, needle, start) {
-    define str_len = `string-length`(str);
-    define needle_len = `string-length`(needle);
-    define result = -1;
-    define i = start;
-    while(i <= str_len - needle_len && result < 0) {
-        if(substring(str, i, i + needle_len) == needle) result = i
-        else i = i + 1;
-    };
-    result;
-};
-
-// Helper: lowercase a string
-define string_downcase = function(str) {
-    `string-map`(`char-downcase`, str);
+// Find needle in str, return integer index or false.
+define string_index = function(str, needle) {
+    define cur = string_contains(str, needle);
+    if(cur) `string-cursor->index`(str, cur) else false;
 };
 
 // Connect to host:port, returns socket fileno
@@ -38,54 +24,50 @@ define tcp_connect = function(host, port) {
     sock;
 };
 
-// Send a string over a socket
 define tcp_send = function(sock, str) {
-    send(sock, `string->utf8`(str));
+    send(sock, string_to_utf8(str));
 };
 
-// Receive up to n bytes as a string
 define tcp_recv = function(sock, n) {
     define bv = recv(sock, n);
-    if(bv == false) "" else `utf8->string`(bv);
+    if(bv == false) "" else utf8_to_string(bv);
 };
 
-// Receive a complete HTTP response by reading headers first,
-// then reading exactly Content-Length bytes of body.
+// Read a complete HTTP response: headers then Content-Length bytes of body.
 define parse_response = function(sock) {
-    // Read all headers in chunks until we find \r\n\r\n
     define buf = "";
-    define header_end = -1;
-    while(header_end < 0) {
+    define header_end = false;
+    while(!header_end) {
         define chunk = tcp_recv(sock, 4096);
         if(chunk == "") return [0, ""];
         buf = buf ++ chunk;
-        header_end = string_index_of(buf, "\r\n\r\n", 0);
+        header_end = string_index(buf, "\r\n\r\n");
     };
 
     define headers_str = substring(buf, 0, header_end);
     define body_start_data = substring(buf, header_end + 4, `string-length`(buf));
 
     // Parse status from first line: "HTTP/1.0 200 OK"
-    define sp1 = string_index_of(headers_str, " ", 0);
-    define status_str = if(sp1 >= 0) {
+    define sp1 = string_index(headers_str, " ");
+    define status_str = if(sp1) {
         define rest = substring(headers_str, sp1 + 1, `string-length`(headers_str));
-        define sp2 = string_index_of(rest, " ", 0);
-        if(sp2 >= 0) substring(rest, 0, sp2) else rest;
+        define sp2 = string_index(rest, " ");
+        if(sp2) substring(rest, 0, sp2) else rest;
     } else "0";
     define status = `string->number`(status_str);
 
-    // Find Content-Length in headers
+    // Find Content-Length
     define content_length = 0;
-    define lower_headers = string_downcase(headers_str);
-    define cl_idx = string_index_of(lower_headers, "content-length: ", 0);
-    when(cl_idx >= 0) {
+    define lower_headers = string_downcase_ascii(headers_str);
+    define cl_idx = string_index(lower_headers, "content-length: ");
+    when(cl_idx) {
         define after_cl = substring(headers_str, cl_idx + 16, `string-length`(headers_str));
-        define eol = string_index_of(after_cl, "\r\n", 0);
-        define cl_str = if(eol >= 0) substring(after_cl, 0, eol) else after_cl;
+        define eol = string_index(after_cl, "\r\n");
+        define cl_str = if(eol) substring(after_cl, 0, eol) else after_cl;
         content_length = `string->number`(cl_str);
     };
 
-    // Read remaining body if needed
+    // Read remaining body
     define body = body_start_data;
     while(`string-length`(body) < content_length) {
         define chunk = tcp_recv(sock, content_length - `string-length`(body));

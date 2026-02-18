@@ -135,12 +135,12 @@ SEXP_API sexp_uint_t sexp_allocated_bytes (sexp ctx, sexp x) {
     return sexp_heap_align(1);
   t = sexp_object_type(ctx, x);
   res = sexp_type_size_of_object(t, x) + SEXP_GC_PAD;
-#if SEXP_USE_DEBUG_GC
   if (res == 0) {
+#if SEXP_USE_DEBUG_GC
     fprintf(stderr, SEXP_BANNER("%p zero-size object: %p (type tag: %d)"), ctx, x, sexp_pointer_tag(x));
-    return 1;
-  }
 #endif
+    return sexp_heap_align(1);
+  }
   return res;
 }
 
