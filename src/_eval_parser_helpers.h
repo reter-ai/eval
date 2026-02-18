@@ -43,6 +43,9 @@ sexp ps_make_for(sexp ctx, sexp init, sexp cond, sexp step, sexp body);
 /* Build do-until loop using letrec */
 sexp ps_make_do_until(sexp ctx, sexp body, sexp cond);
 
+/* Build do-while loop using letrec */
+sexp ps_make_do_while(sexp ctx, sexp body, sexp cond);
+
 /* Build (*throw 'break '()) */
 sexp ps_make_break(sexp ctx);
 

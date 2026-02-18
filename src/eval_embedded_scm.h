@@ -23,4 +23,8 @@ char *embedded_scm_extract(void);
 /* Remove the temp directory and all extracted files. */
 void embedded_scm_cleanup(char *tmpdir);
 
+/* Look up an embedded .scm file by relative path.
+ * Returns the file content (NUL-terminated) or NULL if not found. */
+const char *embedded_find_scm(const char *path);
+
 #endif /* EVAL_EMBEDDED_SCM_H */

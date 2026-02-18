@@ -114,13 +114,12 @@ class TestIOExtras:
         assert result == "hello"
 
     def test_read_u8(self, e):
-        # Use string port (bytevector ports need C extension)
-        result = e.eval('`read-u8`(`open-input-string`("A"));')
+        result = e.eval('`read-u8`(`open-input-bytevector`(`string->utf8`("A")));')
         assert result == 65
 
     def test_peek_u8(self, e):
         result = e.eval("""
-            let(p = `open-input-string`("AB")) {
+            let(p = `open-input-bytevector`(`string->utf8`("AB"))) {
                 define x = `peek-u8`(p);
                 define y = `read-u8`(p);
                 x == y;
@@ -130,10 +129,10 @@ class TestIOExtras:
 
     def test_write_u8(self, e):
         result = e.eval("""
-            let(p = `open-output-string`()) {
+            let(p = `open-output-bytevector`()) {
                 `write-u8`(65, p);
                 `write-u8`(66, p);
-                `get-output-string`(p);
+                `utf8->string`(`get-output-bytevector`(p));
             };
         """)
         assert result == "AB"

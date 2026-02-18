@@ -256,14 +256,28 @@ static int lex_ident(EvalLexer *lexer, EvalToken *token) {
     return 0;
 }
 
-/* Check if next non-whitespace char is an expression terminator.
-   Used to disambiguate unary operators from op-as-value. */
+/* Check if next non-whitespace is an expression terminator or a
+   continuation keyword (until, else, catch, finally, while).
+   Used to disambiguate ++ (PLUSPLUS vs CONCAT) and unary ops vs OPVAL. */
 static int peek_is_expr_terminator(EvalLexer *lexer) {
     const char *p = lexer->current;
     while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
     char c = *p;
-    return c == ',' || c == ')' || c == ']' || c == '}' ||
-           c == ';' || c == ':' || c == '\0';
+    if (c == ',' || c == ')' || c == ']' || c == '}' ||
+        c == ';' || c == ':' || c == '\0')
+        return 1;
+    /* Continuation keywords that follow an expression but can't start one.
+       Without this, "i++ until(...)" converts ++ to CONCAT. */
+#define KW_MATCH(s, n) (strncmp(p, s, n) == 0 && \
+    p[n] != '_' && (p[n] < 'A' || (p[n] > 'Z' && p[n] < 'a') || p[n] > 'z') \
+    && (p[n] < '0' || p[n] > '9'))
+    if (c == 'u' && KW_MATCH("until", 5))   return 1;
+    if (c == 'e' && KW_MATCH("else", 4))    return 1;
+    if (c == 'c' && KW_MATCH("catch", 5))   return 1;
+    if (c == 'f' && KW_MATCH("finally", 7)) return 1;
+    if (c == 'w' && KW_MATCH("while", 5))   return 1;
+#undef KW_MATCH
+    return 0;
 }
 
 /* Convert operators to OPVAL when in value position, update prev_ends_expr */

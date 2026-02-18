@@ -47,8 +47,4 @@ EVAL_POOL_API void   eval_channel_close(EvalChannel *ch);
 EVAL_POOL_API char  *eval_channel_recv_text(EvalChannel *ch, size_t *out_len);
 EVAL_POOL_API int    eval_channel_try_recv_text(EvalChannel *ch, char **data, size_t *out_len);
 
-/* Module path cache (set once from Python, used by workers) */
-EVAL_POOL_API void        eval_set_module_path(const char *path);
-EVAL_POOL_API const char *eval_get_module_path(void);
-
 #endif /* EVAL_POOL_H */

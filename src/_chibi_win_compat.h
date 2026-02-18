@@ -23,24 +23,28 @@
 #define O_NONBLOCK 0x0004
 #endif
 
-/* fcntl — sets non-blocking mode on sockets via ioctlsocket */
+/* fcntl — F_GETFL/F_SETFL for sockets via ioctlsocket.
+ * accept.c's sexp_bind/sexp_listen set O_NONBLOCK, and sexp_accept checks
+ * for WOULDBLOCK to yield to the green thread scheduler.  We translate
+ * F_SETFL O_NONBLOCK to ioctlsocket(FIONBIO).  F_GETFL returns 0 (can't
+ * query); this is fine because callers do `fcntl(fd,F_SETFL, fcntl(..)|O_NB)`
+ * which becomes `fcntl(fd,F_SETFL, O_NONBLOCK)`.
+ * For non-socket fds (FILE* filenos) ioctlsocket fails silently — harmless
+ * since sexp.c port code checks sexp_port_flags & O_NONBLOCK which stays 0. */
 #include <stdarg.h>
 static inline int fcntl(int fd, int cmd, ...) {
+    if (cmd == F_GETFL)
+        return 0;
     if (cmd == F_SETFL) {
         va_list ap;
         va_start(ap, cmd);
         int flags = va_arg(ap, int);
         va_end(ap);
-        if (flags & O_NONBLOCK) {
-            u_long mode = 1;
-            ioctlsocket((SOCKET)fd, FIONBIO, &mode);
-        } else {
-            u_long mode = 0;
-            ioctlsocket((SOCKET)fd, FIONBIO, &mode);
-        }
+        u_long mode = (flags & O_NONBLOCK) ? 1 : 0;
+        ioctlsocket((SOCKET)fd, FIONBIO, &mode); /* no-op on non-socket fds */
         return 0;
     }
-    return 0;  /* F_GETFL returns 0 (no flags) */
+    return -1;
 }
 
 /* ---- poll via WSAPoll ---- */
@@ -74,16 +78,29 @@ static inline int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
 /* ---- gettimeofday ---- */
 typedef long suseconds_t;
 
-static inline int gettimeofday(struct timeval *tv, void *tz) {
+/* POSIX struct timezone (not defined on Windows) */
+struct timezone {
+    int tz_minuteswest;
+    int tz_dsttime;
+};
+
+static inline int gettimeofday(struct timeval *tv, struct timezone *tz) {
     FILETIME ft;
     unsigned long long t;
-    (void)tz;
     GetSystemTimeAsFileTime(&ft);
     t = ((unsigned long long)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
     t -= 116444736000000000ULL;
     t /= 10;
-    tv->tv_sec  = (long)(t / 1000000ULL);
-    tv->tv_usec = (long)(t % 1000000ULL);
+    if (tv) {
+        tv->tv_sec  = (long)(t / 1000000ULL);
+        tv->tv_usec = (long)(t % 1000000ULL);
+    }
+    if (tz) {
+        TIME_ZONE_INFORMATION tzi;
+        GetTimeZoneInformation(&tzi);
+        tz->tz_minuteswest = tzi.Bias;
+        tz->tz_dsttime = 0;
+    }
     return 0;
 }
 

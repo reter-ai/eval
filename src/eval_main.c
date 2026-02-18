@@ -25,7 +25,6 @@
 #endif
 #include "_eval_parser_helpers.h"
 #include "_eval_writer.h"
-#include "eval_embedded_scm.h"
 
 /* From _eval_pool.c (non-static under EVAL_STANDALONE) */
 extern void register_pyobject_type(sexp ctx);
@@ -35,14 +34,13 @@ extern void register_bridge_functions_c(sexp ctx, sexp env);
 extern void register_pool_eval_functions(sexp ctx, sexp env);
 extern void eval_standard_aliases(sexp ctx, sexp env);
 extern void eval_oo_wrappers(sexp ctx, sexp env);
-extern void eval_set_module_path(const char *path);
-extern void eval_set_module_path2(const char *path);
 
 /* From _eval_lib_init.c */
 extern void eval_init_all_libs(sexp ctx, sexp env);
 
-/* Temp dir for extracted embedded .scm files (global for cleanup) */
-static char *g_scm_tmpdir = NULL;
+/* Saved Scheme-native display/newline (from init-7.scm) before bridge override */
+static sexp g_scheme_display = SEXP_FALSE;
+static sexp g_scheme_newline = SEXP_FALSE;
 
 /* ================================================================
  * File / stdin reading
@@ -166,8 +164,9 @@ static int ends_with_semicolon(const char *s, size_t len) {
     return len > 0 && s[len-1] == ';';
 }
 
-/* Forward declaration */
+/* Forward declarations */
 static int run_code(sexp ctx, const char *source, int print_result);
+static int run_scheme_file(sexp ctx, const char *path);
 
 static void run_repl(sexp ctx) {
     ReplBuf rb;
@@ -231,28 +230,37 @@ static sexp init_context(const char *extra_module_dir) {
     sexp ctx = sexp_make_eval_context(NULL, NULL, NULL, 0, 0);
     sexp env = sexp_context_env(ctx);
 
-    /* Extract embedded .scm files to temp dir */
-    g_scm_tmpdir = embedded_scm_extract();
-    if (!g_scm_tmpdir) {
-        fprintf(stderr, "fatal: failed to extract embedded scheme files\n");
-        exit(1);
-    }
-
-    {
+    /* .scm files are loaded from embedded data via patched sexp_load_module_file.
+     * Only add extra module dir if user specified -I. */
+    if (extra_module_dir) {
         sexp_gc_var1(p);
         sexp_gc_preserve1(ctx, p);
-        p = sexp_c_string(ctx, g_scm_tmpdir, -1);
+        p = sexp_c_string(ctx, extra_module_dir, -1);
         sexp_add_module_directory(ctx, p, SEXP_TRUE);
-        eval_set_module_path(g_scm_tmpdir);
-        if (extra_module_dir) {
-            p = sexp_c_string(ctx, extra_module_dir, -1);
-            sexp_add_module_directory(ctx, p, SEXP_TRUE);
-        }
         sexp_gc_release1(ctx);
     }
 
     sexp_load_standard_env(ctx, env, SEXP_SEVEN);
     sexp_load_standard_ports(ctx, env, stdin, stdout, stderr, 1);
+
+    /* Save Scheme-native display/newline before bridge overrides them */
+    {
+        sexp_gc_var2(sym, cell);
+        sexp_gc_preserve2(ctx, sym, cell);
+        sym = sexp_intern(ctx, "display", -1);
+        cell = sexp_env_cell(ctx, env, sym, 0);
+        if (cell && sexp_pairp(cell)) {
+            g_scheme_display = sexp_cdr(cell);
+            sexp_preserve_object(ctx, g_scheme_display);
+        }
+        sym = sexp_intern(ctx, "newline", -1);
+        cell = sexp_env_cell(ctx, env, sym, 0);
+        if (cell && sexp_pairp(cell)) {
+            g_scheme_newline = sexp_cdr(cell);
+            sexp_preserve_object(ctx, g_scheme_newline);
+        }
+        sexp_gc_release2(ctx);
+    }
 
     /* Register types (same order as Python context) */
     register_pyobject_type(ctx);
@@ -338,16 +346,111 @@ static int run_code(sexp ctx, const char *source, int print_result) {
 }
 
 /* ================================================================
+ * Scheme file execution (for .scm/.ss/.sld files)
+ * ================================================================ */
+
+static int has_scheme_extension(const char *path) {
+    const char *dot = strrchr(path, '.');
+    if (!dot) return 0;
+    return (strcmp(dot, ".scm") == 0 ||
+            strcmp(dot, ".ss") == 0 ||
+            strcmp(dot, ".sld") == 0);
+}
+
+/* Detect if a file is Scheme by extension or shebang line */
+static int is_scheme_file(const char *path) {
+    if (has_scheme_extension(path)) return 1;
+    /* Check for shebang or leading '(' / ';' */
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    int c1 = fgetc(f);
+    int c2 = fgetc(f);
+    fclose(f);
+    if (c1 == '#' && c2 == '!') return 1;  /* shebang */
+    if (c1 == '(' || c1 == ';') return 1;  /* s-expression or comment */
+    return 0;
+}
+
+/* Restore Scheme-native display/newline so port redirection works */
+static void restore_scheme_io(sexp ctx) {
+    sexp env = sexp_context_env(ctx);
+    sexp_gc_var2(sym, cell);
+    sexp_gc_preserve2(ctx, sym, cell);
+    if (g_scheme_display != SEXP_FALSE) {
+        sym = sexp_intern(ctx, "display", -1);
+        cell = sexp_env_cell(ctx, env, sym, 0);
+        if (cell && sexp_pairp(cell))
+            sexp_cdr(cell) = g_scheme_display;
+    }
+    if (g_scheme_newline != SEXP_FALSE) {
+        sym = sexp_intern(ctx, "newline", -1);
+        cell = sexp_env_cell(ctx, env, sym, 0);
+        if (cell && sexp_pairp(cell))
+            sexp_cdr(cell) = g_scheme_newline;
+    }
+    sexp_gc_release2(ctx);
+}
+
+static int run_scheme_file(sexp ctx, const char *path) {
+    sexp env = sexp_context_env(ctx);
+    sexp_gc_var3(filepath, result, tmp);
+    sexp_gc_preserve3(ctx, filepath, result, tmp);
+
+    restore_scheme_io(ctx);
+
+    filepath = sexp_c_string(ctx, path, -1);
+    result = sexp_load(ctx, filepath, env);
+
+    if (sexp_exceptionp(result)) {
+        sexp msg = sexp_exception_message(result);
+        if (sexp_stringp(msg))
+            fprintf(stderr, "error: %s\n", sexp_string_data(msg));
+        else
+            fprintf(stderr, "error: exception while loading '%s'\n", path);
+        sexp_gc_release3(ctx);
+        return 1;
+    }
+
+    sexp_gc_release3(ctx);
+    return 0;
+}
+
+static sexp get_meta_env(sexp ctx) {
+    sexp me = sexp_global(ctx, SEXP_G_META_ENV);
+    return sexp_envp(me) ? me : sexp_context_env(ctx);
+}
+
+/* Set (command-line) parameter for Scheme scripts */
+static void set_command_line(sexp ctx, int argc, char **argv, int file_idx) {
+    sexp_gc_var3(args, sym, tmp);
+    sexp_gc_preserve3(ctx, args, sym, tmp);
+    args = SEXP_NULL;
+    for (int j = argc - 1; j >= file_idx; j--) {
+        tmp = sexp_c_string(ctx, argv[j], -1);
+        args = sexp_cons(ctx, tmp, args);
+    }
+    if (args == SEXP_NULL) {
+        tmp = sexp_c_string(ctx, "", -1);
+        args = sexp_cons(ctx, tmp, args);
+    }
+    sym = sexp_intern(ctx, "command-line", -1);
+    sexp_set_parameter(ctx, get_meta_env(ctx), sym, args);
+    sexp_gc_release3(ctx);
+}
+
+/* ================================================================
  * CLI
  * ================================================================ */
 
 static void print_usage(const char *prog) {
-    printf("Usage: %s [options] [file.eval]\n\n", prog);
+    printf("Usage: %s [options] [file.eval | file.scm] [args...]\n\n", prog);
     printf("Options:\n");
     printf("  -e <expr>   Evaluate expression and print result\n");
     printf("  -I <dir>    Add module search directory\n");
     printf("  -V          Print version\n");
     printf("  -h          Print this help\n\n");
+    printf("Runs .eval files as Eval language, .scm files as Scheme.\n");
+    printf("Files starting with #! are also treated as Scheme.\n");
     printf("If no file is given, starts an interactive REPL.\n");
     printf("Piped input is read and executed non-interactively.\n");
 }
@@ -356,6 +459,7 @@ int main(int argc, char **argv) {
     const char *expr = NULL;
     const char *file = NULL;
     const char *extra_module_dir = NULL;
+    int file_idx = 0;  /* argv index of the file argument */
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
@@ -381,6 +485,8 @@ int main(int argc, char **argv) {
             return 1;
         } else {
             file = argv[i];
+            file_idx = i;
+            break;  /* remaining args are for the script */
         }
     }
 
@@ -401,14 +507,21 @@ int main(int argc, char **argv) {
             rc = run_code(ctx, expr, 1);
         }
     } else if (file) {
-        char *source = read_file(file);
-        if (!source) {
-            fprintf(stderr, "error: cannot open '%s'\n", file);
-            sexp_destroy_context(ctx);
-            return 1;
+        if (is_scheme_file(file)) {
+            /* Scheme file — load directly via chibi's sexp_load */
+            set_command_line(ctx, argc, argv, file_idx);
+            rc = run_scheme_file(ctx, file);
+        } else {
+            /* Eval file — parse infix syntax then evaluate */
+            char *source = read_file(file);
+            if (!source) {
+                fprintf(stderr, "error: cannot open '%s'\n", file);
+                sexp_destroy_context(ctx);
+                return 1;
+            }
+            rc = run_code(ctx, source, 0);
+            free(source);
         }
-        rc = run_code(ctx, source, 0);
-        free(source);
     } else {
         if (isatty(fileno(stdin))) {
             run_repl(ctx);
@@ -425,7 +538,5 @@ int main(int argc, char **argv) {
     }
 
     sexp_destroy_context(ctx);
-    embedded_scm_cleanup(g_scm_tmpdir);
-    g_scm_tmpdir = NULL;
     return rc;
 }

@@ -52,27 +52,6 @@ extern sexp deser_sexp_from_buf(sexp ctx, sexp env,
 #define SER_MAGIC_BYTES "CCHI"
 
 /* ================================================================
- * Module path cache
- * ================================================================ */
-
-static char *cached_module_path = NULL;
-static char *cached_module_path2 = NULL;  /* dev install path */
-
-void eval_set_module_path(const char *path) {
-    free(cached_module_path);
-    cached_module_path = path ? strdup(path) : NULL;
-}
-
-void eval_set_module_path2(const char *path) {
-    free(cached_module_path2);
-    cached_module_path2 = path ? strdup(path) : NULL;
-}
-
-const char *eval_get_module_path(void) {
-    return cached_module_path;
-}
-
-/* ================================================================
  * Channel type registration (per-context, no Python dependency)
  * ================================================================ */
 
@@ -470,8 +449,26 @@ typedef struct {
  * Bridge functions for workers (pure C, no Python)
  * ================================================================ */
 
-/* display(x) - write to stdout */
-static sexp bridge_display_c(sexp ctx, sexp self, sexp_sint_t n, sexp x) {
+/* Write a value to a chibi output port using display semantics */
+static void display_to_port_c(sexp ctx, sexp x, sexp port) {
+    if (sexp_stringp(x)) {
+        sexp_write_string_n(ctx, sexp_string_data(x), sexp_string_size(x), port);
+    } else if (sexp_charp(x)) {
+        sexp_write_char(ctx, sexp_unbox_character(x), port);
+    } else {
+        sexp_write(ctx, x, port);
+    }
+}
+
+/* display(x [, port]) - write to port or stdout */
+static sexp bridge_display_c(sexp ctx, sexp self, sexp_sint_t n, sexp args) {
+    if (!sexp_pairp(args)) return SEXP_VOID;
+    sexp x = sexp_car(args);
+    sexp rest = sexp_cdr(args);
+    if (sexp_pairp(rest) && sexp_oportp(sexp_car(rest))) {
+        display_to_port_c(ctx, x, sexp_car(rest));
+        return SEXP_VOID;
+    }
     if (sexp_stringp(x)) {
         fwrite(sexp_string_data(x), 1, sexp_string_size(x), stdout);
     } else {
@@ -483,15 +480,27 @@ static sexp bridge_display_c(sexp ctx, sexp self, sexp_sint_t n, sexp x) {
 }
 
 /* print(x) - display + newline */
-static sexp bridge_print_c(sexp ctx, sexp self, sexp_sint_t n, sexp x) {
-    bridge_display_c(ctx, self, n, x);
+static sexp bridge_print_c(sexp ctx, sexp self, sexp_sint_t n, sexp args) {
+    if (!sexp_pairp(args)) return SEXP_VOID;
+    sexp x = sexp_car(args);
+    if (sexp_stringp(x)) {
+        fwrite(sexp_string_data(x), 1, sexp_string_size(x), stdout);
+    } else {
+        sexp str = sexp_write_to_string(ctx, x);
+        if (sexp_stringp(str))
+            fwrite(sexp_string_data(str), 1, sexp_string_size(str), stdout);
+    }
     fputc('\n', stdout);
     fflush(stdout);
     return SEXP_VOID;
 }
 
-/* newline() */
-static sexp bridge_newline_c(sexp ctx, sexp self, sexp_sint_t n) {
+/* newline([port]) */
+static sexp bridge_newline_c(sexp ctx, sexp self, sexp_sint_t n, sexp args) {
+    if (sexp_pairp(args) && sexp_oportp(sexp_car(args))) {
+        sexp_write_char(ctx, '\n', sexp_car(args));
+        return SEXP_VOID;
+    }
     fputc('\n', stdout);
     fflush(stdout);
     return SEXP_VOID;
@@ -937,9 +946,9 @@ void register_bridge_functions_c(sexp ctx, sexp env) {
 static void register_bridge_functions_c(sexp ctx, sexp env) {
 #endif
     /* I/O */
-    sexp_define_foreign(ctx, env, "display", 1, bridge_display_c);
-    sexp_define_foreign(ctx, env, "print", 1, bridge_print_c);
-    sexp_define_foreign(ctx, env, "newline", 0, bridge_newline_c);
+    sexp_define_foreign_proc_rest(ctx, env, "display", 0, bridge_display_c);
+    sexp_define_foreign_proc_rest(ctx, env, "print", 0, bridge_print_c);
+    sexp_define_foreign_proc_rest(ctx, env, "newline", 0, bridge_newline_c);
 
     /* Include */
     sexp_define_foreign(ctx, env, "eval-include", 1, bridge_eval_include);
@@ -1010,6 +1019,7 @@ static void register_bridge_functions_c(sexp ctx, sexp env) {
         sexp_define_foreign(ctx, env, "eval-scheme", 1, bridge_eval_scheme);
         sexp_define_foreign(ctx, env, "eval_scheme", 1, bridge_eval_scheme);
     }
+
 }
 
 /* Register pool/channel/future functions for the main (Python) context.
@@ -2046,23 +2056,7 @@ static EVAL_THREAD_FUNC worker_main(void *arg) {
     sexp ctx = sexp_make_eval_context(NULL, NULL, NULL, 0, 0);
     sexp env = sexp_context_env(ctx);
 
-    /* 2. Set module paths, load standard env */
-    {
-        sexp_gc_var1(path_sexp);
-        sexp_gc_preserve1(ctx, path_sexp);
-
-        if (cached_module_path) {
-            path_sexp = sexp_c_string(ctx, cached_module_path, -1);
-            sexp_add_module_directory(ctx, path_sexp, SEXP_TRUE);
-        }
-        if (cached_module_path2) {
-            path_sexp = sexp_c_string(ctx, cached_module_path2, -1);
-            sexp_add_module_directory(ctx, path_sexp, SEXP_TRUE);
-        }
-
-        sexp_gc_release1(ctx);
-    }
-
+    /* 2. Load standard env (.scm files loaded from embedded data) */
     sexp_load_standard_env(ctx, env, SEXP_SEVEN);
     sexp_load_standard_ports(ctx, env, NULL, NULL, NULL, 0);
 
@@ -2196,8 +2190,7 @@ static EVAL_THREAD_FUNC worker_main(void *arg) {
  * ================================================================ */
 
 EvalPool *eval_pool_create(int num_workers, const char *module_path) {
-    if (module_path)
-        eval_set_module_path(module_path);
+    (void)module_path;  /* .scm files loaded from embedded data */
 
     /* Ensure scheme is initialized (thread-safe: call once) */
     sexp_scheme_init();

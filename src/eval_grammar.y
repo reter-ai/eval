@@ -388,6 +388,9 @@ expr(A) ::= FOR LPAREN LET IDENT(N) ASSIGN expr(I) COMMA expr(C) COMMA expr(S) R
 expr(A) ::= DO expr(B) UNTIL LPAREN expr(C) RPAREN. {
     A = ps_make_do_until(ctx, B, C);
 }
+expr(A) ::= DO expr(B) WHILE LPAREN expr(C) RPAREN. {
+    A = ps_make_do_while(ctx, B, C);
+}
 /* for(let x in collection) body -- for-each loop */
 expr(A) ::= FOR LPAREN LET IDENT(V) IN expr(L) RPAREN expr(B). [ARGLIST_PREC] {
     sexp var = ps_make_ident(ctx, V.start, V.length);

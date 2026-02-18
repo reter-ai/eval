@@ -2,6 +2,20 @@
 
 #include <chibi/eval.h>
 
+#ifdef _WIN32
+#include <winsock2.h>
+/* Ensure Winsock is initialized once per process.
+ * Required before any getaddrinfo/socket/connect/etc. calls. */
+static void eval_ensure_winsock(void) {
+    static int initialized = 0;
+    if (!initialized) {
+        WSADATA wsa;
+        WSAStartup(MAKEWORD(2, 2), &wsa);
+        initialized = 1;
+    }
+}
+#endif
+
 /* Forward declarations for all renamed init functions */
 extern sexp sexp_init_scheme_time(sexp ctx, sexp self, sexp_sint_t n, sexp env);
 extern sexp sexp_init_chibi_json(sexp ctx, sexp self, sexp_sint_t n, sexp env);
@@ -18,6 +32,30 @@ extern sexp sexp_init_srfi69_hash(sexp ctx, sexp self, sexp_sint_t n, sexp env);
 extern sexp sexp_init_srfi95_qsort(sexp ctx, sexp self, sexp_sint_t n, sexp env);
 extern sexp sexp_init_srfi98_env(sexp ctx, sexp self, sexp_sint_t n, sexp env);
 extern sexp sexp_init_srfi151_bit(sexp ctx, sexp self, sexp_sint_t n, sexp env);
+
+#ifdef EVAL_HAVE_STUB_LIBS
+/* Stub-generated library init functions (from _eval_stub_libs.c) */
+extern sexp sexp_init_chibi_filesystem(sexp ctx, sexp self, sexp_sint_t n, sexp env,
+                                        const char *version, const sexp_abi_identifier_t abi);
+extern sexp sexp_init_chibi_io(sexp ctx, sexp self, sexp_sint_t n, sexp env,
+                                const char *version, const sexp_abi_identifier_t abi);
+extern sexp sexp_init_chibi_net(sexp ctx, sexp self, sexp_sint_t n, sexp env,
+                                 const char *version, const sexp_abi_identifier_t abi);
+extern sexp sexp_init_chibi_time(sexp ctx, sexp self, sexp_sint_t n, sexp env,
+                                  const char *version, const sexp_abi_identifier_t abi);
+extern sexp sexp_init_chibi_crypto(sexp ctx, sexp self, sexp_sint_t n, sexp env,
+                                    const char *version, const sexp_abi_identifier_t abi);
+extern sexp sexp_init_scheme_bytevector(sexp ctx, sexp self, sexp_sint_t n, sexp env,
+                                         const char *version, const sexp_abi_identifier_t abi);
+extern sexp sexp_init_srfi144_math(sexp ctx, sexp self, sexp_sint_t n, sexp env,
+                                    const char *version, const sexp_abi_identifier_t abi);
+extern sexp sexp_init_srfi160_uvprims(sexp ctx, sexp self, sexp_sint_t n, sexp env,
+                                       const char *version, const sexp_abi_identifier_t abi);
+#ifdef _WIN32
+extern sexp sexp_init_chibi_win32_process(sexp ctx, sexp self, sexp_sint_t n, sexp env,
+                                           const char *version, const sexp_abi_identifier_t abi);
+#endif
+#endif /* EVAL_HAVE_STUB_LIBS */
 
 /* Register a simple record type with named fields, predicate,
  * getters, optional setters, and a zero-arg constructor. */
@@ -75,6 +113,10 @@ static void register_record_type(sexp ctx, sexp env,
 }
 
 void eval_init_all_libs(sexp ctx, sexp env) {
+#ifdef _WIN32
+    eval_ensure_winsock();
+#endif
+
     /* SRFI-18 Mutex type (replaces srfi/18/types.scm Mutex definition).
      * sexp_make_constructor creates a zero-arg allocator; we bind it as
      * %%alloc-mutex and define the field-setting %make-mutex in Scheme. */
@@ -370,4 +412,204 @@ void eval_init_all_libs(sexp ctx, sexp env) {
      * Layer 8: Math utilities (depends on srfi/151, srfi/27, srfi/1).
      * ================================================================ */
     sexp_load_module_file(ctx, "chibi/math/prime.scm", env);
+
+    /* ================================================================
+     * Stub-generated libraries (chibi-ffi compiled).
+     * Only available after `make ffi` generates the .c files.
+     * ================================================================ */
+#ifdef EVAL_HAVE_STUB_LIBS
+    sexp_init_chibi_filesystem(ctx, SEXP_FALSE, 0, env, "", SEXP_ABI_IDENTIFIER);
+    sexp_init_chibi_io(ctx, SEXP_FALSE, 0, env, "", SEXP_ABI_IDENTIFIER);
+    sexp_init_chibi_net(ctx, SEXP_FALSE, 0, env, "", SEXP_ABI_IDENTIFIER);
+    sexp_init_chibi_time(ctx, SEXP_FALSE, 0, env, "", SEXP_ABI_IDENTIFIER);
+    sexp_init_chibi_crypto(ctx, SEXP_FALSE, 0, env, "", SEXP_ABI_IDENTIFIER);
+    sexp_init_scheme_bytevector(ctx, SEXP_FALSE, 0, env, "", SEXP_ABI_IDENTIFIER);
+    sexp_init_srfi144_math(ctx, SEXP_FALSE, 0, env, "", SEXP_ABI_IDENTIFIER);
+    sexp_init_srfi160_uvprims(ctx, SEXP_FALSE, 0, env, "", SEXP_ABI_IDENTIFIER);
+#ifdef _WIN32
+    sexp_init_chibi_win32_process(ctx, SEXP_FALSE, 0, env, "", SEXP_ABI_IDENTIFIER);
+
+    /* Windows shims for filesystem functions guarded by (not windows) in stub.
+     * get-file-descriptor-status / set-file-descriptor-status! use our fcntl
+     * compat from _chibi_win_compat.h (ioctlsocket for non-blocking). */
+    sexp_eval_string(ctx,
+        "(define open/non-block 4)"  /* O_NONBLOCK = 0x0004 */
+        "(define (get-file-descriptor-status fd)"
+        "  0)"  /* No meaningful flags on Windows */
+        "(define (set-file-descriptor-status! fd flags)"
+        "  #t)",  /* fcntl compat in accept.c handles non-blocking */
+        -1, env);
+#endif
+
+    /* ================================================================
+     * Scheme wrappers for stub-generated libraries.
+     * Load order: iset base → char-set base → string → io → filesystem → net
+     * ================================================================ */
+
+    /* (chibi iset base): Integer-Set record type, iset-contains?, make-iset */
+    sexp_load_module_file(ctx, "chibi/iset/base.scm", env);
+
+    /* (chibi char-set base): Char-Set = Integer-Set, char-set?, char-set-contains?
+     * Inlined from char-set/base.sld (we don't process .sld files). */
+    sexp_eval_string(ctx,
+        "(define Char-Set Integer-Set)"
+        "(define char-set? iset?)"
+        "(define (char-set-contains? cset ch)"
+        "  (iset-contains? cset (char->integer ch)))"
+        "(define-syntax immutable-char-set"
+        "  (syntax-rules () ((immutable-char-set cs) cs)))",
+        -1, env);
+
+    /* (chibi string): cursor-oriented string library.
+     * Load string.scm first (string-fold, string-find, etc.),
+     * then inline string-for-each and string-map from string.sld. */
+    sexp_load_module_file(ctx, "chibi/string.scm", env);
+    sexp_eval_string(ctx,
+        "(define (string-for-each proc str . los)"
+        "  (if (null? los)"
+        "      (string-fold (lambda (ch a) (proc ch)) #f str)"
+        "      (let ((los (cons str los)))"
+        "        (let lp ((is (map string-cursor-start los)))"
+        "          (cond"
+        "           ((any (lambda (str i)"
+        "                   (string-cursor>=? i (string-cursor-end str)))"
+        "                 los is))"
+        "           (else"
+        "            (apply proc (map string-cursor-ref los is))"
+        "            (lp (map string-cursor-next los is))))))))",
+        -1, env);
+    sexp_eval_string(ctx,
+        "(define (string-map proc str . los)"
+        "  (call-with-output-string"
+        "    (lambda (out)"
+        "      (apply string-for-each"
+        "             (lambda args (write-char (apply proc args) out))"
+        "             str los))))",
+        -1, env);
+
+    /* (chibi io): string->utf8, utf8->string, read-line, write-string, etc. */
+    sexp_load_module_file(ctx, "chibi/io/io.scm", env);
+
+    /* (chibi filesystem): file-exists?, directory-files, etc. */
+    sexp_load_module_file(ctx, "chibi/filesystem.scm", env);
+
+    /* (chibi net): make-listener-socket, get-address-info, send, receive, etc. */
+    sexp_load_module_file(ctx, "chibi/net.scm", env);
+
+    /* (srfi 144): flonum operations */
+    sexp_load_module_file(ctx, "srfi/144/flonum.scm", env);
+
+    /* (srfi 160): typed uniform vector constructors/converters.
+     * Load base.scm (typed wrappers) instead of uvector.scm (derived ops).
+     * uvector.scm is designed for per-type module scoping and overwrites
+     * R7RS vector-map/vector-copy/etc. in a flat environment. */
+    sexp_load_module_file(ctx, "srfi/160/base.scm", env);
+
+    /* ----------------------------------------------------------------
+     * Eval-friendly underscore aliases for chibi/net + filesystem functions.
+     * Eval's parser treats `-` as subtraction, so hyphenated names must
+     * be accessed via backticks.  These aliases provide underscore forms.
+     * ---------------------------------------------------------------- */
+    {
+        static const char *aliases[][2] = {
+            /* net.scm high-level API */
+            {"make_listener_socket",   "make-listener-socket"},
+            {"get_address_info",       "get-address-info"},
+            {"make_address_info",      "make-address-info"},
+            {"open_net_io",            "open-net-io"},
+            {"with_net_io",            "with-net-io"},
+            {"send_non_blocking",      "send/non-blocking"},
+            {"receive_non_blocking",   "receive/non-blocking"},
+            /* "receive" is a keyword in Eval (SRFI-8), so alias as "recv" */
+            {"recv",                   "receive"},
+            /* net C stub: address-info accessors */
+            {"address_info_family",    "address-info-family"},
+            {"address_info_socket_type","address-info-socket-type"},
+            {"address_info_protocol",  "address-info-protocol"},
+            {"address_info_address",   "address-info-address"},
+            {"address_info_address_length","address-info-address-length"},
+            {"address_info_next",      "address-info-next"},
+            {"address_info_flags",     "address-info-flags"},
+            {"address_info_canonname", "address-info-canonname"},
+            /* net C stub: socket constants */
+            {"address_family_unspecified","address-family/unspecified"},
+            {"address_family_inet",    "address-family/inet"},
+            {"address_family_inet6",   "address-family/inet6"},
+            {"address_family_unix",    "address-family/unix"},
+            {"socket_type_stream",     "socket-type/stream"},
+            {"socket_type_datagram",   "socket-type/datagram"},
+            {"socket_type_raw",        "socket-type/raw"},
+            {"ip_proto_ip",            "ip-proto/ip"},
+            {"ip_proto_tcp",           "ip-proto/tcp"},
+            {"ip_proto_udp",           "ip-proto/udp"},
+            {"socket_opt_reuseaddr",   "socket-opt/reuseaddr"},
+            /* net C stub: sockaddr */
+            {"make_sockaddr",          "make-sockaddr"},
+            {"sockaddr_name",          "sockaddr-name"},
+            {"sockaddr_port",          "sockaddr-port"},
+            /* net C stub: socket options */
+            {"set_socket_option",      "set-socket-option!"},
+            {"get_socket_option",      "get-socket-option"},
+            {"get_peer_name",          "get-peer-name"},
+            /* filesystem C stub */
+            {"close_file_descriptor",  "close-file-descriptor"},
+            {"open_input_file_descriptor","open-input-file-descriptor"},
+            {"open_output_file_descriptor","open-output-file-descriptor"},
+            /* filesystem.scm high-level */
+            {"file_exists",            "file-exists?"},
+            {"file_directory",         "file-directory?"},
+            {"file_regular",           "file-regular?"},
+            {"file_size",              "file-size"},
+            {"directory_files",        "directory-files"},
+            {"directory_fold",         "directory-fold"},
+            {"create_directory_star",  "create-directory*"},
+            {"delete_file",            "delete-file"},
+            {"delete_file_hierarchy",  "delete-file-hierarchy"},
+            {"with_directory",         "with-directory"},
+            {"current_directory",      "current-directory"},
+            {"change_directory",       "change-directory"},
+            {"file_modification_time", "file-modification-time"},
+            {"file_access_time",       "file-access-time"},
+            {"read_link",              "read-link"},
+            /* io.scm */
+            {"string_to_utf8",         "string->utf8"},
+            {"utf8_to_string",         "utf8->string"},
+            {"read_line",              "read-line"},
+            {"read_string",            "read-string"},
+            {"write_string",           "write-string"},
+            {"write_line",             "write-line"},
+            {"port_to_string",         "port->string"},
+            {"file_to_string",         "file->string"},
+            {"file_to_bytevector",     "file->bytevector"},
+            /* string.scm */
+            {"string_null",            "string-null?"},
+            {"string_any",             "string-any"},
+            {"string_every",           "string-every"},
+            {"string_find",            "string-find"},
+            {"string_find_right",      "string-find-right"},
+            {"string_split",           "string-split"},
+            {"string_join",            "string-join"},
+            {"string_trim",            "string-trim"},
+            {"string_trim_left",       "string-trim-left"},
+            {"string_trim_right",      "string-trim-right"},
+            {"string_contains",        "string-contains"},
+            {"string_count",           "string-count"},
+            {"string_prefix",          "string-prefix?"},
+            {"string_suffix",          "string-suffix?"},
+            {"string_fold",            "string-fold"},
+            {"string_for_each",        "string-for-each"},
+            {"string_map",             "string-map"},
+            {"string_downcase_ascii",  "string-downcase-ascii"},
+            {"string_upcase_ascii",    "string-upcase-ascii"},
+            {NULL, NULL}
+        };
+        for (int i = 0; aliases[i][0]; i++) {
+            sexp sym = sexp_intern(ctx, aliases[i][1], -1);
+            sexp val = sexp_env_ref(ctx, env, sym, SEXP_VOID);
+            if (val != SEXP_VOID)
+                sexp_env_define(ctx, env,
+                    sexp_intern(ctx, aliases[i][0], -1), val);
+        }
+    }
+#endif /* EVAL_HAVE_STUB_LIBS */
 }

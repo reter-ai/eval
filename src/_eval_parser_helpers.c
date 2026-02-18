@@ -249,6 +249,29 @@ sexp ps_make_do_until(sexp ctx, sexp body, sexp cond) {
                       break_lambda);
 }
 
+/* Build do-while loop:
+   (call/cc (lambda (__break__)
+     (letrec ((__loop__ (lambda ()
+       (begin body (if cond (__loop__))))))
+       (__loop__)))) */
+sexp ps_make_do_while(sexp ctx, sexp body, sexp cond) {
+    sexp loop_sym = ps_intern(ctx, "__loop__");
+    sexp break_sym = ps_intern(ctx, "__break__");
+    sexp loop_call = sexp_list1(ctx, loop_sym);
+
+    sexp if_form = sexp_list3(ctx, ps_intern(ctx, "if"), cond, loop_call);
+    sexp inner = sexp_list3(ctx, ps_intern(ctx, "begin"), body, if_form);
+    sexp lambda_form = sexp_list3(ctx, ps_intern(ctx, "lambda"), SEXP_NULL, inner);
+    sexp binding = sexp_list1(ctx, sexp_list2(ctx, loop_sym, lambda_form));
+    sexp letrec_form = sexp_list3(ctx, ps_intern(ctx, "letrec"), binding, loop_call);
+
+    /* Wrap with call/cc for break */
+    sexp break_lambda = sexp_list3(ctx, ps_intern(ctx, "lambda"),
+                                   sexp_list1(ctx, break_sym), letrec_form);
+    return sexp_list2(ctx, ps_intern(ctx, "call-with-current-continuation"),
+                      break_lambda);
+}
+
 /* break -> (__break__ '()) — calls the continuation captured by enclosing loop */
 sexp ps_make_break(sexp ctx) {
     return sexp_list2(ctx, ps_intern(ctx, "__break__"),

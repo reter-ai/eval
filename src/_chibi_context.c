@@ -170,9 +170,6 @@ static sexp trampoline_call_rest(sexp ctx, sexp self, sexp_sint_t n, sexp args) 
     return trampoline_call(ctx, self, n, args);
 }
 
-/* eval_set_module_path2 is defined in _eval_pool.c but not in header */
-extern void eval_set_module_path2(const char *path);
-
 /* === ChibiContext methods === */
 
 static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject *kwds) {
@@ -192,56 +189,8 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
         return -1;
     }
 
-    /* Set up module path BEFORE loading standard env (init-7.scm needs to be found).
-     * We look for the chibi-scheme lib dir in multiple locations:
-     *   1. chibi_eval/_scheme_lib (installed package)
-     *   2. Relative to chibi_eval/__init__.py: ../chibi-scheme/lib (dev / editable)
-     *   3. CHIBI_MODULE_PATH env var (user override)
-     */
-    {
-        sexp_gc_var1(path_sexp);
-        sexp_gc_preserve1(self->ctx, path_sexp);
-
-        PyObject *chibi_eval_mod = PyImport_ImportModule("chibi_eval");
-        if (chibi_eval_mod) {
-            PyObject *file_attr = PyObject_GetAttrString(chibi_eval_mod, "__file__");
-            if (file_attr) {
-                const char *init_path = PyUnicode_AsUTF8(file_attr);
-                if (init_path) {
-                    char pkg_dir[1024];
-                    strncpy(pkg_dir, init_path, sizeof(pkg_dir) - 1);
-                    pkg_dir[sizeof(pkg_dir) - 1] = '\0';
-                    char *last_sep = strrchr(pkg_dir, '/');
-                    if (!last_sep) last_sep = strrchr(pkg_dir, '\\');
-                    if (last_sep) {
-                        *last_sep = '\0';
-                        char full_path[1200];
-
-                        /* Try _scheme_lib under the package */
-                        snprintf(full_path, sizeof(full_path), "%s/_scheme_lib", pkg_dir);
-                        path_sexp = sexp_c_string(self->ctx, full_path, -1);
-                        sexp_add_module_directory(self->ctx, path_sexp, SEXP_TRUE);
-
-                        /* Cache for worker threads */
-                        eval_set_module_path(full_path);
-
-                        /* Also try chibi-scheme/lib relative to parent dir (dev install) */
-                        snprintf(full_path, sizeof(full_path), "%s/../chibi-scheme/lib", pkg_dir);
-                        path_sexp = sexp_c_string(self->ctx, full_path, -1);
-                        sexp_add_module_directory(self->ctx, path_sexp, SEXP_TRUE);
-
-                        /* Cache for worker threads */
-                        eval_set_module_path2(full_path);
-                    }
-                }
-                Py_DECREF(file_attr);
-            }
-            Py_DECREF(chibi_eval_mod);
-        }
-        PyErr_Clear();
-
-        sexp_gc_release1(self->ctx);
-    }
+    /* .scm files are loaded from embedded data via patched sexp_load_module_file.
+     * No module path setup needed. */
 
     self->env = sexp_context_env(self->ctx);
 

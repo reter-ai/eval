@@ -2394,6 +2394,21 @@ sexp sexp_find_module_file (sexp ctx, const char *file) {
 
 sexp sexp_load_module_file (sexp ctx, const char *file, sexp env) {
   sexp res;
+#if EVAL_EMBEDDED_SCM
+  {
+    extern const char *embedded_find_scm(const char *path);
+    const char *data = embedded_find_scm(file);
+    if (data) {
+      sexp_gc_var2(str, port);
+      sexp_gc_preserve2(ctx, str, port);
+      str = sexp_c_string(ctx, data, -1);
+      port = sexp_open_input_string(ctx, str);
+      res = sexp_load(ctx, port, env);
+      sexp_gc_release2(ctx);
+      return res;
+    }
+  }
+#endif
   sexp_gc_var1(path);
   sexp_gc_preserve1(ctx, path);
   path = sexp_find_module_file(ctx, file);

@@ -213,22 +213,22 @@ static sexp bridge_py_object_p(sexp ctx, sexp self, sexp_sint_t n, sexp x) {
 }
 
 /* newline() -> print bare newline to stdout */
-static sexp bridge_newline(sexp ctx, sexp self, sexp_sint_t n) {
-    PyObject *py_stdout = PySys_GetObject("stdout");
-    if (py_stdout) {
-        PyObject *nl = PyUnicode_FromString("\n");
-        PyObject_CallMethod(py_stdout, "write", "O", nl);
-        Py_DECREF(nl);
+/* Write a value to a chibi output port using display semantics */
+static void display_to_port(sexp ctx, sexp x, sexp port) {
+    if (sexp_stringp(x)) {
+        sexp_write_string_n(ctx, sexp_string_data(x), sexp_string_size(x), port);
+    } else if (sexp_charp(x)) {
+        sexp_write_char(ctx, sexp_unbox_character(x), port);
+    } else {
+        sexp_write(ctx, x, port);
     }
-    return SEXP_VOID;
 }
 
-/* display(x) -> print to stdout (display semantics: no quotes on strings) */
-static sexp bridge_display(sexp ctx, sexp self, sexp_sint_t n, sexp x) {
+/* Write a value to Python's sys.stdout using display semantics */
+static void display_to_py_stdout(sexp ctx, sexp x) {
     PyObject *py_stdout = PySys_GetObject("stdout");
-    if (!py_stdout) return SEXP_VOID;
+    if (!py_stdout) return;
     if (sexp_stringp(x)) {
-        /* Display semantics: strings without quotes */
         PyObject *str = PyUnicode_FromStringAndSize(
             sexp_string_data(x), sexp_string_size(x));
         if (str) {
@@ -242,13 +242,46 @@ static sexp bridge_display(sexp ctx, sexp self, sexp_sint_t n, sexp x) {
             Py_DECREF(str);
         }
     }
+}
+
+/* newline([port]) -> write newline to port or Python stdout */
+static sexp bridge_newline(sexp ctx, sexp self, sexp_sint_t n, sexp args) {
+    if (sexp_pairp(args) && sexp_oportp(sexp_car(args))) {
+        sexp_write_char(ctx, '\n', sexp_car(args));
+        return SEXP_VOID;
+    }
+    PyObject *py_stdout = PySys_GetObject("stdout");
+    if (py_stdout) {
+        PyObject *nl = PyUnicode_FromString("\n");
+        PyObject_CallMethod(py_stdout, "write", "O", nl);
+        Py_DECREF(nl);
+    }
     return SEXP_VOID;
 }
 
-/* print(x) -> display + newline */
-static sexp bridge_print(sexp ctx, sexp self, sexp_sint_t n, sexp x) {
-    bridge_display(ctx, self, n, x);
-    bridge_newline(ctx, self, 0);
+/* display(x [, port]) -> display to port or Python stdout */
+static sexp bridge_display(sexp ctx, sexp self, sexp_sint_t n, sexp args) {
+    if (!sexp_pairp(args)) return SEXP_VOID;
+    sexp x = sexp_car(args);
+    sexp rest = sexp_cdr(args);
+    if (sexp_pairp(rest) && sexp_oportp(sexp_car(rest))) {
+        display_to_port(ctx, x, sexp_car(rest));
+        return SEXP_VOID;
+    }
+    display_to_py_stdout(ctx, x);
+    return SEXP_VOID;
+}
+
+/* print(x) -> display + newline to Python stdout */
+static sexp bridge_print(sexp ctx, sexp self, sexp_sint_t n, sexp args) {
+    if (!sexp_pairp(args)) return SEXP_VOID;
+    display_to_py_stdout(ctx, sexp_car(args));
+    PyObject *py_stdout = PySys_GetObject("stdout");
+    if (py_stdout) {
+        PyObject *nl = PyUnicode_FromString("\n");
+        PyObject_CallMethod(py_stdout, "write", "O", nl);
+        Py_DECREF(nl);
+    }
     return SEXP_VOID;
 }
 
@@ -385,9 +418,9 @@ void register_bridge_functions(sexp ctx, sexp env) {
     sexp_define_foreign_proc_rest(ctx, env, "py-method", 0, bridge_py_method);
     sexp_define_foreign(ctx, env, "py-eval", 1, bridge_py_eval);
     sexp_define_foreign(ctx, env, "py-object?", 1, bridge_py_object_p);
-    sexp_define_foreign(ctx, env, "display", 1, bridge_display);
-    sexp_define_foreign(ctx, env, "print", 1, bridge_print);
-    sexp_define_foreign(ctx, env, "newline", 0, bridge_newline);
+    sexp_define_foreign_proc_rest(ctx, env, "display", 0, bridge_display);
+    sexp_define_foreign_proc_rest(ctx, env, "print", 0, bridge_print);
+    sexp_define_foreign_proc_rest(ctx, env, "newline", 0, bridge_newline);
 
     /* Register with underscore aliases (Eval-friendly names) */
     sexp_define_foreign(ctx, env, "py_import", 1, bridge_py_import);
@@ -431,4 +464,5 @@ void register_bridge_functions(sexp ctx, sexp env) {
                         bridge_serialize_continuation);
     sexp_define_foreign(ctx, env, "deserialize_continuation", 1,
                         bridge_deserialize_continuation);
+
 }

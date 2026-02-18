@@ -4,6 +4,13 @@
 /* EWOULDBLOCK and block on the socket, and listen should automatically make */
 /* sockets non-blocking. */
 
+/* On Windows, winsock sets errors via WSAGetLastError(), not errno. */
+#ifdef _WIN32
+#define SEXP_WOULDBLOCK (WSAGetLastError() == WSAEWOULDBLOCK)
+#else
+#define SEXP_WOULDBLOCK (errno == EWOULDBLOCK)
+#endif
+
 sexp sexp_accept (sexp ctx, sexp self, int sock, struct sockaddr* addr, socklen_t len) {
 #if SEXP_USE_GREEN_THREADS
   sexp f;
@@ -11,7 +18,7 @@ sexp sexp_accept (sexp ctx, sexp self, int sock, struct sockaddr* addr, socklen_
   int res;
   res = accept(sock, addr, &len);
 #if SEXP_USE_GREEN_THREADS
-  if (res < 0 && errno == EWOULDBLOCK) {
+  if (res < 0 && SEXP_WOULDBLOCK) {
     f = sexp_global(ctx, SEXP_G_THREADS_BLOCKER);
     if (sexp_applicablep(f)) {
       sexp_apply2(ctx, f, sexp_make_fixnum(sock), SEXP_FALSE);
@@ -35,7 +42,7 @@ sexp sexp_sendto (sexp ctx, sexp self, int sock, const void* buffer, size_t len,
   ssize_t res;
   res = sendto(sock, buffer, len, flags, addr, addr_len);
 #if SEXP_USE_GREEN_THREADS
-  if (res < 0 && errno == EWOULDBLOCK && !sexp_zerop(timeout)) {
+  if (res < 0 && SEXP_WOULDBLOCK && !sexp_zerop(timeout)) {
     f = sexp_global(ctx, SEXP_G_THREADS_BLOCKER);
     if (sexp_applicablep(f)) {
       sexp_apply2(ctx, f, sexp_make_fixnum(sock), timeout);
@@ -53,7 +60,7 @@ sexp sexp_recvfrom (sexp ctx, sexp self, int sock, void* buffer, size_t len, int
   ssize_t res;
   res = recvfrom(sock, buffer, len, flags, addr, &addr_len);
 #if SEXP_USE_GREEN_THREADS
-  if (res < 0 && errno == EWOULDBLOCK && !sexp_zerop(timeout)) {
+  if (res < 0 && SEXP_WOULDBLOCK && !sexp_zerop(timeout)) {
     f = sexp_global(ctx, SEXP_G_THREADS_BLOCKER);
     if (sexp_applicablep(f)) {
       sexp_apply2(ctx, f, sexp_make_fixnum(sock), timeout);

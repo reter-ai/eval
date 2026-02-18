@@ -52,6 +52,7 @@ set(CHIBI_COMPILE_DEFS
     SEXP_USE_MMAP=0
     SEXP_USE_BOEHM=0
     BUILDING_EVAL_POOL=1
+    EVAL_EMBEDDED_SCM=1
 )
 
 # ---------- Chibi-scheme core sources (statically compiled in) ----------
@@ -92,6 +93,43 @@ set(CHIBI_INCLUDE_DIRS
     ${CMAKE_SOURCE_DIR}/src
 )
 
+# ---------- Detect stub-generated .c files (shared by Python + standalone) ----------
+set(STUB_GENERATED_FILES
+    chibi-scheme/lib/chibi/filesystem.c
+    chibi-scheme/lib/chibi/io/io.c
+    chibi-scheme/lib/chibi/net.c
+    chibi-scheme/lib/chibi/time.c
+    chibi-scheme/lib/chibi/crypto/crypto.c
+    chibi-scheme/lib/scheme/bytevector.c
+    chibi-scheme/lib/srfi/144/math.c
+    chibi-scheme/lib/srfi/160/uvprims.c
+)
+if(WIN32)
+    list(APPEND STUB_GENERATED_FILES chibi-scheme/lib/chibi/win32/process-win32.c)
+endif()
+
+set(HAVE_STUB_LIBS TRUE)
+foreach(stubfile ${STUB_GENERATED_FILES})
+    if(NOT EXISTS "${CMAKE_SOURCE_DIR}/${stubfile}")
+        set(HAVE_STUB_LIBS FALSE)
+        message(STATUS "Stub lib missing: ${stubfile} (run 'make ffi' to generate)")
+        break()
+    endif()
+endforeach()
+
+# ---------- Generate embedded scheme files (shared by Python + standalone) ----------
+set(EMBEDDED_SCM_C "${CMAKE_BINARY_DIR}/eval_embedded_scm.c")
+execute_process(
+    COMMAND ${CMAKE_COMMAND}
+        -DLIB_DIR=${CMAKE_SOURCE_DIR}/chibi-scheme/lib
+        -DOUTPUT=${EMBEDDED_SCM_C}
+        -P ${CMAKE_SOURCE_DIR}/tools/generate_embedded.cmake
+    RESULT_VARIABLE _embed_result
+)
+if(NOT _embed_result EQUAL 0)
+    message(FATAL_ERROR "Failed to generate embedded scheme files")
+endif()
+
 # ============================================================
 # Python C extension module
 # ============================================================
@@ -110,7 +148,13 @@ if(BUILD_PYTHON_MODULE)
         src/_chibi_serialize.c
         src/_eval_pool.c
         src/_eval_lib_init.c
+        src/eval_embedded_extract.c
+        ${EMBEDDED_SCM_C}
     )
+
+    if(HAVE_STUB_LIBS)
+        list(APPEND EXT_SOURCES src/_eval_stub_libs.c)
+    endif()
 
     python_add_library(_chibi MODULE ${CHIBI_SOURCES} ${CHIBI_LIB_SOURCES} ${EXT_SOURCES})
 
@@ -123,6 +167,10 @@ if(BUILD_PYTHON_MODULE)
     endif()
 
     target_compile_definitions(_chibi PRIVATE ${CHIBI_COMPILE_DEFS})
+
+    if(HAVE_STUB_LIBS)
+        target_compile_definitions(_chibi PRIVATE EVAL_HAVE_STUB_LIBS=1)
+    endif()
 
     if(WIN32)
         target_link_libraries(_chibi PRIVATE ws2_32)
@@ -141,37 +189,12 @@ if(BUILD_PYTHON_MODULE)
     endif()
 
     install(TARGETS _chibi LIBRARY DESTINATION chibi_eval)
-
-    install(DIRECTORY ${CMAKE_SOURCE_DIR}/chibi-scheme/lib/
-        DESTINATION chibi_eval/_scheme_lib
-        PATTERN "*.c" EXCLUDE
-        PATTERN "*.stub" EXCLUDE
-        PATTERN "*test.sld" EXCLUDE
-    )
-
-    install(FILES
-        ${CMAKE_SOURCE_DIR}/chibi-scheme/lib/init-7.scm
-        DESTINATION chibi_eval/_scheme_lib
-    )
 endif()
 
 # ============================================================
 # Standalone eval executable
 # ============================================================
 if(BUILD_EVAL_STANDALONE)
-    # Generate embedded scheme files at configure time
-    set(EMBEDDED_SCM_C "${CMAKE_BINARY_DIR}/eval_embedded_scm.c")
-    execute_process(
-        COMMAND ${CMAKE_COMMAND}
-            -DLIB_DIR=${CMAKE_SOURCE_DIR}/chibi-scheme/lib
-            -DOUTPUT=${EMBEDDED_SCM_C}
-            -P ${CMAKE_SOURCE_DIR}/tools/generate_embedded.cmake
-        RESULT_VARIABLE _embed_result
-    )
-    if(NOT _embed_result EQUAL 0)
-        message(FATAL_ERROR "Failed to generate embedded scheme files")
-    endif()
-
     set(STANDALONE_SOURCES
         src/eval_main.c
         src/eval_embedded_extract.c
@@ -184,6 +207,11 @@ if(BUILD_EVAL_STANDALONE)
         src/_eval_pool.c
         src/_eval_lib_init.c
     )
+
+    if(HAVE_STUB_LIBS)
+        list(APPEND STANDALONE_SOURCES src/_eval_stub_libs.c)
+        message(STATUS "Including stub-generated libraries (chibi/net, chibi/filesystem, etc.)")
+    endif()
 
     add_executable(eval_standalone
         ${CHIBI_SOURCES}
@@ -206,6 +234,10 @@ if(BUILD_EVAL_STANDALONE)
         EVAL_STANDALONE=1
     )
 
+    if(HAVE_STUB_LIBS)
+        target_compile_definitions(eval_standalone PRIVATE EVAL_HAVE_STUB_LIBS=1)
+    endif()
+
     if(WIN32)
         target_link_libraries(eval_standalone PRIVATE ws2_32)
         target_compile_definitions(eval_standalone PRIVATE
@@ -222,18 +254,5 @@ if(BUILD_EVAL_STANDALONE)
         target_compile_options(eval_standalone PRIVATE -Wno-unused-parameter -Wno-sign-compare)
     endif()
 
-    # Install standalone executable and scheme library files
     install(TARGETS eval_standalone RUNTIME DESTINATION bin)
-
-    install(DIRECTORY ${CMAKE_SOURCE_DIR}/chibi-scheme/lib/
-        DESTINATION lib
-        PATTERN "*.c" EXCLUDE
-        PATTERN "*.stub" EXCLUDE
-        PATTERN "*test.sld" EXCLUDE
-    )
-
-    install(FILES
-        ${CMAKE_SOURCE_DIR}/chibi-scheme/lib/init-7.scm
-        DESTINATION lib
-    )
 endif()
