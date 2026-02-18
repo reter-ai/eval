@@ -530,6 +530,81 @@ class TestGrammarFeatures:
         assert e.eval('case(99, (1): "a", (2): "b", else: "c");') == "c"
 
 
+class TestIndexing:
+    def test_list_index(self, e):
+        assert e.eval("[1, 2, 3][0];") == 1
+        assert e.eval("[1, 2, 3][2];") == 3
+
+    def test_list_negative_index(self, e):
+        assert e.eval("[1, 2, 3][-1];") == 3
+        assert e.eval("[1, 2, 3][-3];") == 1
+
+    def test_vector_index(self, e):
+        assert e.eval("#[10, 20, 30][1];") == 20
+
+    def test_vector_negative_index(self, e):
+        assert e.eval("#[10, 20, 30][-1];") == 30
+
+    def test_string_index(self, e):
+        assert e.eval('"hello"[0];') == "h"
+        assert e.eval('"hello"[1];') == "e"
+        assert e.eval('"hello"[-1];') == "o"
+
+    def test_chained_index(self, e):
+        assert e.eval("[[1, 2], [3, 4]][1][0];") == 3
+
+    def test_index_variable(self, e):
+        e.eval("define xs = [10, 20, 30];")
+        assert e.eval("xs[0];") == 10
+        assert e.eval("xs[-1];") == 30
+
+    def test_computed_index(self, e):
+        assert e.eval("[10, 20, 30, 40][1 + 1];") == 30
+
+    def test_index_out_of_range(self, e):
+        with pytest.raises(EvalError):
+            e.eval("[1, 2, 3][5];")
+
+    def test_negative_out_of_range(self, e):
+        with pytest.raises(EvalError):
+            e.eval("[1, 2, 3][-4];")
+
+
+class TestSlicing:
+    def test_list_slice(self, e):
+        assert e.eval("[1, 2, 3, 4, 5][1:3];") == [2, 3]
+
+    def test_list_slice_start_omitted(self, e):
+        assert e.eval("[1, 2, 3][:2];") == [1, 2]
+
+    def test_list_slice_end_omitted(self, e):
+        assert e.eval("[1, 2, 3][1:];") == [2, 3]
+
+    def test_list_slice_both_omitted(self, e):
+        assert e.eval("[1, 2, 3][:];") == [1, 2, 3]
+
+    def test_negative_slice(self, e):
+        assert e.eval("[1, 2, 3, 4, 5][-3:-1];") == [3, 4]
+
+    def test_string_slice(self, e):
+        assert e.eval('"hello"[1:3];') == "el"
+
+    def test_string_slice_omitted(self, e):
+        assert e.eval('"hello"[:3];') == "hel"
+        assert e.eval('"hello"[2:];') == "llo"
+        assert e.eval('"hello"[:];') == "hello"
+
+    def test_vector_slice(self, e):
+        assert e.eval("#[10, 20, 30, 40][1:3];") == [20, 30]
+
+    def test_empty_slice(self, e):
+        assert e.eval("[1, 2, 3][2:2];") == []
+
+    def test_slice_clamp(self, e):
+        assert e.eval("[1, 2, 3][0:100];") == [1, 2, 3]
+        assert e.eval("[1, 2, 3][5:10];") == []
+
+
 class TestGCStress:
     def test_many_defines(self, e):
         for i in range(500):

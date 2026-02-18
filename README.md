@@ -31,6 +31,7 @@ e.eval("""
 - **Continuations** — `callcc`, serializable to bytes for checkpointing and migration
 - **Green threads** — cooperative multitasking with fuel-based VM scheduling
 - **Thread pool** — true OS-level parallelism with worker threads, futures, and channels
+- **Networking** — TCP sockets, HTTP client/server with OO wrappers, RAII, and reactive signals
 - **Standalone CLI** — single binary, all scheme files embedded, runs anywhere with no dependencies
 - **Python interop** — call Python from Eval, call Eval from Python, share data bidirectionally
 - **Full numeric tower** — integers, floats, bignums, rationals
@@ -161,6 +162,7 @@ x--;                  // decrement
 | Comparison | `==`  `!=`  `<`  `>`  `<=`  `>=`  |
 | Logical    | `&&`  `\|\|`  `!`                  |
 | Bitwise    | `&`  `\|`  `~`  `<<`  `>>`        |
+| Indexing   | `expr[i]`  `expr[s:e]` (slicing)   |
 
 Operators are first-class values — pass them to higher-order functions:
 
@@ -281,12 +283,24 @@ car(xs);                  // => 1
 cdr(xs);                  // => [2, 3, 4, 5]
 cons(0, xs);              // => [0, 1, 2, 3, 4, 5]
 
+// Indexing (lists, vectors, strings)
+xs[0];                    // => 1
+xs[-1];                   // => 5 (negative = from end)
+xs[1:3];                  // => [2, 3] (slice, exclusive end)
+xs[:2];                   // => [1, 2]
+xs[2:];                   // => [3, 4, 5]
+
 // Dotted pairs
 define pair = (1 .. 2);          // => (1 . 2)
 (1, 2, 3 .. 4);           // => (1 2 3 . 4)
 
 // Vectors (random access)
 define v = #[10, 20, 30];
+v[1];                     // => 20
+
+// Strings
+"hello"[1];               // => #\e
+"hello"[1:3];             // => "el"
 
 // Records
 record Point(x, y);
@@ -330,7 +344,7 @@ e.eval('saved("second");')      // => "second"
 
 ### Object-oriented programming
 
-Eval supports OOP through closures and the constructor/interface pattern:
+Eval supports OOP through closures and the constructor/interface pattern, with abstract methods and abstract classes:
 
 ```
 define Point = constructor(x, y)
@@ -356,6 +370,37 @@ define Point3D = constructor(x, y, z) {
 define p3 = Point3D(1, 2, 3);
 p3->x;               // => 1 (inherited from Point)
 p3->z;               // => 3
+```
+
+### Abstract methods and classes
+
+Declare methods that must be overridden, or prevent direct instantiation of base classes:
+
+```
+// Abstract method — errors if called without override
+define Shape = constructor()
+    interface(area: abstract, name: function() "shape");
+Shape()->area();           // ERROR: "abstract method: area"
+Shape()->name();           // "shape" (works fine)
+
+// Abstract class — prevents direct instantiation
+define Shape = abstract constructor()
+    interface(area: abstract, name: function() "shape");
+Shape();                   // ERROR: "cannot instantiate abstract class"
+
+// Subclass overrides abstract methods
+define Circle = constructor(r) {
+    super Shape();
+    interface(area: function() 3.14159 * r * r);
+};
+Circle(5)->area();         // => 78.53975
+Circle(5)->name();         // => "shape" (inherited)
+
+// Abstract + static
+define Shape = abstract constructor()
+    static(types: ["circle", "rect"])
+    interface(area: abstract);
+Shape->types;              // ["circle", "rect"] (statics still accessible)
 ```
 
 ### Multiple return values
@@ -490,7 +535,7 @@ thread_join(t1); thread_join(t2);
 counter;    // => 100
 ```
 
-See [`examples/green_threads/`](examples/green_threads/) for complete demos, [THREADS.md](THREADS.md) for the full green threads and continuations guide, and [ASYNC.md](ASYNC.md) for the async programming guide.
+See [`examples/green_threads/`](examples/green_threads/) for complete demos, [THREADS.md](THREADS.md) for the full green threads and continuations guide, [ASYNC.md](ASYNC.md) for the async programming guide, and [NETWORKING.md](NETWORKING.md) for the networking guide.
 
 ## Reactive programming
 
@@ -592,6 +637,35 @@ user();                  // => new user data
 
 See [REACTIVE.md](REACTIVE.md) for the full reactive programming guide, and [INTRO.md](INTRO.md) for the complete language reference.
 
+## Networking
+
+TCP sockets and HTTP with OO wrappers, RAII cleanup, and reactive signals:
+
+```
+// TCP client
+with(sock = TcpClient("example.com", 80)) {
+    sock->send("GET / HTTP/1.0\r\nHost: example.com\r\n\r\n");
+    display(sock->recv(4096));
+};
+
+// HTTP client
+with(client = HttpClient("example.com", 80)) {
+    define result = client->get("/");
+    display(car(cdr(result)));    // response body
+};
+
+// TCP server with reactive connection tracking
+define server = TcpServer(8080, function(sock, addr, port) {
+    define data = sock->recv(4096);
+    sock->send("HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nOK");
+});
+server->connections;    // reactive Signal
+server->requests;       // reactive Signal
+server->run();
+```
+
+All socket operations integrate with green threads — they yield automatically when they would block. See [NETWORKING.md](NETWORKING.md) for the full guide.
+
 ## Thread pool
 
 True OS-level parallelism with worker threads, each running an independent chibi-scheme VM. Workers communicate through channels and futures. Closures can be serialized across thread boundaries.
@@ -660,7 +734,7 @@ Block until the worker finishes, then return the result. Raises `EvalError` on f
 
 Send or receive values through a channel. `recv()` blocks until a value is available. `try_recv()` returns `(ok, value)` without blocking — `ok` is `True` if a value was received.
 
-See [ASYNC.md](ASYNC.md) for the full async programming guide and [THREADS.md](THREADS.md) for the complete threads and continuations guide.
+See [ASYNC.md](ASYNC.md) for the full async programming guide, [THREADS.md](THREADS.md) for the complete threads and continuations guide, [NETWORKING.md](NETWORKING.md) for TCP/HTTP networking, and [FILESYS.md](FILESYS.md) for filesystem operations.
 
 ## Scheme-to-Eval transpiler
 
@@ -681,6 +755,9 @@ python tools/scm2eval.py --dir chibi-scheme/lib/scheme/ -o chibi_eval/_lib/schem
 | [`examples/bank/`](examples/bank/) | OOP with closures: accounts, savings, checking, bank manager |
 | [`examples/green_threads/`](examples/green_threads/) | Cooperative scheduling, continuation serialization, producer-consumer pipelines |
 | [`examples/objects/`](examples/objects/) | SICP-inspired object patterns: message passing, delegation, polymorphism |
+| [`examples/http_server.eval`](examples/http_server.eval) | HTTP server with routing, reactive state, green threads |
+| [`examples/http_client.eval`](examples/http_client.eval) | HTTP client: low-level helpers + OO `HttpClient` wrapper |
+| [`examples/file_processor.eval`](examples/file_processor.eval) | Reactive file scanner with indexing, signals, computed values |
 
 Run examples with Python:
 

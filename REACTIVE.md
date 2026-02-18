@@ -838,6 +838,27 @@ Effect(function() {
 });
 ```
 
+### Resource with HTTP
+
+Combine `resource` with `HttpClient` for reactive data fetching:
+
+```
+define endpoint = Signal("/api/users");
+define data = resource(endpoint, function(path) {
+    define client = HttpClient("api.example.com", 80);
+    define result = client->get(path);
+    client->close();
+    car(cdr(result));   // response body
+});
+
+data->settle();
+display(data());       // => response body
+
+endpoint->set("/api/posts");   // triggers re-fetch
+data->settle();
+display(data());               // => new response body
+```
+
 ### Resource with Initial Value
 
 Pass a third argument to set the value before the first fetch completes:

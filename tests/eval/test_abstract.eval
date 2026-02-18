@@ -1,0 +1,101 @@
+test_begin("abstract");
+
+// === Abstract methods ===
+
+// Abstract method throws when called directly
+define Shape = constructor()
+    interface(area: abstract, name: function() "shape");
+test_assert("abstract method throws",
+    try Shape()->area()
+    catch(e) true);
+
+// Non-abstract methods on same class still work
+test_assert("non-abstract method works", Shape()->name() == "shape");
+
+// Subclass overrides abstract method
+define Circle = constructor(r) {
+    super Shape();
+    interface(area: function() 3.14159 * r * r);
+};
+test_assert("subclass overrides abstract method", Circle(5)->area() == 3.14159 * 25);
+
+// Subclass inherits non-abstract methods via super
+test_assert("subclass inherits non-abstract", Circle(5)->name() == "shape");
+
+
+// === Abstract classes ===
+
+// Abstract class blocks direct instantiation
+define Animal = abstract constructor()
+    interface(speak: abstract, kind: function() "animal");
+test_assert("abstract class blocks direct instantiation",
+    try Animal()
+    catch(e) true);
+
+// Subclass of abstract class works via super
+define Dog = constructor() {
+    super Animal();
+    interface(speak: function() "woof");
+};
+test_assert("subclass of abstract class works", Dog()->speak() == "woof");
+test_assert("subclass inherits from abstract class", Dog()->kind() == "animal");
+
+
+// === Abstract + static + interface ===
+define Vehicle = abstract constructor()
+    static(category: "transport")
+    interface(speed: abstract);
+
+// Static accessible on abstract class
+test_assert("abstract class statics accessible", Vehicle->category == "transport");
+
+// Direct instantiation blocked
+test_assert("abstract class with statics blocks instantiation",
+    try Vehicle()
+    catch(e) true);
+
+// Subclass with static parent
+define Car = constructor(s) {
+    super Vehicle();
+    interface(speed: function() s);
+};
+test_assert("subclass of abstract+static", Car(100)->speed() == 100);
+
+
+// === Chained abstract inheritance ===
+// A abstract -> B abstract -> C concrete
+define A = abstract constructor()
+    interface(foo: abstract, base: function() "A");
+
+define B = abstract constructor() {
+    super A();
+    interface(bar: abstract);
+};
+
+define C = constructor() {
+    super B();
+    interface(foo: function() "foo-impl", bar: function() "bar-impl");
+};
+
+test_assert("chained abstract: foo", C()->foo() == "foo-impl");
+test_assert("chained abstract: bar", C()->bar() == "bar-impl");
+test_assert("chained abstract: inherited base", C()->base() == "A");
+
+// A and B can't be instantiated directly
+test_assert("chained abstract: A blocked",
+    try A()
+    catch(e) true);
+test_assert("chained abstract: B blocked",
+    try B()
+    catch(e) true);
+
+
+// === member_name: abstract accessible via -> ===
+define Obj2 = constructor() {
+    define my_abstract = "field-value";
+    interface(get_val: function() my_abstract);
+};
+test_assert("abstract keyword usable in expressions", Obj2()->get_val() == "field-value");
+
+
+test_end();

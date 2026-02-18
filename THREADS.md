@@ -537,3 +537,8 @@ define process_batch = function(items) {
     channel_recv(out);    // => [16, 25] (aborted at -1)
 };
 ```
+
+## See also
+
+- [NETWORKING.md](NETWORKING.md) — TCP sockets and HTTP with OO wrappers (`TcpSocket`, `TcpServer`, `HttpClient`) that integrate with green threads
+- [ASYNC.md](ASYNC.md) — Async/await, thread pools, channels, pipelines

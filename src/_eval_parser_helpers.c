@@ -375,18 +375,273 @@ sexp ps_make_interface(sexp ctx, sexp entries) {
     return define_form;
 }
 
-/* Build (set! __supers__ (append __supers__ (list expr))) */
+/* Build super with __abstract_ok__ flag management:
+   (begin
+     (set! __abstract_ok__ #t)
+     (set! __supers__ (append __supers__ (list expr)))
+     (set! __abstract_ok__ #f)) */
 sexp ps_make_super(sexp ctx, sexp expr) {
     sexp_gc_var2(list_expr, append_expr);
     sexp_gc_preserve2(ctx, list_expr, append_expr);
 
+    sexp abs_sym = ps_intern(ctx, "__abstract_ok__");
+    sexp set_true = sexp_list3(ctx, ps_intern(ctx, "set!"), abs_sym, SEXP_TRUE);
+    sexp set_false = sexp_list3(ctx, ps_intern(ctx, "set!"), abs_sym, SEXP_FALSE);
+
     list_expr = sexp_list2(ctx, ps_intern(ctx, "list"), expr);
     append_expr = sexp_list3(ctx, ps_intern(ctx, "append"),
                              ps_intern(ctx, "__supers__"), list_expr);
-    sexp result = sexp_list3(ctx, ps_intern(ctx, "set!"),
-                              ps_intern(ctx, "__supers__"), append_expr);
+    sexp set_supers = sexp_list3(ctx, ps_intern(ctx, "set!"),
+                                  ps_intern(ctx, "__supers__"), append_expr);
+
+    sexp result = sexp_cons(ctx, ps_intern(ctx, "begin"),
+                   sexp_cons(ctx, set_true,
+                     sexp_cons(ctx, set_supers,
+                       sexp_cons(ctx, set_false, SEXP_NULL))));
     sexp_gc_release2(ctx);
     return result;
+}
+
+/* Build a static wrapper around a constructor (or standalone for statics-only).
+   Generates:
+     (let* ((__statics__ (let ((ht (make-hash-table)))
+                           (hash-table-set! ht 'key1 val1) ...
+                           ht))
+            (__ctor__ <ctor-lambda>))      ; omitted if ctor == SEXP_FALSE
+       (lambda __args__
+         (if (and (pair? __args__) (null? (cdr __args__)) (symbol? (car __args__)))
+           (if (hash-table-exists? __statics__ (car __args__))
+             (hash-table-ref __statics__ (car __args__))
+             <else-single-arg>)
+           <else-normal-call>)))
+*/
+static sexp ps_make_static_wrapper(sexp ctx, sexp ctor, sexp statics) {
+    sexp s_ht        = ps_intern(ctx, "ht");
+    sexp s_statics   = ps_intern(ctx, "__statics__");
+    sexp s_ctor      = ps_intern(ctx, "__ctor__");
+    sexp s_args      = ps_intern(ctx, "__args__");
+    sexp s_inst      = ps_intern(ctx, "__inst__");
+    sexp s_msg       = ps_intern(ctx, "__msg__");
+    sexp s_mkht      = ps_intern(ctx, "make-hash-table");
+    sexp s_htset     = ps_intern(ctx, "hash-table-set!");
+    sexp s_htexists  = ps_intern(ctx, "hash-table-exists?");
+    sexp s_htref     = ps_intern(ctx, "hash-table-ref");
+    sexp s_pair      = ps_intern(ctx, "pair?");
+    sexp s_null      = ps_intern(ctx, "null?");
+    sexp s_symbolp   = ps_intern(ctx, "symbol?");
+    sexp s_car       = ps_intern(ctx, "car");
+    sexp s_cdr       = ps_intern(ctx, "cdr");
+    sexp s_apply     = ps_intern(ctx, "apply");
+    sexp s_if        = ps_intern(ctx, "if");
+    sexp s_and       = ps_intern(ctx, "and");
+    sexp s_let       = ps_intern(ctx, "let");
+    sexp s_letstar   = ps_intern(ctx, "let*");
+    sexp s_lambda    = ps_intern(ctx, "lambda");
+    sexp s_begin     = ps_intern(ctx, "begin");
+    sexp s_error     = ps_intern(ctx, "error");
+    sexp s_quote     = ps_intern(ctx, "quote");
+
+    /* --- Build __statics__ initializer:
+       (let ((ht (make-hash-table)))
+         (hash-table-set! ht 'k1 v1)
+         ...
+         ht)  */
+    sexp mkht_call = sexp_list1(ctx, s_mkht);
+    sexp ht_binding = sexp_list1(ctx, sexp_list2(ctx, s_ht, mkht_call));
+
+    /* Build list of (hash-table-set! ht 'key val) forms */
+    sexp set_forms = SEXP_NULL;
+    sexp p = statics;
+    while (sexp_pairp(p)) {
+        sexp entry = sexp_car(p);
+        sexp key = sexp_car(entry);
+        sexp val = sexp_cdr(entry);
+        sexp quoted_key = sexp_list2(ctx, s_quote, key);
+        sexp set_call = sexp_cons(ctx, s_htset,
+                            sexp_cons(ctx, s_ht,
+                                sexp_cons(ctx, quoted_key,
+                                    sexp_cons(ctx, val, SEXP_NULL))));
+        set_forms = sexp_cons(ctx, set_call, set_forms);
+        p = sexp_cdr(p);
+    }
+    /* Reverse set_forms */
+    sexp rev_sets = SEXP_NULL;
+    while (sexp_pairp(set_forms)) {
+        rev_sets = sexp_cons(ctx, sexp_car(set_forms), rev_sets);
+        set_forms = sexp_cdr(set_forms);
+    }
+
+    /* (begin set1 set2 ... ht) or just (begin ht) if no entries */
+    sexp ht_body;
+    if (sexp_nullp(rev_sets)) {
+        ht_body = s_ht;
+    } else {
+        ht_body = sexp_cons(ctx, s_begin, rev_sets);
+        /* Append ht at end */
+        sexp tail = ht_body;
+        while (sexp_pairp(sexp_cdr(tail)))
+            tail = sexp_cdr(tail);
+        sexp_cdr(tail) = sexp_cons(ctx, s_ht, SEXP_NULL);
+    }
+
+    sexp statics_init = sexp_list3(ctx, s_let, ht_binding, ht_body);
+
+    /* --- Build let* bindings --- */
+    sexp letstar_bindings;
+    if (ctor == SEXP_FALSE) {
+        /* Statics-only: just __statics__ */
+        letstar_bindings = sexp_list1(ctx, sexp_list2(ctx, s_statics, statics_init));
+    } else {
+        /* Full: __statics__ and __ctor__ */
+        letstar_bindings = sexp_list2(ctx,
+            sexp_list2(ctx, s_statics, statics_init),
+            sexp_list2(ctx, s_ctor, ctor));
+    }
+
+    /* --- Common subexpressions --- */
+    sexp car_args = sexp_list2(ctx, s_car, s_args);
+    sexp cdr_args = sexp_list2(ctx, s_cdr, s_args);
+    sexp ht_exists = sexp_list3(ctx, s_htexists, s_statics, car_args);
+    sexp ht_get    = sexp_list3(ctx, s_htref, s_statics, car_args);
+
+    /* --- Single-symbol-arg test:
+       (and (pair? __args__) (null? (cdr __args__)) (symbol? (car __args__))) */
+    sexp test_single = sexp_cons(ctx, s_and,
+        sexp_cons(ctx, sexp_list2(ctx, s_pair, s_args),
+            sexp_cons(ctx, sexp_list2(ctx, s_null, cdr_args),
+                sexp_cons(ctx, sexp_list2(ctx, s_symbolp, car_args),
+                    SEXP_NULL))));
+
+    /* --- Else for single-arg (hash miss): --- */
+    sexp else_single;
+    if (ctor == SEXP_FALSE) {
+        /* statics-only: error */
+        else_single = sexp_list2(ctx, s_error,
+            sexp_c_string(ctx, "static-only class: unknown key", -1));
+    } else {
+        /* try as 1-arg constructor call */
+        else_single = sexp_list3(ctx, s_apply, s_ctor, s_args);
+    }
+
+    /* (if (hash-table-exists? ...) (hash-table-ref ...) else_single) */
+    sexp single_branch = sexp_cons(ctx, s_if,
+        sexp_cons(ctx, ht_exists,
+            sexp_cons(ctx, ht_get,
+                sexp_cons(ctx, else_single, SEXP_NULL))));
+
+    /* --- Normal-call branch (multi-arg or zero-arg): --- */
+    sexp normal_branch;
+    if (ctor == SEXP_FALSE) {
+        /* statics-only: error */
+        normal_branch = sexp_list2(ctx, s_error,
+            sexp_c_string(ctx, "static-only class: not callable", -1));
+    } else {
+        /* (let ((__inst__ (apply __ctor__ __args__)))
+             (lambda (__msg__)
+               (if (hash-table-exists? __statics__ __msg__)
+                 (hash-table-ref __statics__ __msg__)
+                 (__inst__ __msg__)))) */
+        sexp apply_ctor = sexp_list3(ctx, s_apply, s_ctor, s_args);
+        sexp inst_binding = sexp_list1(ctx, sexp_list2(ctx, s_inst, apply_ctor));
+
+        sexp ht_exists_msg = sexp_list3(ctx, s_htexists, s_statics, s_msg);
+        sexp ht_get_msg = sexp_list3(ctx, s_htref, s_statics, s_msg);
+        sexp inst_dispatch = sexp_list2(ctx, s_inst, s_msg);
+
+        sexp inner_if = sexp_cons(ctx, s_if,
+            sexp_cons(ctx, ht_exists_msg,
+                sexp_cons(ctx, ht_get_msg,
+                    sexp_cons(ctx, inst_dispatch, SEXP_NULL))));
+
+        sexp inner_lambda = sexp_list3(ctx, s_lambda,
+            sexp_list1(ctx, s_msg), inner_if);
+
+        normal_branch = sexp_list3(ctx, s_let, inst_binding, inner_lambda);
+    }
+
+    /* --- Outer if --- */
+    sexp outer_if = sexp_cons(ctx, s_if,
+        sexp_cons(ctx, test_single,
+            sexp_cons(ctx, single_branch,
+                sexp_cons(ctx, normal_branch, SEXP_NULL))));
+
+    /* --- Outer lambda with rest param: (lambda __args__ outer_if) --- */
+    sexp outer_lambda = sexp_list3(ctx, s_lambda, s_args, outer_if);
+
+    /* --- Wrap in let* --- */
+    return sexp_list3(ctx, s_letstar, letstar_bindings, outer_lambda);
+}
+
+/* Build constructor with static methods/values.
+   iface_entries: list of (name . expr) pairs for the interface, or SEXP_NULL for statics-only. */
+sexp ps_make_constructor_static(sexp ctx, sexp params, sexp statics, sexp iface_entries) {
+    sexp ctor;
+    if (sexp_nullp(iface_entries)) {
+        ctor = SEXP_FALSE;  /* statics-only */
+    } else {
+        sexp body = ps_make_interface(ctx, iface_entries);
+        ctor = ps_make_constructor(ctx, params, body);
+    }
+    return ps_make_static_wrapper(ctx, ctor, statics);
+}
+
+/* Build abstract method: (lambda __args__ (error "abstract method" "name")) */
+sexp ps_make_abstract_method(sexp ctx, const char *name, int length) {
+    char buf[256];
+    int n = length < 255 ? length : 255;
+    memcpy(buf, name, n);
+    buf[n] = '\0';
+
+    sexp args_sym = ps_intern(ctx, "__args__");
+    sexp err_call = sexp_list3(ctx, ps_intern(ctx, "error"),
+                               sexp_c_string(ctx, "abstract method", -1),
+                               sexp_c_string(ctx, buf, n));
+    return sexp_list3(ctx, ps_intern(ctx, "lambda"), args_sym, err_call);
+}
+
+/* Build abstract constructor: wraps normal constructor in a guard lambda.
+   (let ((__inner_ctor__ <normal-constructor>))
+     (lambda __args__
+       (if (not __abstract_ok__) (error "cannot instantiate abstract class"))
+       (set! __abstract_ok__ #f)
+       (apply __inner_ctor__ __args__))) */
+sexp ps_make_abstract_constructor(sexp ctx, sexp params, sexp body) {
+    /* Build normal constructor first */
+    sexp normal_ctor = ps_make_constructor(ctx, params, body);
+
+    sexp abs_sym = ps_intern(ctx, "__abstract_ok__");
+    sexp inner_sym = ps_intern(ctx, "__inner_ctor__");
+    sexp args_sym = ps_intern(ctx, "__args__");
+
+    sexp not_abs = sexp_list2(ctx, ps_intern(ctx, "not"), abs_sym);
+    sexp err = sexp_list2(ctx, ps_intern(ctx, "error"),
+                          sexp_c_string(ctx, "cannot instantiate abstract class", -1));
+    sexp guard = sexp_list3(ctx, ps_intern(ctx, "if"), not_abs, err);
+    sexp reset = sexp_list3(ctx, ps_intern(ctx, "set!"), abs_sym, SEXP_FALSE);
+    sexp apply_call = sexp_list3(ctx, ps_intern(ctx, "apply"), inner_sym, args_sym);
+
+    /* (lambda __args__ guard reset apply_call) — rest-param lambda */
+    sexp wrapper = sexp_cons(ctx, ps_intern(ctx, "lambda"),
+                     sexp_cons(ctx, args_sym,
+                       sexp_cons(ctx, guard,
+                         sexp_cons(ctx, reset,
+                           sexp_cons(ctx, apply_call, SEXP_NULL)))));
+
+    /* (let ((__inner_ctor__ normal_ctor)) wrapper) */
+    sexp binding = sexp_list1(ctx, sexp_list2(ctx, inner_sym, normal_ctor));
+    return sexp_list3(ctx, ps_intern(ctx, "let"), binding, wrapper);
+}
+
+/* Build abstract constructor with static wrapper */
+sexp ps_make_abstract_constructor_static(sexp ctx, sexp params, sexp statics, sexp iface_entries) {
+    sexp ctor;
+    if (sexp_nullp(iface_entries)) {
+        ctor = SEXP_FALSE;
+    } else {
+        sexp body = ps_make_interface(ctx, iface_entries);
+        ctor = ps_make_abstract_constructor(ctx, params, body);
+    }
+    return ps_make_static_wrapper(ctx, ctor, statics);
 }
 
 /* Build let, let-star, or letrec with bindings and body */
@@ -965,6 +1220,19 @@ sexp ps_expr_safe(sexp ctx, sexp expr) {
 
     sexp_gc_release5(ctx);
     return result;
+}
+
+/* Build (ref obj index) */
+sexp ps_make_ref(sexp ctx, sexp obj, sexp index) {
+    return sexp_list3(ctx, ps_intern(ctx, "ref"), obj, index);
+}
+
+/* Build (slice obj start end) */
+sexp ps_make_slice(sexp ctx, sexp obj, sexp start, sexp end) {
+    return sexp_cons(ctx, ps_intern(ctx, "slice"),
+               sexp_cons(ctx, obj,
+                   sexp_cons(ctx, start,
+                       sexp_cons(ctx, end, SEXP_NULL))));
 }
 
 /* ===== Lemon parser wrapper ===== */

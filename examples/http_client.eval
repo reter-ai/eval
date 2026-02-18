@@ -1,12 +1,19 @@
 // http_client.eval — HTTP client helper functions using chibi/net
 //
-// Provides: http_get, http_post
+// Provides: http_get, http_post (low-level), HttpClient (OO wrapper, built-in)
 //
-// Usage:
+// Usage (low-level):
 //   include("examples/http_client.eval");
 //   define r = http_get("127.0.0.1", 8080, "/");
 //   display(car(r));        // status code
 //   display(car(cdr(r)));   // body
+//
+// Usage (OO — no include needed, HttpClient is built-in):
+//   with(client = HttpClient("127.0.0.1", 8080)) {
+//       define r = client->get("/");
+//       display(car(r));        // status code
+//       display(car(cdr(r)));   // body
+//   };
 
 // Find needle in str, return integer index or false.
 define string_index = function(str, needle) {

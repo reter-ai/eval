@@ -1,0 +1,194 @@
+// net-oo.eval -- OO socket wrappers with RAII, async, and reactive
+// Provides: TcpSocket, TcpServer, TcpClient, HttpClient
+
+// --- TcpSocket: wraps a raw socket fd with RAII ---
+define TcpSocket = function(fd) {
+    define open = true;
+    interface(
+        send: function(data) {
+            if(!open) error("TcpSocket: send on closed socket");
+            if(`string?`(data))
+                send(fd, string_to_utf8(data))
+            else
+                send(fd, data);
+        },
+        recv: function(n) {
+            if(!open) error("TcpSocket: recv on closed socket");
+            define bv = recv(fd, n);
+            if(bv == false) false else utf8_to_string(bv);
+        },
+        recv_bytes: function(n) {
+            if(!open) error("TcpSocket: recv on closed socket");
+            recv(fd, n);
+        },
+        close: function() if(open) { open = false; close_file_descriptor(fd); },
+        dispose: function() if(open) { open = false; close_file_descriptor(fd); },
+        `open?`: open,
+        fd: fd,
+        __type__: '__tcp_socket__,
+        __raw__: fd
+    );
+};
+
+// --- TcpClient: connect and return a TcpSocket ---
+define TcpClient = function(host, port) {
+    define ai = get_address_info(host, `number->string`(port));
+    define fd = socket(address_info_family(ai),
+                       address_info_socket_type(ai),
+                       address_info_protocol(ai));
+    connect(fd, address_info_address(ai), address_info_address_length(ai));
+    TcpSocket(fd);
+};
+
+// --- TcpServer: listener with RAII and per-connection green threads ---
+define TcpServer = function(port, handler) {
+    define ai = get_address_info("0.0.0.0", `number->string`(port));
+    define listener = make_listener_socket(ai);
+    define running = true;
+
+    // Reactive signals (available if reactive runtime is loaded)
+    define has_reactive = `procedure?`(Signal);
+    define connections = if(has_reactive) Signal(0) else false;
+    define requests = if(has_reactive) Signal(0) else false;
+
+    define serve_loop = function() {
+        while(running) {
+            define sa = make_sockaddr();
+            define conn_fd = accept(listener, sa, 16);
+            if(running) {
+                define sock = TcpSocket(conn_fd);
+                define client_addr = sockaddr_name(sa);
+                define client_port = sockaddr_port(sa);
+                thread_start(make_thread(function() {
+                    when(connections) connections->update(function(n) n + 1);
+                    when(requests) requests->update(function(n) n + 1);
+                    try {
+                        handler(sock, client_addr, client_port);
+                    } catch(err) {
+                        false;
+                    };
+                    sock->close();
+                    when(connections) connections->update(function(n) n - 1);
+                }));
+            };
+        };
+    };
+
+    interface(
+        start: function() {
+            thread_start(make_thread(serve_loop));
+        },
+        run: function() serve_loop(),
+        stop: function() if(running) {
+            running = false;
+            close_file_descriptor(listener);
+        },
+        close: function() if(running) {
+            running = false;
+            close_file_descriptor(listener);
+        },
+        dispose: function() if(running) {
+            running = false;
+            close_file_descriptor(listener);
+        },
+        connections: connections,
+        requests: requests,
+        port: port,
+        `running?`: running,
+        __type__: '__tcp_server__,
+        __raw__: listener
+    );
+};
+
+// --- HttpClient: OO HTTP client with connection reuse ---
+define HttpClient = function(host, port) {
+    define sock = false;
+
+    define ensure_connected = function() {
+        when(!sock || !sock->`open?`)
+            sock = TcpClient(host, port);
+    };
+
+    // Find needle in str, return integer index or false
+    define string_index = function(str, needle) {
+        define cur = string_contains(str, needle);
+        if(cur) `string-cursor->index`(str, cur) else false;
+    };
+
+    define parse_response = function() {
+        define buf = "";
+        define header_end = false;
+        while(!header_end) {
+            define chunk = sock->recv(4096);
+            if(!chunk) return [0, ""];
+            buf = buf ++ chunk;
+            header_end = string_index(buf, "\r\n\r\n");
+        };
+
+        define headers_str = substring(buf, 0, header_end);
+        define body_start = substring(buf, header_end + 4, `string-length`(buf));
+
+        // Parse status
+        define sp1 = string_index(headers_str, " ");
+        define status_str = if(sp1) {
+            define rest = substring(headers_str, sp1 + 1, `string-length`(headers_str));
+            define sp2 = string_index(rest, " ");
+            if(sp2) substring(rest, 0, sp2) else rest;
+        } else "0";
+        define status = `string->number`(status_str);
+
+        // Parse Content-Length
+        define content_length = 0;
+        define lower = string_downcase_ascii(headers_str);
+        define cl_idx = string_index(lower, "content-length: ");
+        when(cl_idx) {
+            define after = substring(headers_str, cl_idx + 16, `string-length`(headers_str));
+            define eol = string_index(after, "\r\n");
+            define cl_str = if(eol) substring(after, 0, eol) else after;
+            content_length = `string->number`(cl_str);
+        };
+
+        // Read remaining body
+        define body = body_start;
+        while(`string-length`(body) < content_length) {
+            define chunk = sock->recv(content_length - `string-length`(body));
+            if(!chunk) return [status, body];
+            body = body ++ chunk;
+        };
+
+        [status, body];
+    };
+
+    interface(
+        get: function(path) {
+            ensure_connected();
+            sock->send("GET " ++ path ++ " HTTP/1.0\r\n"
+                ++ "Host: " ++ host ++ "\r\n"
+                ++ "Connection: close\r\n"
+                ++ "\r\n");
+            define result = parse_response();
+            sock->close();
+            sock = false;
+            result;
+        },
+        post: function(path, body) {
+            ensure_connected();
+            sock->send("POST " ++ path ++ " HTTP/1.0\r\n"
+                ++ "Host: " ++ host ++ "\r\n"
+                ++ "Content-Length: " ++ `number->string`(`string-length`(body)) ++ "\r\n"
+                ++ "Content-Type: text/plain\r\n"
+                ++ "Connection: close\r\n"
+                ++ "\r\n"
+                ++ body);
+            define result = parse_response();
+            sock->close();
+            sock = false;
+            result;
+        },
+        close: function() when(sock && sock->`open?`) sock->close(),
+        dispose: function() when(sock && sock->`open?`) sock->close(),
+        __type__: '__http_client__,
+        host: host,
+        port: port
+    );
+};

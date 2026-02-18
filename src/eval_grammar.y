@@ -49,11 +49,11 @@
 %left STAR SLASH PERCENT.
 %right STARSTAR.
 %right UMINUS BANG BITNOT BANGBANG QUOTE_PREC.
-%left LPAREN ARROW PLUSPLUS MINUSMINUS.
+%left LPAREN LBRACKET ARROW PLUSPLUS MINUSMINUS.
 %nonassoc RPAREN COMMA DOTDOT RBRACKET RBRACE SEMICOLON COLON.
 /* Additional keyword tokens recognized by the lexer.
    Declaring them here makes lemon generate their TOK_ defines. */
-%token LIBRARY EXPORT INCLUDE MACRO SYNTAX_RULES OPVAL TEST_GROUP DEFINE IN DICT WITH ASYNC AWAIT.
+%token LIBRARY EXPORT INCLUDE MACRO SYNTAX_RULES OPVAL TEST_GROUP DEFINE IN DICT WITH ASYNC AWAIT STATIC ABSTRACT.
 
 /* Non-terminal types - all are sexp */
 %type program { sexp }
@@ -236,6 +236,27 @@ member_name(A) ::= FINALLY(T). { A = T; }
 member_name(A) ::= WITH(T).   { A = T; }
 member_name(A) ::= ASYNC(T).  { A = T; }
 member_name(A) ::= AWAIT(T).  { A = T; }
+member_name(A) ::= STATIC(T). { A = T; }
+member_name(A) ::= ABSTRACT(T). { A = T; }
+
+/* --- Postfix: indexing expr[i] --- */
+expr(A) ::= expr(E) LBRACKET expr(I) RBRACKET. {
+    A = ps_make_ref(ctx, E, I);
+}
+
+/* --- Postfix: slicing expr[s:e] --- */
+expr(A) ::= expr(E) LBRACKET expr(S) COLON expr(T) RBRACKET. {
+    A = ps_make_slice(ctx, E, S, T);
+}
+expr(A) ::= expr(E) LBRACKET COLON expr(T) RBRACKET. {
+    A = ps_make_slice(ctx, E, SEXP_FALSE, T);
+}
+expr(A) ::= expr(E) LBRACKET expr(S) COLON RBRACKET. {
+    A = ps_make_slice(ctx, E, S, SEXP_FALSE);
+}
+expr(A) ::= expr(E) LBRACKET COLON RBRACKET. {
+    A = ps_make_slice(ctx, E, SEXP_FALSE, SEXP_FALSE);
+}
 
 /* --- Postfix: increment/decrement --- */
 expr(A) ::= IDENT(N) PLUSPLUS. {
@@ -409,8 +430,28 @@ expr(A) ::= RETURN expr(E). [RETURN_PREC] {
 expr(A) ::= CONSTRUCTOR LPAREN params(P) RPAREN expr(B). [ARGLIST_PREC] {
     A = ps_make_constructor(ctx, P, B);
 }
+/* Constructor with statics + interface */
+expr(A) ::= CONSTRUCTOR LPAREN params(P) RPAREN STATIC LPAREN iface_entries(S) RPAREN INTERFACE LPAREN iface_entries(I) RPAREN. {
+    A = ps_make_constructor_static(ctx, P, S, I);
+}
+/* Constructor with statics + empty interface (statics-only) */
+expr(A) ::= CONSTRUCTOR LPAREN params(P) RPAREN STATIC LPAREN iface_entries(S) RPAREN INTERFACE LPAREN RPAREN. {
+    A = ps_make_constructor_static(ctx, P, S, SEXP_NULL);
+}
 expr(A) ::= INTERFACE LPAREN iface_entries(E) RPAREN. {
     A = ps_make_interface(ctx, E);
+}
+/* --- Abstract constructor --- */
+expr(A) ::= ABSTRACT CONSTRUCTOR LPAREN params(P) RPAREN expr(B). [ARGLIST_PREC] {
+    A = ps_make_abstract_constructor(ctx, P, B);
+}
+/* Abstract constructor with statics + interface */
+expr(A) ::= ABSTRACT CONSTRUCTOR LPAREN params(P) RPAREN STATIC LPAREN iface_entries(S) RPAREN INTERFACE LPAREN iface_entries(I) RPAREN. {
+    A = ps_make_abstract_constructor_static(ctx, P, S, I);
+}
+/* Abstract constructor with statics + empty interface */
+expr(A) ::= ABSTRACT CONSTRUCTOR LPAREN params(P) RPAREN STATIC LPAREN iface_entries(S) RPAREN INTERFACE LPAREN RPAREN. {
+    A = ps_make_abstract_constructor_static(ctx, P, S, SEXP_NULL);
 }
 expr(A) ::= SUPER expr(E). [SUPER_PREC] {
     A = ps_make_super(ctx, E);
@@ -597,7 +638,7 @@ ident_list(A) ::= ident_list(L) COMMA IDENT(N). {
 }
 
 /* List items: a, b, c */
-list_items(A) ::= expr(E). { A = sexp_list1(ctx, E); }
+list_items(A) ::= expr(E). [ARGLIST_PREC] { A = sexp_list1(ctx, E); }
 list_items(A) ::= list_items(L) COMMA expr(E). {
     A = ps_append(ctx, L, E);
 }
@@ -609,6 +650,10 @@ iface_entries(A) ::= iface_entries(L) COMMA iface_entry(E). {
 }
 iface_entry(A) ::= IDENT(N) COLON expr(E). {
     A = sexp_cons(ctx, ps_make_ident(ctx, N.start, N.length), E);
+}
+iface_entry(A) ::= IDENT(N) COLON ABSTRACT. {
+    A = sexp_cons(ctx, ps_make_ident(ctx, N.start, N.length),
+                  ps_make_abstract_method(ctx, N.start, N.length));
 }
 
 /* Cond clauses: test: expr, test: expr, else: expr */

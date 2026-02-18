@@ -295,6 +295,12 @@ static sexp init_context(const char *extra_module_dir) {
         eval_reactive_runtime(ctx, env);
     }
 
+    /* OO networking: TcpSocket, TcpClient, TcpServer, HttpClient */
+    {
+        extern void eval_load_eval_file(sexp ctx, sexp env, const char *path);
+        eval_load_eval_file(ctx, sexp_context_env(ctx), "eval/net-oo.eval");
+    }
+
     return ctx;
 }
 

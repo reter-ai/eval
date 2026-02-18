@@ -1,0 +1,119 @@
+test_begin("Indexing & Slicing");
+
+// === List indexing ===
+test("list[0]", 1, [1, 2, 3][0]);
+test("list[1]", 2, [1, 2, 3][1]);
+test("list[2]", 3, [1, 2, 3][2]);
+
+// Negative indices
+test("list[-1]", 3, [1, 2, 3][-1]);
+test("list[-2]", 2, [1, 2, 3][-2]);
+test("list[-3]", 1, [1, 2, 3][-3]);
+
+// === Vector indexing ===
+test("vec[0]", 10, #[10, 20, 30][0]);
+test("vec[1]", 20, #[10, 20, 30][1]);
+test("vec[-1]", 30, #[10, 20, 30][-1]);
+
+// === String indexing (returns characters) ===
+define hello = "hello";
+test("str[0]", `string-ref`("hello", 0), hello[0]);
+test("str[1]", `string-ref`("hello", 1), hello[1]);
+test("str[-1]", `string-ref`("hello", 4), hello[-1]);
+test_assert("str[0] is char", `char?`(hello[0]));
+
+// === Index via variable ===
+define data = [10, 20, 30, 40, 50];
+test("var[0]", 10, data[0]);
+test("var[3]", 40, data[3]);
+test("var[-1]", 50, data[-1]);
+
+// === Computed index ===
+test("computed index", 30, data[1 + 1]);
+
+// === Chained indexing ===
+test("chain[1][0]", 3, [[1, 2], [3, 4]][1][0]);
+test("chain[0][1]", 2, [[1, 2], [3, 4]][0][1]);
+
+// Nested vectors
+test("vec chain", 6, #[#[1, 2], #[5, 6]][1][1]);
+
+// === List slicing ===
+test("list[1:3]", [2, 3], [1, 2, 3, 4, 5][1:3]);
+test("list[0:2]", [1, 2], [1, 2, 3, 4, 5][0:2]);
+test("list[3:5]", [4, 5], [1, 2, 3, 4, 5][3:5]);
+
+// Omitted start
+test("list[:2]", [1, 2], [1, 2, 3][:2]);
+test("list[:0]", [], [1, 2, 3][:0]);
+
+// Omitted end
+test("list[1:]", [2, 3], [1, 2, 3][1:]);
+test("list[0:]", [1, 2, 3], [1, 2, 3][0:]);
+
+// Full copy
+test("list[:]", [1, 2, 3], [1, 2, 3][:]);
+
+// Negative slice indices
+test("list[-2:]", [4, 5], [1, 2, 3, 4, 5][-2:]);
+test("list[:-1]", [1, 2], [1, 2, 3][:-1]);
+test("list[-3:-1]", [3, 4], [1, 2, 3, 4, 5][-3:-1]);
+
+// Empty slice
+test("empty slice", [], [1, 2, 3][2:2]);
+
+// === Vector slicing ===
+test("vec[1:3]", #[20, 30], #[10, 20, 30, 40][1:3]);
+test("vec[:]", #[10, 20, 30], #[10, 20, 30][:]);
+test("vec[:2]", #[10, 20], #[10, 20, 30][:2]);
+test("vec[-2:]", #[20, 30], #[10, 20, 30][-2:]);
+
+// === String slicing ===
+test("str[1:3]", "el", "hello"[1:3]);
+test("str[:3]", "hel", "hello"[:3]);
+test("str[2:]", "llo", "hello"[2:]);
+test("str[:]", "hello", "hello"[:]);
+test("str[-3:]", "llo", "hello"[-3:]);
+
+// === Index on expression results ===
+define make_list = function(n) {
+    define result = [];
+    define i = 0;
+    while(i < n) {
+        result = append(result, [i * 10]);
+        i++;
+    };
+    result;
+};
+test("fn result[0]", 0, make_list(3)[0]);
+test("fn result[2]", 20, make_list(3)[2]);
+test("fn result[-1]", 20, make_list(3)[-1]);
+
+// === Index with postfix chaining ===
+define matrix = [[1, 2, 3], [4, 5, 6], [7, 8, 9]];
+test("matrix[0][0]", 1, matrix[0][0]);
+test("matrix[1][2]", 6, matrix[1][2]);
+test("matrix[2][1]", 8, matrix[2][1]);
+
+// === Slice preserves type ===
+test_assert("list slice is list", list?(data[1:3]));
+test_assert("string slice is string", string?("hello"[1:3]));
+test_assert("vec slice is vec", vector?(#[1, 2, 3][0:2]));
+
+// === Out of range errors ===
+test_error("list out of range", function() [1, 2, 3][5]);
+test_error("list neg out of range", function() [1, 2, 3][-4]);
+test_error("vec out of range", function() #[1, 2][3]);
+test_error("str out of range", function() "hi"[5]);
+
+// === Slice clamping (no error for out-of-range slices) ===
+test("slice clamp high", [1, 2, 3], [1, 2, 3][0:100]);
+test("slice clamp low", [1, 2, 3], [1, 2, 3][-100:100]);
+test("slice clamp empty", [], [1, 2, 3][5:10]);
+
+// === Single-element list ===
+test("single[0]", 42, [42][0]);
+test("single[-1]", 42, [42][-1]);
+test("single[:]", [42], [42][:]);
+
+test_end();

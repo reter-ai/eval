@@ -1,0 +1,255 @@
+// file_processor.eval — Reactive File Processing Pipeline
+//
+// Demonstrates: Signal, Computed, Effect, batch, watch,
+//               filesystem operations, indexing & slicing
+//
+// Scans directories, categorizes files by extension, computes
+// aggregate statistics, and reactively updates when the target
+// directory or filter changes.
+//
+// Usage:
+//   eval examples/file_processor.eval
+
+// ===== Utilities =====
+
+define ends_with = function(str, suffix) {
+    define slen = `string-length`(str);
+    define suflen = `string-length`(suffix);
+    if(suflen > slen) false
+    else substring(str, slen - suflen, slen) == suffix;
+};
+
+define get_extension = function(filename) {
+    define len = `string-length`(filename);
+    define i = len - 1;
+    define result = "";
+    while(i >= 0) {
+        if(`string-ref`(filename, i) == `integer->char`(46)) {
+            result = substring(filename, i, len);
+            i = -1;
+        } else {
+            i = i - 1;
+        };
+    };
+    result;
+};
+
+define read_file = function(path) {
+    define p = `open-input-file`(path);
+    define content = `read-string`(4000000, p);
+    `close-input-port`(p);
+    content;
+};
+
+define count_lines = function(text) {
+    `string-fold`(function(ch, n)
+        if(ch == `integer->char`(10)) n + 1 else n,
+        0, text);
+};
+
+define format_size = function(bytes) {
+    cond(
+        bytes >= 1048576: `number->string`(quotient(bytes, 1048576)) ++ " MB",
+        bytes >= 1024:    `number->string`(quotient(bytes, 1024)) ++ " KB",
+        else:             `number->string`(bytes) ++ " B"
+    );
+};
+
+define pad_right = function(str, width) {
+    define len = `string-length`(str);
+    if(len >= width) str
+    else str ++ `make-string`(width - len, `integer->char`(32));
+};
+
+define pad_left = function(str, width) {
+    define len = `string-length`(str);
+    if(len >= width) str
+    else `make-string`(width - len, `integer->char`(32)) ++ str;
+};
+
+define is_text_file = function(name) {
+    ends_with(name, ".eval") || ends_with(name, ".py")
+    || ends_with(name, ".c") || ends_with(name, ".h")
+    || ends_with(name, ".scm") || ends_with(name, ".md")
+    || ends_with(name, ".txt") || ends_with(name, ".y")
+    || ends_with(name, ".sld") || ends_with(name, ".stub");
+};
+
+// ===== Reactive Configuration =====
+
+define target_dir = Signal(".");
+define extension_filter = Signal("");  // empty means all files
+
+// ===== Reactive Processing Pipeline =====
+
+// Step 1: Scan directory, filter out . and .. and subdirectories
+define all_files = Computed(function() {
+    define dir = target_dir();
+    define entries = directory_files(dir);
+    filter(function(f) {
+        f != "." && f != ".."
+        && !`file-directory?`(dir ++ "/" ++ f);
+    }, entries);
+});
+
+// Step 2: Apply extension filter
+define filtered_files = Computed(function() {
+    define ext = extension_filter();
+    define files = all_files();
+    if(ext == "") files
+    else filter(function(f) ends_with(f, ext), files);
+});
+
+// Step 3: Compute file details — list of [name, size, extension, lines]
+define file_details = Computed(function() {
+    define dir = target_dir();
+    map(function(f) {
+        define path = dir ++ "/" ++ f;
+        define sz = file_size(path);
+        define ext = get_extension(f);
+        // Count lines for small text files
+        define lines = if(sz < 500000 && is_text_file(f)) {
+            try count_lines(read_file(path))
+            catch(err) 0;
+        } else 0;
+        [f, sz, ext, lines];
+    }, filtered_files());
+});
+
+// Step 4: Build the full report as a single computed value.
+// This avoids diamond-dependency glitches — the effect depends on
+// one computed which depends on everything, so it fires exactly once.
+define report_data = Computed(function() {
+    define dir = target_dir();
+    define ext = extension_filter();
+    define details = file_details();
+    define n = length(details);
+    define total_sz = fold(function(d, acc) acc + d[1], 0, details);
+    define total_ln = fold(function(d, acc) acc + d[3], 0, details);
+
+    define largest = if(n == 0) false
+        else fold(function(d, best)
+            if(d[1] > best[1]) d else best,
+            details[0], details[1:]);
+
+    define most_ln = if(n == 0) false
+        else fold(function(d, best)
+            if(d[3] > best[3]) d else best,
+            details[0], details[1:]);
+
+    // Group by extension
+    define tbl = `make-hash-table`();
+    `for-each`(function(d) {
+        define e = d[2];
+        define sz = d[1];
+        define key = if(e == "") "(no ext)" else e;
+        define prev = `hash-table-ref/default`(tbl, key, [0, 0]);
+        `hash-table-set!`(tbl, key, [prev[0] + 1, prev[1] + sz]);
+    }, details);
+    define cats = map(function(key) {
+        define entry = `hash-table-ref`(tbl, key);
+        [key, entry[0], entry[1]];
+    }, `hash-table-keys`(tbl));
+    define sorted_cats = `sort`(cats,
+        function(a, b) b[1] < a[1]);
+
+    // Return report as a list
+    [dir, ext, n, total_sz, total_ln, largest, most_ln, sorted_cats];
+});
+
+// ===== Display Effect =====
+
+define separator = "--------------------------------------------";
+
+define report = Effect(function() {
+    define data = report_data();
+    define dir = data[0];
+    define ext = data[1];
+    define n = data[2];
+    define total_sz = data[3];
+    define total_ln = data[4];
+    define largest = data[5];
+    define most_ln = data[6];
+    define cats = data[7];
+
+    display(separator); newline();
+    display("  Directory : " ++ dir); newline();
+    display("  Filter    : " ++ if(ext == "") "*" else ext); newline();
+    display("  Files     : " ++ `number->string`(n)); newline();
+    display("  Total size: " ++ format_size(total_sz)); newline();
+    display("  Lines     : " ++ `number->string`(total_ln)); newline();
+
+    when(n > 0) {
+        display("  Largest   : " ++ largest[0]
+            ++ " (" ++ format_size(largest[1]) ++ ")");
+        newline();
+
+        define ml_lines = most_ln[3];
+        when(ml_lines > 0) {
+            display("  Most lines: " ++ most_ln[0]
+                ++ " (" ++ `number->string`(ml_lines) ++ " lines)");
+            newline();
+        };
+
+        when(length(cats) > 1) {
+            newline();
+            display("  By extension:"); newline();
+            `for-each`(function(cat) {
+                define ext = pad_right(cat[0], 10);
+                define count = pad_left(`number->string`(cat[1]), 4);
+                define size = pad_left(format_size(cat[2]), 10);
+                display("    " ++ ext ++ count ++ " files  " ++ size);
+                newline();
+            }, cats);
+        };
+    };
+
+    display(separator); newline();
+    newline();
+});
+
+// ===== Track changes =====
+
+watch(target_dir, function(new_dir, old_dir) {
+    display(">>> Changed directory: " ++ old_dir ++ " -> " ++ new_dir);
+    newline();
+});
+
+watch(extension_filter, function(new_ext, old_ext) {
+    define old_label = if(old_ext == "") "*" else old_ext;
+    define new_label = if(new_ext == "") "*" else new_ext;
+    display(">>> Changed filter: " ++ old_label ++ " -> " ++ new_label);
+    newline();
+});
+
+// ===== Demo: scan different directories =====
+
+// Scan examples directory
+target_dir->set("examples");
+
+// Filter to just .eval files
+extension_filter->set(".eval");
+
+// Scan tests/eval with all files
+batch(function() {
+    target_dir->set("tests/eval");
+    extension_filter->set("");
+});
+
+// Filter tests to just .eval
+extension_filter->set(".eval");
+
+// Scan source directory
+batch(function() {
+    target_dir->set("src");
+    extension_filter->set("");
+});
+
+// Filter to C source files
+extension_filter->set(".c");
+
+// Switch to headers
+extension_filter->set(".h");
+
+display("Done. Processed multiple directories reactively.");
+newline();

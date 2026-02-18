@@ -2,9 +2,15 @@
 //
 // Demonstrates: Signal, Computed, Effect, batch, green threads, nonblocking I/O
 //
-// Each incoming connection is handled in its own green thread,
-// so the server can accept new connections while others are being served.
-// accept/send/recv are nonblocking — they yield to the scheduler on WOULDBLOCK.
+// This example uses the low-level socket API for full control over routing,
+// reactive state, and shutdown logic. For simpler servers, use the built-in
+// TcpServer OO wrapper:
+//
+//   define server = TcpServer(8080, function(sock, addr, port) {
+//       define data = sock->recv(4096);
+//       sock->send("HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nOK");
+//   });
+//   server->run();
 //
 // Usage:
 //   eval examples/http_server.eval

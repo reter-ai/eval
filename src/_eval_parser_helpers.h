@@ -58,6 +58,19 @@ sexp ps_make_constructor(sexp ctx, sexp params, sexp body);
 /* Build interface (cond dispatch) */
 sexp ps_make_interface(sexp ctx, sexp entries);
 
+/* Build constructor with static methods/values.
+   iface_entries is a list of (name . expr) pairs, or SEXP_NULL for statics-only. */
+sexp ps_make_constructor_static(sexp ctx, sexp params, sexp statics, sexp iface_entries);
+
+/* Build abstract method: (lambda __args__ (error "abstract method" "name")) */
+sexp ps_make_abstract_method(sexp ctx, const char *name, int length);
+
+/* Build abstract constructor (blocks direct instantiation via __abstract_ok__ flag) */
+sexp ps_make_abstract_constructor(sexp ctx, sexp params, sexp body);
+
+/* Build abstract constructor with static wrapper */
+sexp ps_make_abstract_constructor_static(sexp ctx, sexp params, sexp statics, sexp iface_entries);
+
 /* Build (set! supers (append supers (list expr))) */
 sexp ps_make_super(sexp ctx, sexp expr);
 
@@ -123,6 +136,12 @@ sexp ps_expr_safe(sexp ctx, sexp expr);
 sexp ps_intern_op(sexp ctx, int token_type);
 sexp ps_make_include(sexp ctx, sexp string_list);
 sexp ps_make_dict(sexp ctx, sexp entries);
+
+/* Build (ref obj index) for indexing */
+sexp ps_make_ref(sexp ctx, sexp obj, sexp index);
+
+/* Build (slice obj start end) for slicing */
+sexp ps_make_slice(sexp ctx, sexp obj, sexp start, sexp end);
 
 /* Parse Eval source code into a chibi sexp.
    Returns the parsed sexp, or SEXP_VOID on error.

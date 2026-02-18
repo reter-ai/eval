@@ -117,17 +117,18 @@ foreach(stubfile ${STUB_GENERATED_FILES})
     endif()
 endforeach()
 
-# ---------- Generate embedded scheme files (shared by Python + standalone) ----------
+# ---------- Generate embedded scheme/eval files (shared by Python + standalone) ----------
 set(EMBEDDED_SCM_C "${CMAKE_BINARY_DIR}/eval_embedded_scm.c")
 execute_process(
     COMMAND ${CMAKE_COMMAND}
         -DLIB_DIR=${CMAKE_SOURCE_DIR}/chibi-scheme/lib
+        -DEVAL_LIB_DIR=${CMAKE_SOURCE_DIR}/chibi_eval/lib
         -DOUTPUT=${EMBEDDED_SCM_C}
         -P ${CMAKE_SOURCE_DIR}/tools/generate_embedded.cmake
     RESULT_VARIABLE _embed_result
 )
 if(NOT _embed_result EQUAL 0)
-    message(FATAL_ERROR "Failed to generate embedded scheme files")
+    message(FATAL_ERROR "Failed to generate embedded files")
 endif()
 
 # ============================================================

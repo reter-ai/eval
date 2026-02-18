@@ -360,11 +360,11 @@ pool_shutdown(pool);
 | **Overhead** | Very low (continuation switch) | Higher (serialization, thread creation) |
 | **Best for** | Concurrent I/O, structured concurrency | CPU-bound parallelism |
 
-**Use `async`** when you need lightweight concurrency with shared state — multiple tasks that cooperatively share the same VM.
+**Use `async`** when you need lightweight concurrency with shared state — multiple tasks that cooperatively share the same VM. Works naturally with networking: `TcpClient`, `TcpServer`, and `HttpClient` all yield to the green thread scheduler on blocking operations.
 
 **Use thread pools** when you need true parallelism for CPU-bound work — each worker runs on its own OS thread with its own VM, achieving real speedup on multi-core machines.
 
-**Mix both** when you need both: use the thread pool for heavy computation, and `async` within each worker or the main thread for lightweight concurrent coordination.
+**Mix both** when you need both: use the thread pool for heavy computation, and `async` within each worker or the main thread for lightweight concurrent coordination. For example, a `TcpServer` can dispatch CPU-bound work to a thread pool while handling I/O with green threads.
 
 ### Proving True Parallelism
 

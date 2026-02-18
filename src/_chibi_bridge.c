@@ -330,6 +330,113 @@ static sexp bridge_shift_right(sexp ctx, sexp self, sexp_sint_t n, sexp a, sexp 
     return sexp_make_fixnum(val >> shift);
 }
 
+/* === Generic indexing: ref(obj, idx) === */
+
+static sexp bridge_ref(sexp ctx, sexp self, sexp_sint_t n, sexp obj, sexp idx) {
+    if (!sexp_fixnump(idx))
+        return sexp_user_exception(ctx, self, "ref: expected integer index", idx);
+    sexp_sint_t i = sexp_unbox_fixnum(idx);
+
+    if (sexp_vectorp(obj)) {
+        sexp_sint_t len = (sexp_sint_t)sexp_vector_length(obj);
+        if (i < 0) i += len;
+        if (i < 0 || i >= len)
+            return sexp_user_exception(ctx, self, "ref: index out of range", idx);
+        return sexp_vector_data(obj)[i];
+    } else if (sexp_stringp(obj)) {
+        sexp_sint_t len = (sexp_sint_t)sexp_string_size(obj);
+        if (i < 0) i += len;
+        if (i < 0 || i >= len)
+            return sexp_user_exception(ctx, self, "ref: index out of range", idx);
+        return sexp_make_character((unsigned char)sexp_string_data(obj)[i]);
+    } else if (sexp_pairp(obj)) {
+        /* Compute list length and handle negative indices */
+        sexp_sint_t len = 0;
+        sexp p = obj;
+        while (sexp_pairp(p)) { len++; p = sexp_cdr(p); }
+        if (i < 0) i += len;
+        if (i < 0 || i >= len)
+            return sexp_user_exception(ctx, self, "ref: index out of range", idx);
+        p = obj;
+        for (sexp_sint_t k = 0; k < i; k++) p = sexp_cdr(p);
+        return sexp_car(p);
+    }
+    return sexp_user_exception(ctx, self, "ref: expected list, vector, or string", obj);
+}
+
+/* === Generic slicing: slice(obj, start, end) === */
+
+static sexp bridge_slice(sexp ctx, sexp self, sexp_sint_t n,
+                          sexp obj, sexp start_s, sexp end_s) {
+    sexp_sint_t len;
+
+    /* Determine length */
+    if (sexp_vectorp(obj)) {
+        len = (sexp_sint_t)sexp_vector_length(obj);
+    } else if (sexp_stringp(obj)) {
+        len = (sexp_sint_t)sexp_string_size(obj);
+    } else if (sexp_pairp(obj) || sexp_nullp(obj)) {
+        len = 0;
+        sexp p = obj;
+        while (sexp_pairp(p)) { len++; p = sexp_cdr(p); }
+    } else {
+        return sexp_user_exception(ctx, self, "slice: expected list, vector, or string", obj);
+    }
+
+    /* Resolve start */
+    sexp_sint_t start = 0;
+    if (start_s != SEXP_FALSE) {
+        if (!sexp_fixnump(start_s))
+            return sexp_user_exception(ctx, self, "slice: expected integer start", start_s);
+        start = sexp_unbox_fixnum(start_s);
+        if (start < 0) start += len;
+    }
+
+    /* Resolve end */
+    sexp_sint_t end = len;
+    if (end_s != SEXP_FALSE) {
+        if (!sexp_fixnump(end_s))
+            return sexp_user_exception(ctx, self, "slice: expected integer end", end_s);
+        end = sexp_unbox_fixnum(end_s);
+        if (end < 0) end += len;
+    }
+
+    /* Clamp */
+    if (start < 0) start = 0;
+    if (end > len) end = len;
+    if (start > end) start = end;
+
+    if (sexp_vectorp(obj)) {
+        sexp_sint_t new_len = end - start;
+        sexp vec = sexp_make_vector(ctx, sexp_make_fixnum(new_len), SEXP_VOID);
+        for (sexp_sint_t k = 0; k < new_len; k++)
+            sexp_vector_data(vec)[k] = sexp_vector_data(obj)[start + k];
+        return vec;
+    } else if (sexp_stringp(obj)) {
+        const char *data = sexp_string_data(obj);
+        return sexp_c_string(ctx, data + start, end - start);
+    } else {
+        /* List: skip to start, collect until end */
+        sexp p = obj;
+        for (sexp_sint_t k = 0; k < start && sexp_pairp(p); k++)
+            p = sexp_cdr(p);
+        sexp result = SEXP_NULL;
+        sexp tail = SEXP_NULL;
+        for (sexp_sint_t k = start; k < end && sexp_pairp(p); k++) {
+            sexp cell = sexp_cons(ctx, sexp_car(p), SEXP_NULL);
+            if (sexp_nullp(result)) {
+                result = cell;
+                tail = cell;
+            } else {
+                sexp_cdr(tail) = cell;
+                tail = cell;
+            }
+            p = sexp_cdr(p);
+        }
+        return result;
+    }
+}
+
 /* === Registration === */
 
 /* op("+"") → look up the Scheme procedure for an Eval operator symbol.
@@ -452,6 +559,10 @@ void register_bridge_functions(sexp ctx, sexp env) {
     /* Evaluate Scheme expression string in isolated eval context */
     sexp_define_foreign(ctx, env, "eval-scheme", 1, bridge_eval_scheme);
     sexp_define_foreign(ctx, env, "eval_scheme", 1, bridge_eval_scheme);
+
+    /* Indexing and slicing */
+    sexp_define_foreign(ctx, env, "ref", 2, bridge_ref);
+    sexp_define_foreign(ctx, env, "slice", 3, bridge_slice);
 
     /* Continuation serialization (defined in _chibi_serialize.c) */
     extern sexp bridge_serialize_continuation(sexp, sexp, sexp_sint_t, sexp);

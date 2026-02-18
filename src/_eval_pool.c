@@ -7,6 +7,7 @@
 #include "_eval_thread.h"
 #include "_eval_pool.h"
 #include "_eval_parser_helpers.h"
+#include "eval_embedded_scm.h"
 
 #ifdef EVAL_STANDALONE
 /* Standalone pyobject type stub — allocates a type tag with no-op finalizer */
@@ -939,6 +940,105 @@ static sexp bridge_pool_apply_explicit(sexp ctx, sexp self, sexp_sint_t n,
     return sexp_make_cpointer(ctx, SEXP_CPOINTER, f, SEXP_FALSE, 0);
 }
 
+/* === Generic indexing: ref(obj, idx) === */
+static sexp bridge_ref_c(sexp ctx, sexp self, sexp_sint_t n, sexp obj, sexp idx) {
+    if (!sexp_fixnump(idx))
+        return sexp_user_exception(ctx, self, "ref: expected integer index", idx);
+    sexp_sint_t i = sexp_unbox_fixnum(idx);
+
+    if (sexp_vectorp(obj)) {
+        sexp_sint_t len = (sexp_sint_t)sexp_vector_length(obj);
+        if (i < 0) i += len;
+        if (i < 0 || i >= len)
+            return sexp_user_exception(ctx, self, "ref: index out of range", idx);
+        return sexp_vector_data(obj)[i];
+    } else if (sexp_stringp(obj)) {
+        sexp_sint_t len = (sexp_sint_t)sexp_string_size(obj);
+        if (i < 0) i += len;
+        if (i < 0 || i >= len)
+            return sexp_user_exception(ctx, self, "ref: index out of range", idx);
+        return sexp_make_character((unsigned char)sexp_string_data(obj)[i]);
+    } else if (sexp_pairp(obj)) {
+        sexp_sint_t len = 0;
+        sexp p = obj;
+        while (sexp_pairp(p)) { len++; p = sexp_cdr(p); }
+        if (i < 0) i += len;
+        if (i < 0 || i >= len)
+            return sexp_user_exception(ctx, self, "ref: index out of range", idx);
+        p = obj;
+        for (sexp_sint_t k = 0; k < i; k++) p = sexp_cdr(p);
+        return sexp_car(p);
+    }
+    return sexp_user_exception(ctx, self, "ref: expected list, vector, or string", obj);
+}
+
+/* === Generic slicing: slice(obj, start, end) === */
+static sexp bridge_slice_c(sexp ctx, sexp self, sexp_sint_t n,
+                            sexp obj, sexp start_s, sexp end_s) {
+    sexp_sint_t len;
+
+    if (sexp_vectorp(obj)) {
+        len = (sexp_sint_t)sexp_vector_length(obj);
+    } else if (sexp_stringp(obj)) {
+        len = (sexp_sint_t)sexp_string_size(obj);
+    } else if (sexp_pairp(obj) || sexp_nullp(obj)) {
+        len = 0;
+        sexp p = obj;
+        while (sexp_pairp(p)) { len++; p = sexp_cdr(p); }
+    } else {
+        return sexp_user_exception(ctx, self, "slice: expected list, vector, or string", obj);
+    }
+
+    sexp_sint_t start = 0;
+    if (start_s != SEXP_FALSE) {
+        if (!sexp_fixnump(start_s))
+            return sexp_user_exception(ctx, self, "slice: expected integer start", start_s);
+        start = sexp_unbox_fixnum(start_s);
+        if (start < 0) start += len;
+    }
+
+    sexp_sint_t end = len;
+    if (end_s != SEXP_FALSE) {
+        if (!sexp_fixnump(end_s))
+            return sexp_user_exception(ctx, self, "slice: expected integer end", end_s);
+        end = sexp_unbox_fixnum(end_s);
+        if (end < 0) end += len;
+    }
+
+    if (start < 0) start = 0;
+    if (end > len) end = len;
+    if (start > end) start = end;
+
+    if (sexp_vectorp(obj)) {
+        sexp_sint_t new_len = end - start;
+        sexp vec = sexp_make_vector(ctx, sexp_make_fixnum(new_len), SEXP_VOID);
+        for (sexp_sint_t k = 0; k < new_len; k++)
+            sexp_vector_data(vec)[k] = sexp_vector_data(obj)[start + k];
+        return vec;
+    } else if (sexp_stringp(obj)) {
+        const char *data = sexp_string_data(obj);
+        return sexp_c_string(ctx, data + start, end - start);
+    } else {
+        sexp p = obj;
+        for (sexp_sint_t k = 0; k < start && sexp_pairp(p); k++)
+            p = sexp_cdr(p);
+        sexp result = SEXP_NULL;
+        sexp tail = SEXP_NULL;
+        for (sexp_sint_t k = start; k < end && sexp_pairp(p); k++) {
+            sexp cell = sexp_cons(ctx, sexp_car(p), SEXP_NULL);
+            if (sexp_nullp(result)) {
+                result = cell;
+                tail = cell;
+            } else {
+                sexp_cdr(tail) = cell;
+                tail = cell;
+            }
+            p = sexp_cdr(p);
+        }
+        return result;
+    }
+}
+
 /* Register all pure-C bridge functions in a worker context */
 #ifdef EVAL_STANDALONE
 void register_bridge_functions_c(sexp ctx, sexp env) {
@@ -992,6 +1092,10 @@ static void register_bridge_functions_c(sexp ctx, sexp env) {
     /* Operators and exceptions */
     sexp_define_foreign(ctx, env, "op", 1, bridge_op_c);
     sexp_define_foreign(ctx, env, "exception-message", 1, bridge_exception_message_c);
+
+    /* Indexing and slicing */
+    sexp_define_foreign(ctx, env, "ref", 2, bridge_ref_c);
+    sexp_define_foreign(ctx, env, "slice", 3, bridge_slice_c);
 
     /* Timing */
     sexp_define_foreign(ctx, env, "current-second", 0, bridge_current_second_c);
@@ -1064,257 +1168,34 @@ void eval_standard_aliases(sexp ctx, sexp env) {
 #else
 static void eval_standard_aliases(sexp ctx, sexp env) {
 #endif
-    sexp_eval_string(ctx,
-        "(define error-object? exception?)", -1, env);
-    sexp_eval_string(ctx,
-        "(define error-object-message exception-message)", -1, env);
-
-    /* Byte I/O */
-    sexp_eval_string(ctx,
-        "(define (read-u8 . o)"
-        "  (let ((ch (if (pair? o) (read-char (car o)) (read-char))))"
-        "    (if (eof-object? ch) ch (char->integer ch))))", -1, env);
-    sexp_eval_string(ctx,
-        "(define (write-u8 byte . o)"
-        "  (if (pair? o)"
-        "    (write-char (integer->char byte) (car o))"
-        "    (write-char (integer->char byte))))", -1, env);
-    sexp_eval_string(ctx,
-        "(define (peek-u8 . o)"
-        "  (let ((ch (if (pair? o) (peek-char (car o)) (peek-char))))"
-        "    (if (eof-object? ch) ch (char->integer ch))))", -1, env);
-
-    /* String functions */
-    sexp_eval_string(ctx,
-        "(define (string-map proc str)"
-        "  (list->string (map proc (string->list str))))", -1, env);
-    sexp_eval_string(ctx,
-        "(define (string-for-each proc str)"
-        "  (for-each proc (string->list str)))", -1, env);
-
-    /* I/O functions */
-    sexp_eval_string(ctx,
-        "(define (write-string str . o)"
-        "  (let ((port (if (pair? o) (car o) (current-output-port))))"
-        "    (let lp ((i 0))"
-        "      (if (< i (string-length str))"
-        "          (begin (write-char (string-ref str i) port)"
-        "                 (lp (+ i 1)))))))", -1, env);
-    sexp_eval_string(ctx,
-        "(define (read-line . o)"
-        "  (let ((port (if (pair? o) (car o) (current-input-port))))"
-        "    (let lp ((res '()))"
-        "      (let ((ch (read-char port)))"
-        "        (cond ((eof-object? ch)"
-        "               (if (null? res) ch (list->string (reverse res))))"
-        "              ((eqv? ch #\\newline)"
-        "               (list->string (reverse res)))"
-        "              ((eqv? ch #\\return)"
-        "               (let ((next (peek-char port)))"
-        "                 (if (eqv? next #\\newline) (read-char port))"
-        "                 (list->string (reverse res))))"
-        "              (else (lp (cons ch res))))))))", -1, env);
-    sexp_eval_string(ctx,
-        "(define (read-string n . o)"
-        "  (let ((port (if (pair? o) (car o) (current-input-port))))"
-        "    (let lp ((i 0) (res '()))"
-        "      (if (>= i n)"
-        "          (list->string (reverse res))"
-        "          (let ((ch (read-char port)))"
-        "            (if (eof-object? ch)"
-        "                (if (null? res) ch (list->string (reverse res)))"
-        "                (lp (+ i 1) (cons ch res))))))))", -1, env);
-
-    /* Core aliases */
-    sexp_eval_string(ctx,
-        "(define callcc call-with-current-continuation)", -1, env);
-
-    /* filter, fold, make-parameter, sort are now provided by srfi/1
-     * and srfi/39/syntax.scm, srfi/95/sort.scm via eval_init_all_libs. */
+    /* Base definitions: error-object aliases, byte I/O, string/IO fns, callcc */
+    sexp_load_module_file(ctx, "eval/base.scm", env);
+    env = sexp_context_env(ctx);
 
     /* SRFI-18 green thread wrappers */
-    sexp_eval_string(ctx,
-        "(define thread-yield! yield!)", -1, env);
-    sexp_eval_string(ctx,
-        "(define (thread-join! thread . o)"
-        "  (let ((timeout (and (pair? o) (car o))))"
-        "    (let lp ()"
-        "      (cond"
-        "       ((%thread-join! thread timeout)"
-        "        (if (%thread-exception? thread)"
-        "            (raise (%thread-end-result thread))"
-        "            (%thread-end-result thread)))"
-        "       (else"
-        "        (thread-yield!)"
-        "        (cond"
-        "         ((and timeout (thread-timeout?))"
-        "          (if (and (pair? o) (pair? (cdr o)))"
-        "              (cadr o)"
-        "              (error \"timed out waiting for thread\" thread)))"
-        "         (else (lp))))))))", -1, env);
-    sexp_eval_string(ctx,
-        "(define (thread-terminate! thread)"
-        "  (if (%thread-terminate! thread) (thread-yield!)))", -1, env);
-    sexp_eval_string(ctx,
-        "(define (thread-sleep! timeout)"
-        "  (%thread-sleep! timeout) (thread-yield!))", -1, env);
-    sexp_eval_string(ctx,
-        "(define (mutex-lock! mutex . o)"
-        "  (let ((timeout (and (pair? o) (car o)))"
-        "        (thread (if (and (pair? o) (pair? (cdr o))) (cadr o) #t)))"
-        "    (cond"
-        "     ((%mutex-lock! mutex timeout thread))"
-        "     (else"
-        "      (thread-yield!)"
-        "      (if (thread-timeout?) #f"
-        "          (mutex-lock! mutex timeout thread))))))", -1, env);
-    sexp_eval_string(ctx,
-        "(define (mutex-unlock! mutex . o)"
-        "  (let ((condvar (and (pair? o) (car o)))"
-        "        (timeout (if (and (pair? o) (pair? (cdr o))) (cadr o) #f)))"
-        "    (cond"
-        "     ((%mutex-unlock! mutex condvar timeout))"
-        "     (else (thread-yield!) (not (thread-timeout?))))))", -1, env);
+    sexp_load_module_file(ctx, "eval/threads.scm", env);
+    env = sexp_context_env(ctx);
 
-    /* Eval underscore aliases for SRFI-18 threads */
-    sexp_eval_string(ctx,
-        "(begin"
-        " (define make_thread make-thread)"
-        " (define thread_start thread-start!)"
-        " (define thread_yield thread-yield!)"
-        " (define thread_join thread-join!)"
-        " (define thread_sleep thread-sleep!)"
-        " (define thread_terminate thread-terminate!)"
-        " (define current_thread current-thread)"
-        " (define make_mutex make-mutex)"
-        " (define mutex_lock mutex-lock!)"
-        " (define mutex_unlock mutex-unlock!)"
-        " (define make_condvar make-condition-variable)"
-        " (define condvar_signal condition-variable-signal!)"
-        " (define condvar_broadcast condition-variable-broadcast!))",
-        -1, env);
+    /* Underscore aliases for all libraries */
+    sexp_load_module_file(ctx, "eval/aliases.scm", env);
+    env = sexp_context_env(ctx);
 
-    /* Eval underscore aliases for other new libraries */
-    sexp_eval_string(ctx,
-        "(begin"
-        " (define random_integer random-integer)"
-        " (define random_real random-real)"
-        " (define json_read json-read)"
-        " (define json_write json-write)"
-        " (define get_env get-environment-variable)"
-        " (define current_clock_second current-clock-second)"
-        " (define hash_table_cell hash-table-cell)"
-        " (define bit_and bit-and)"
-        " (define bit_ior bit-ior)"
-        " (define bit_xor bit-xor)"
-        " (define bit_count bit-count)"
-        " (define arithmetic_shift arithmetic-shift)"
-        " (define integer_length integer-length)"
-        " (define object_cmp object-cmp)"
-        " (define heap_stats heap-stats))",
-        -1, env);
+    /* Dict runtime */
+    sexp_load_module_file(ctx, "eval/dict.scm", env);
+    env = sexp_context_env(ctx);
 
-    /* Test framework underscore aliases */
-    sexp_eval_string(ctx,
-        "(define test_begin test-begin)", -1, env);
-    sexp_eval_string(ctx,
-        "(define test_end test-end)", -1, env);
-    sexp_eval_string(ctx,
-        "(define test_assert test-assert)", -1, env);
-    sexp_eval_string(ctx,
-        "(define test_error test-error)", -1, env);
-    sexp_eval_string(ctx,
-        "(define test_group test-group)", -1, env);
+    /* Async/await runtime */
+    sexp_load_module_file(ctx, "eval/async.scm", env);
+    env = sexp_context_env(ctx);
 
-    /* Dict runtime: __make_eval_dict__ creates a closure wrapping a hash table */
-    sexp_eval_string(ctx,
-        "(define (__make_eval_dict__ pairs)"
-        "  (let ((ht (make-hash-table)))"
-        "    (for-each (lambda (p) (hash-table-set! ht (car p) (cdr p))) pairs)"
-        "    (lambda (__msg__)"
-        "      (cond"
-        "        ((eq? __msg__ 'get)"
-        "         (lambda (k) (hash-table-ref/default ht"
-        "           (if (string? k) (string->symbol k) k) #f)))"
-        "        ((eq? __msg__ 'set)"
-        "         (lambda (k v) (hash-table-set! ht"
-        "           (if (string? k) (string->symbol k) k) v)))"
-        "        ((eq? __msg__ 'delete)"
-        "         (lambda (k) (hash-table-delete! ht"
-        "           (if (string? k) (string->symbol k) k))))"
-        "        ((eq? __msg__ 'keys)"
-        "         (lambda () (hash-table-keys ht)))"
-        "        ((eq? __msg__ 'values)"
-        "         (lambda () (hash-table-values ht)))"
-        "        ((eq? __msg__ 'has?)"
-        "         (lambda (k) (hash-table-exists? ht"
-        "           (if (string? k) (string->symbol k) k))))"
-        "        ((eq? __msg__ 'size)"
-        "         (lambda () (hash-table-size ht)))"
-        "        ((eq? __msg__ 'to_list)"
-        "         (lambda () (hash-table->alist ht)))"
-        "        ((eq? __msg__ '__type__) '__dict__)"
-        "        ((hash-table-exists? ht __msg__)"
-        "         (hash-table-ref ht __msg__))"
-        "        (else #f)))))", -1, env);
-    sexp_eval_string(ctx,
-        "(define (dict? v)"
-        "  (and (procedure? v)"
-        "       (protect (e (else #f))"
-        "         (eq? (v '__type__) '__dict__))))", -1, env);
-
-    /* Async/await runtime: promise type backed by mutex+condvar */
-    sexp_eval_string(ctx,
-        "(define (__make-promise__)"
-        "  (let ((m (make-mutex)) (cv (make-condition-variable))"
-        "        (resolved #f) (value #f) (err #f))"
-        "    (lambda (__msg__)"
-        "      (cond"
-        "        ((eq? __msg__ '__resolve__)"
-        "         (lambda (v)"
-        "           (mutex-lock! m)"
-        "           (set! resolved #t) (set! value v)"
-        "           (condition-variable-broadcast! cv)"
-        "           (mutex-unlock! m)))"
-        "        ((eq? __msg__ '__reject__)"
-        "         (lambda (e)"
-        "           (mutex-lock! m)"
-        "           (set! resolved #t) (set! err e)"
-        "           (condition-variable-broadcast! cv)"
-        "           (mutex-unlock! m)))"
-        "        ((eq? __msg__ '__await__)"
-        "         (mutex-lock! m)"
-        "         (let loop ()"
-        "           (if resolved"
-        "               (begin (mutex-unlock! m)"
-        "                      (if err (raise err) value))"
-        "               (begin (mutex-unlock! m cv)"
-        "                      (mutex-lock! m)"
-        "                      (loop)))))"
-        "        ((eq? __msg__ 'ready?)"
-        "         (mutex-lock! m)"
-        "         (let ((r resolved)) (mutex-unlock! m) r))"
-        "        ((eq? __msg__ '__type__) '__promise__)"
-        "        (else (error \"promise: unknown message\" __msg__))))))", -1, env);
-    sexp_eval_string(ctx,
-        "(define (__promise-resolve!__ p val)"
-        "  (protect (e (else ((p '__reject__) e)))"
-        "    ((p '__resolve__) val)))", -1, env);
-    sexp_eval_string(ctx,
-        "(define (promise? v)"
-        "  (and (procedure? v)"
-        "       (protect (e (else #f))"
-        "         (eq? (v '__type__) '__promise__))))", -1, env);
-    /* __await__: dispatches on type — promise or pool future (cpointer) */
-    sexp_eval_string(ctx,
-        "(define (__await__ x)"
-        "  (cond"
-        "    ((and (procedure? x)"
-        "          (protect (e (else #f)) (eq? (x '__type__) '__promise__)))"
-        "     (x '__await__))"
-        "    (else (future-result x))))", -1, env);
+    /* Abstract class support: global flag checked by abstract constructors */
+    sexp_eval_string(ctx, "(define __abstract_ok__ #f)", -1, env);
 
 }
+
+/* Load an embedded .eval file: look up by path, parse as Eval, evaluate */
+static sexp eval_parse_and_run(sexp ctx, sexp env, const char *code);
+void eval_load_eval_file(sexp ctx, sexp env, const char *path);
 
 /* OO wrappers for Pool, Channel, Future — only for main context
  * (workers don't have make-pool and use different pool-submit arity) */
@@ -1323,684 +1204,16 @@ void eval_oo_wrappers(sexp ctx, sexp env) {
 #else
 static void eval_oo_wrappers(sexp ctx, sexp env) {
 #endif
-    /* OO wrapper: Channel-wrap — wraps raw channel cpointer */
-    sexp_eval_string(ctx,
-        "(define (Channel-wrap raw)"
-        "  (lambda (__msg__)"
-        "    (cond"
-        "      ((eq? __msg__ 'send)"
-        "       (lambda (val) (channel-send raw val)))"
-        "      ((eq? __msg__ 'recv)"
-        "       (lambda () (channel-recv raw)))"
-        "      ((eq? __msg__ 'try_recv)"
-        "       (lambda () (channel-try-recv raw)))"
-        "      ((eq? __msg__ 'close)"
-        "       (lambda () (channel-close raw)))"
-        "      ((eq? __msg__ '__type__) '__channel__)"
-        "      ((eq? __msg__ '__raw__) raw)"
-        "      (else (error \"Channel: unknown message\" __msg__)))))",
-        -1, env);
-
-    /* OO wrapper: Future-wrap — wraps raw cpointer future */
-    sexp_eval_string(ctx,
-        "(define (Future-wrap raw)"
-        "  (lambda (__msg__)"
-        "    (cond"
-        "      ((eq? __msg__ 'result)"
-        "       (lambda () (future-result raw)))"
-        "      ((eq? __msg__ 'ready?)"
-        "       (future-ready? raw))"
-        "      ((eq? __msg__ '__await__)"
-        "       (future-result raw))"
-        "      ((eq? __msg__ '__type__) '__future__)"
-        "      ((eq? __msg__ '__raw__) raw)"
-        "      (else (error \"Future: unknown message\" __msg__)))))",
-        -1, env);
-
-    /* OO wrapper: Pool(n) — wraps raw pool with -> access and RAII close */
-    sexp_eval_string(ctx,
-        "(define (Pool n)"
-        "  (let ((raw (make-pool n)) (alive #t))"
-        "    (lambda (__msg__)"
-        "      (cond"
-        "        ((eq? __msg__ 'submit)"
-        "         (lambda (code) (Future-wrap (pool-submit raw code))))"
-        "        ((eq? __msg__ 'apply)"
-        "         (lambda (fn args) (Future-wrap (pool-apply raw fn args))))"
-        "        ((eq? __msg__ 'channel)"
-        "         (lambda (name) (Channel-wrap (pool-channel raw name))))"
-        "        ((eq? __msg__ 'shutdown)"
-        "         (lambda () (if alive (begin (set! alive #f)"
-        "           (pool-shutdown raw)))))"
-        "        ((eq? __msg__ 'close)"
-        "         (lambda () (if alive (begin (set! alive #f)"
-        "           (pool-shutdown raw)))))"
-        "        ((eq? __msg__ '__type__) '__pool__)"
-        "        ((eq? __msg__ '__raw__) raw)"
-        "        (else (error \"Pool: unknown message\" __msg__))))))",
-        -1, env);
-
-    /* Update __await__ to handle OO Future objects too */
-    sexp_eval_string(ctx,
-        "(let ((orig-await __await__))"
-        "  (set! __await__"
-        "    (lambda (x)"
-        "      (cond"
-        "        ((and (procedure? x)"
-        "              (protect (e (else #f)) (eq? (x '__type__) '__promise__)))"
-        "         (x '__await__))"
-        "        ((and (procedure? x)"
-        "              (protect (e (else #f)) (eq? (x '__type__) '__future__)))"
-        "         (x '__await__))"
-        "        (else (future-result x))))))",
-        -1, env);
+    eval_load_eval_file(ctx, env, "eval/threadpool.eval");
 }
 
 /* ================================================================
  * Reactive runtime: Signal, Computed, Effect, batch, dispose
+ * Now loaded from eval/reactive.scm embedded file.
  * ================================================================ */
 
 void eval_reactive_runtime(sexp ctx, sexp env) {
-
-    /* --- ID generator (no gensym in chibi) --- */
-    sexp_eval_string(ctx,
-        "(define __reactive-id-counter__ 0)", -1, env);
-    sexp_eval_string(ctx,
-        "(define (__reactive-gensym__ prefix)"
-        "  (set! __reactive-id-counter__ (+ __reactive-id-counter__ 1))"
-        "  (string-append prefix (number->string __reactive-id-counter__)))",
-        -1, env);
-
-    /* --- Auto-tracking parameter (thread-local via make-parameter) --- */
-    sexp_eval_string(ctx,
-        "(define __current-observer__ (make-parameter #f))", -1, env);
-
-    /* --- Scope tracking --- */
-    sexp_eval_string(ctx,
-        "(define __reactive-current-scope__ #f)", -1, env);
-
-    /* --- Batch state --- */
-    sexp_eval_string(ctx,
-        "(define __reactive-batch-depth__ 0)", -1, env);
-    sexp_eval_string(ctx,
-        "(define __reactive-batch-queue__ '())", -1, env);
-
-    /* --- Notify: mark downstream dirty and schedule effects --- */
-    sexp_eval_string(ctx,
-        "(define (__reactive-notify__ observers)"
-        "  (for-each"
-        "    (lambda (node)"
-        "      (node '__mark-dirty!__))"
-        "    observers))", -1, env);
-
-    /* --- Schedule an effect for batched flush (dedup by id) --- */
-    sexp_eval_string(ctx,
-        "(define (__reactive-schedule-effect__ node)"
-        "  (let ((nid (node 'id)))"
-        "    (if (not (find (lambda (pair) (equal? (cdr pair) node))"
-        "                   __reactive-batch-queue__))"
-        "      (let ((level (node 'level)))"
-        "        (set! __reactive-batch-queue__"
-        "          (cons (cons level node) __reactive-batch-queue__))))))",
-        -1, env);
-
-    /* --- Flush: sort by level, run each --- */
-    sexp_eval_string(ctx,
-        "(define (__reactive-flush__)"
-        "  (let loop ()"
-        "    (if (null? __reactive-batch-queue__) (if #f #f)"
-        "      (let ((q (sort __reactive-batch-queue__"
-        "                 (lambda (a b) (< (car a) (car b))))))"
-        "        (set! __reactive-batch-queue__ '())"
-        "        (for-each"
-        "          (lambda (pair)"
-        "            (let ((node (cdr pair)))"
-        "              (node '__run!__)))"
-        "          q)"
-        "        (if (not (null? __reactive-batch-queue__))"
-        "            (loop))))))", -1, env);
-
-    /* --- Signal --- */
-    sexp_eval_string(ctx,
-        "(define (Signal initial-value . rest)"
-        "  (let ((value initial-value)"
-        "        (eq-fn (if (null? rest) equal? (car rest)))"
-        "        (observers (make-hash-table))"
-        "        (id (__reactive-gensym__ \"sig\")))"
-        "    (letrec"
-        "      ((notify!"
-        "        (lambda ()"
-        "          (let ((obs (hash-table-values observers)))"
-        "            (if (null? obs) (if #f #f)"
-        "              (begin"
-        "                (if (= __reactive-batch-depth__ 0)"
-        "                  (begin"
-        "                    (set! __reactive-batch-depth__ 1)"
-        "                    (__reactive-notify__ obs)"
-        "                    (set! __reactive-batch-depth__ 0)"
-        "                    (__reactive-flush__))"
-        "                  (__reactive-notify__ obs)))))))"
-        "       (self"
-        "        (lambda args"
-        "          (if (null? args)"
-        "            (begin"
-        "              (let ((obs (__current-observer__)))"
-        "                (if obs ((obs 'register-source) self)))"
-        "              value)"
-        "            (let ((msg (car args)))"
-        "              (cond"
-        "                ((eq? msg 'set)"
-        "                 (lambda (new-val)"
-        "                   (if (not (eq-fn value new-val))"
-        "                     (begin (set! value new-val)"
-        "                            (notify!)))))"
-        "                ((eq? msg 'update)"
-        "                 (lambda (fn)"
-        "                   (let ((new-val (fn value)))"
-        "                     (if (not (eq-fn value new-val))"
-        "                       (begin (set! value new-val)"
-        "                              (notify!))))))"
-        "                ((eq? msg 'peek) value)"
-        "                ((eq? msg 'add-observer)"
-        "                 (lambda (obs-id node)"
-        "                   (hash-table-set! observers obs-id node)))"
-        "                ((eq? msg 'remove-observer)"
-        "                 (lambda (obs-id)"
-        "                   (hash-table-delete! observers obs-id)))"
-        "                ((eq? msg 'observers)"
-        "                 (hash-table-values observers))"
-        "                ((eq? msg 'level) 0)"
-        "                ((eq? msg 'id) id)"
-        "                ((eq? msg '__type__) '__signal__)"
-        "                ((eq? msg 'close) (lambda ()"
-        "                  (for-each (lambda (k) (hash-table-delete! observers k))"
-        "                    (hash-table-keys observers))))"
-        "                ((eq? msg 'dispose) (lambda ()"
-        "                  (for-each (lambda (k) (hash-table-delete! observers k))"
-        "                    (hash-table-keys observers))))"
-        "                (else (error \"Signal: unknown message\" msg))))))))"
-        "      (if __reactive-current-scope__"
-        "        ((__reactive-current-scope__ 'register-child) self))"
-        "      self)))", -1, env);
-
-    /* --- Computed --- */
-    sexp_eval_string(ctx,
-        "(define (Computed fn . rest)"
-        "  (let ((value #f)"
-        "        (eq-fn (if (null? rest) equal? (car rest)))"
-        "        (dirty #t)"
-        "        (computing #f)"
-        "        (disposed #f)"
-        "        (sources (make-hash-table))"
-        "        (observers (make-hash-table))"
-        "        (id (__reactive-gensym__ \"comp\"))"
-        "        (level 1))"
-        "    (letrec"
-        "      ((unsubscribe-all!"
-        "        (lambda ()"
-        "          (for-each"
-        "            (lambda (src)"
-        "              ((src 'remove-observer) id))"
-        "            (hash-table-values sources))"
-        "          (let ((ht (make-hash-table)))"
-        "            (set! sources ht))))"
-        "       (recompute!"
-        "        (lambda ()"
-        "          (if computing (error \"Computed: circular dependency\" id))"
-        "          (set! computing #t)"
-        "          (unsubscribe-all!)"
-        "          (set! level 1)"
-        "          (let ((new-val"
-        "                 (protect (e (else"
-        "                   (set! computing #f)"
-        "                   (set! dirty #t)"
-        "                   (raise e)))"
-        "                   (parameterize ((__current-observer__ self))"
-        "                     (fn)))))"
-        "            (set! computing #f)"
-        "            (set! dirty #f)"
-        "            (let ((changed (not (eq-fn value new-val))))"
-        "              (set! value new-val)"
-        "              changed))))"
-        "       (self"
-        "        (lambda args"
-        "          (if (null? args)"
-        "            (begin"
-        "              (if (and dirty (not disposed))"
-        "                (recompute!))"
-        "              (let ((obs (__current-observer__)))"
-        "                (if obs ((obs 'register-source) self)))"
-        "              value)"
-        "            (let ((msg (car args)))"
-        "              (cond"
-        "                ((eq? msg 'register-source)"
-        "                 (lambda (src)"
-        "                   (let ((src-id (src 'id)))"
-        "                     (if (not (hash-table-exists? sources src-id))"
-        "                       (begin"
-        "                         (hash-table-set! sources src-id src)"
-        "                         ((src 'add-observer) id self)"
-        "                         (let ((sl (src 'level)))"
-        "                           (if (>= sl level)"
-        "                             (set! level (+ sl 1)))))))))"
-        "                ((eq? msg '__mark-dirty!__)"
-        "                 (if (not dirty)"
-        "                   (begin"
-        "                     (set! dirty #t)"
-        "                     (__reactive-schedule-effect__ self))))"
-        "                ((eq? msg '__run!__)"
-        "                 (if (and dirty (not disposed))"
-        "                   (let ((changed (recompute!)))"
-        "                     (if changed"
-        "                       (__reactive-notify__"
-        "                         (hash-table-values observers))))))"
-        "                ((eq? msg 'add-observer)"
-        "                 (lambda (obs-id node)"
-        "                   (hash-table-set! observers obs-id node)))"
-        "                ((eq? msg 'remove-observer)"
-        "                 (lambda (obs-id)"
-        "                   (hash-table-delete! observers obs-id)))"
-        "                ((eq? msg 'level) level)"
-        "                ((eq? msg 'id) id)"
-        "                ((eq? msg '__type__) '__computed__)"
-        "                ((eq? msg 'peek)"
-        "                 (if (and dirty (not disposed))"
-        "                   (recompute!))"
-        "                 value)"
-        "                ((eq? msg 'dirty?) dirty)"
-        "                ((eq? msg 'close) (lambda ()"
-        "                  (set! disposed #t)"
-        "                  (unsubscribe-all!)))"
-        "                ((eq? msg 'dispose) (lambda ()"
-        "                  (set! disposed #t)"
-        "                  (unsubscribe-all!)))"
-        "                (else"
-        "                  (error \"Computed: unknown message\" msg))))))))"
-        "      (protect (e (else (set! computing #f) (set! dirty #t)))"
-        "        (recompute!))"
-        "      (if __reactive-current-scope__"
-        "        ((__reactive-current-scope__ 'register-child) self))"
-        "      self)))", -1, env);
-
-    /* --- Effect --- */
-    sexp_eval_string(ctx,
-        "(define (Effect fn)"
-        "  (let ((cleanup #f)"
-        "        (disposed #f)"
-        "        (sources (make-hash-table))"
-        "        (id (__reactive-gensym__ \"eff\"))"
-        "        (level 1))"
-        "    (letrec"
-        "      ((unsubscribe-all!"
-        "        (lambda ()"
-        "          (for-each"
-        "            (lambda (src)"
-        "              ((src 'remove-observer) id))"
-        "            (hash-table-values sources))"
-        "          (let ((ht (make-hash-table)))"
-        "            (set! sources ht))))"
-        "       (run!"
-        "        (lambda ()"
-        "          (if disposed (if #f #f)"
-        "            (begin"
-        "              (if (procedure? cleanup)"
-        "                (protect (e (else (if #f #f))) (cleanup)))"
-        "              (set! cleanup #f)"
-        "              (unsubscribe-all!)"
-        "              (set! level 1)"
-        "              (let ((result"
-        "                     (parameterize ((__current-observer__ self))"
-        "                       (fn))))"
-        "                (if (procedure? result)"
-        "                  (set! cleanup result)))))))"
-        "       (self"
-        "        (lambda args"
-        "          (if (null? args)"
-        "            (if #f #f)"
-        "            (let ((msg (car args)))"
-        "              (cond"
-        "                ((eq? msg 'register-source)"
-        "                 (lambda (src)"
-        "                   (let ((src-id (src 'id)))"
-        "                     (if (not (hash-table-exists? sources src-id))"
-        "                       (begin"
-        "                         (hash-table-set! sources src-id src)"
-        "                         ((src 'add-observer) id self)"
-        "                         (let ((sl (src 'level)))"
-        "                           (if (>= sl level)"
-        "                             (set! level (+ sl 1)))))))))"
-        "                ((eq? msg '__mark-dirty!__)"
-        "                 (__reactive-schedule-effect__ self))"
-        "                ((eq? msg '__run!__)"
-        "                 (if (not disposed) (run!)))"
-        "                ((eq? msg 'level) level)"
-        "                ((eq? msg 'id) id)"
-        "                ((eq? msg '__type__) '__effect__)"
-        "                ((eq? msg 'close) (lambda ()"
-        "                  (set! disposed #t)"
-        "                  (if (procedure? cleanup)"
-        "                    (protect (e (else (if #f #f))) (cleanup)))"
-        "                  (set! cleanup #f)"
-        "                  (unsubscribe-all!)))"
-        "                ((eq? msg 'dispose) (lambda ()"
-        "                  (set! disposed #t)"
-        "                  (if (procedure? cleanup)"
-        "                    (protect (e (else (if #f #f))) (cleanup)))"
-        "                  (set! cleanup #f)"
-        "                  (unsubscribe-all!)))"
-        "                (else"
-        "                  (error \"Effect: unknown message\" msg))))))))"
-        "      (run!)"
-        "      (if __reactive-current-scope__"
-        "        ((__reactive-current-scope__ 'register-child) self))"
-        "      self)))", -1, env);
-
-    /* --- batch --- */
-    sexp_eval_string(ctx,
-        "(define (batch fn)"
-        "  (set! __reactive-batch-depth__"
-        "    (+ __reactive-batch-depth__ 1))"
-        "  (let ((result"
-        "         (protect (e (else"
-        "           (set! __reactive-batch-depth__"
-        "             (- __reactive-batch-depth__ 1))"
-        "           (if (= __reactive-batch-depth__ 0)"
-        "             (__reactive-flush__))"
-        "           (raise e)))"
-        "           (fn))))"
-        "    (set! __reactive-batch-depth__"
-        "      (- __reactive-batch-depth__ 1))"
-        "    (if (= __reactive-batch-depth__ 0)"
-        "      (__reactive-flush__))"
-        "    result))", -1, env);
-
-    /* --- dispose --- */
-    sexp_eval_string(ctx,
-        "(define (dispose node)"
-        "  ((node 'dispose)))", -1, env);
-
-    /* --- Type predicates --- */
-    sexp_eval_string(ctx,
-        "(define (signal? v)"
-        "  (and (procedure? v)"
-        "       (protect (e (else #f))"
-        "         (eq? (v '__type__) '__signal__))))", -1, env);
-    sexp_eval_string(ctx,
-        "(define (computed? v)"
-        "  (and (procedure? v)"
-        "       (protect (e (else #f))"
-        "         (eq? (v '__type__) '__computed__))))", -1, env);
-    sexp_eval_string(ctx,
-        "(define (effect? v)"
-        "  (and (procedure? v)"
-        "       (protect (e (else #f))"
-        "         (eq? (v '__type__) '__effect__))))", -1, env);
-
-    /* --- untracked: suppress dependency tracking --- */
-    sexp_eval_string(ctx,
-        "(define (untracked fn)"
-        "  (parameterize ((__current-observer__ #f))"
-        "    (fn)))", -1, env);
-
-    /* --- derived: shorthand computed from one signal --- */
-    sexp_eval_string(ctx,
-        "(define (derived src fn)"
-        "  (Computed (lambda () (fn (src)))))", -1, env);
-
-    /* --- readonly: read-only view of a signal/computed --- */
-    sexp_eval_string(ctx,
-        "(define (readonly src)"
-        "  (let ((id (__reactive-gensym__ \"ro\")))"
-        "    (lambda args"
-        "      (if (null? args)"
-        "        (src)"
-        "        (let ((msg (car args)))"
-        "          (cond"
-        "            ((eq? msg 'peek) (src 'peek))"
-        "            ((eq? msg 'level) (src 'level))"
-        "            ((eq? msg 'id) (src 'id))"
-        "            ((eq? msg 'add-observer)"
-        "             (lambda (obs-id node)"
-        "               ((src 'add-observer) obs-id node)))"
-        "            ((eq? msg 'remove-observer)"
-        "             (lambda (obs-id)"
-        "               ((src 'remove-observer) obs-id)))"
-        "            ((eq? msg '__type__) '__readonly__)"
-        "            ((eq? msg 'set) (error \"readonly: cannot set\"))"
-        "            ((eq? msg 'update) (error \"readonly: cannot update\"))"
-        "            ((eq? msg 'dispose) (error \"readonly: cannot dispose\"))"
-        "            ((eq? msg 'close) (error \"readonly: cannot close\"))"
-        "            (else (error \"readonly: unknown message\" msg))))))))",
-        -1, env);
-
-    /* --- readonly? predicate --- */
-    sexp_eval_string(ctx,
-        "(define (readonly? v)"
-        "  (and (procedure? v)"
-        "       (protect (e (else #f))"
-        "         (eq? (v '__type__) '__readonly__))))", -1, env);
-
-    /* --- watch: run fn(new, old) on changes --- */
-    sexp_eval_string(ctx,
-        "(define (watch src fn)"
-        "  (let ((prev (src 'peek))"
-        "        (first #t))"
-        "    (Effect (lambda ()"
-        "      (let ((curr (src)))"
-        "        (if first"
-        "          (set! first #f)"
-        "          (let ((old prev))"
-        "            (set! prev curr)"
-        "            (fn curr old))))))))", -1, env);
-
-    /* --- on: effect with explicit dependency list --- */
-    sexp_eval_string(ctx,
-        "(define (on deps fn)"
-        "  (Effect (lambda ()"
-        "    (let ((vals (map (lambda (d) (d)) deps)))"
-        "      (parameterize ((__current-observer__ #f))"
-        "        (apply fn vals))))))", -1, env);
-
-    /* --- reduce: fold over signal changes --- */
-    sexp_eval_string(ctx,
-        "(define (reduce src fn initial)"
-        "  (let ((acc (Signal initial)))"
-        "    (watch src (lambda (new-val old-val)"
-        "      ((acc 'set) (fn (acc 'peek) new-val))))"
-        "    acc))", -1, env);
-
-    /* --- scope: reactive ownership scope --- */
-    sexp_eval_string(ctx,
-        "(define (scope fn)"
-        "  (let ((children '())"
-        "        (id (__reactive-gensym__ \"scope\"))"
-        "        (disposed #f)"
-        "        (prev-scope __reactive-current-scope__))"
-        "    (letrec"
-        "      ((self"
-        "        (lambda args"
-        "          (if (null? args)"
-        "            children"
-        "            (let ((msg (car args)))"
-        "              (cond"
-        "                ((eq? msg 'register-child)"
-        "                 (lambda (child)"
-        "                   (if (not disposed)"
-        "                     (set! children (cons child children)))))"
-        "                ((eq? msg 'dispose) (lambda ()"
-        "                  (if (not disposed)"
-        "                    (begin"
-        "                      (set! disposed #t)"
-        "                      (for-each (lambda (child)"
-        "                        (protect (e (else (if #f #f)))"
-        "                          ((child 'dispose))))"
-        "                        children)"
-        "                      (set! children '())))))"
-        "                ((eq? msg 'close) (lambda ()"
-        "                  ((self 'dispose))))"
-        "                ((eq? msg '__type__) '__scope__)"
-        "                ((eq? msg 'id) id)"
-        "                (else (error \"scope: unknown message\" msg))))))))"
-        "      (set! __reactive-current-scope__ self)"
-        "      (protect (e (else"
-        "        (set! __reactive-current-scope__ prev-scope)"
-        "        (raise e)))"
-        "        (fn))"
-        "      (set! __reactive-current-scope__ prev-scope)"
-        "      self)))", -1, env);
-
-    /* --- scope? predicate --- */
-    sexp_eval_string(ctx,
-        "(define (scope? v)"
-        "  (and (procedure? v)"
-        "       (protect (e (else #f))"
-        "         (eq? (v '__type__) '__scope__))))", -1, env);
-
-    /* --- WritableComputed: two-way computed --- */
-    sexp_eval_string(ctx,
-        "(define (WritableComputed getter setter)"
-        "  (let ((inner (Computed getter)))"
-        "    (lambda args"
-        "      (if (null? args)"
-        "        (inner)"
-        "        (let ((msg (car args)))"
-        "          (cond"
-        "            ((eq? msg 'set)"
-        "             (lambda (new-val) (setter new-val)))"
-        "            ((eq? msg 'update)"
-        "             (lambda (fn) (setter (fn (inner 'peek)))))"
-        "            ((eq? msg '__type__) '__writable-computed__)"
-        "            (else (inner msg))))))))", -1, env);
-
-    /* --- writable_computed? predicate --- */
-    sexp_eval_string(ctx,
-        "(define (writable_computed? v)"
-        "  (and (procedure? v)"
-        "       (protect (e (else #f))"
-        "         (eq? (v '__type__) '__writable-computed__))))", -1, env);
-
-    /* --- combine: merge N signals into one computed --- */
-    sexp_eval_string(ctx,
-        "(define (combine sources fn)"
-        "  (Computed (lambda ()"
-        "    (apply fn (map (lambda (s) (s)) sources)))))", -1, env);
-
-    /* --- select: fine-grained slice with optional custom equality --- */
-    sexp_eval_string(ctx,
-        "(define (select src selector . rest)"
-        "  (let ((eq-fn (if (null? rest) equal? (car rest))))"
-        "    (Computed (lambda () (selector (src))) eq-fn)))", -1, env);
-
-    /* --- prev: previous value signal --- */
-    sexp_eval_string(ctx,
-        "(define (prev src . rest)"
-        "  (let ((initial (if (null? rest) #f (car rest))))"
-        "    (let ((p (Signal initial)))"
-        "      (watch src (lambda (new-val old-val)"
-        "        ((p 'set) old-val)))"
-        "      (readonly p))))", -1, env);
-
-    /* --- trace: debug logging --- */
-    sexp_eval_string(ctx,
-        "(define (trace src label)"
-        "  (watch src (lambda (new-val old-val)"
-        "    (display (string-append \"[\" label \"] \"))"
-        "    (display old-val)"
-        "    (display \" -> \")"
-        "    (display new-val)"
-        "    (newline)))"
-        "  src)", -1, env);
-
-    /* --- resource: async data loading primitive --- */
-    sexp_eval_string(ctx,
-        "(define (resource source-or-fetcher . rest)"
-        "  (let* ((has-source (not (null? rest)))"
-        "         (src (if has-source source-or-fetcher #f))"
-        "         (fetcher (if has-source (car rest) source-or-fetcher))"
-        "         (initial (if (and has-source (pair? (cdr rest)))"
-        "                    (cadr rest) #f))"
-        "         (value-sig (Signal initial))"
-        "         (loading-sig (Signal #t))"
-        "         (error-sig (Signal #f))"
-        "         (version 0)"
-        "         (current-thread #f)"
-        "         (watcher #f)"
-        "         (id (__reactive-gensym__ \"res\")))"
-        "    (letrec"
-        "      ((do-fetch"
-        "        (lambda (arg)"
-        "          (set! version (+ version 1))"
-        "          (let ((my-version version))"
-        "            ((loading-sig 'set) #t)"
-        "            ((error-sig 'set) #f)"
-        "            (let ((t (make-thread (lambda ()"
-        "                       (protect (e (else"
-        "                         (if (= my-version version)"
-        "                           (begin"
-        "                             ((error-sig 'set) e)"
-        "                             ((loading-sig 'set) #f)))))"
-        "                         (let ((result (if has-source"
-        "                                         (fetcher arg)"
-        "                                         (fetcher))))"
-        "                           (if (= my-version version)"
-        "                             (begin"
-        "                               ((value-sig 'set) result)"
-        "                               ((loading-sig 'set) #f)))))))))"
-        "              (set! current-thread t)"
-        "              (thread-start! t)))))"
-        "       (self"
-        "        (lambda args"
-        "          (if (null? args)"
-        "            (value-sig)"
-        "            (let ((msg (car args)))"
-        "              (cond"
-        "                ((eq? msg 'loading) (loading-sig))"
-        "                ((eq? msg 'error) (error-sig))"
-        "                ((eq? msg 'settle) (lambda ()"
-        "                  (if current-thread"
-        "                    (protect (e (else (if #f #f)))"
-        "                      (thread-join! current-thread)))"
-        "                  (thread-yield!)))"
-        "                ((eq? msg 'refetch) (lambda ()"
-        "                  (if has-source"
-        "                    (do-fetch (src 'peek))"
-        "                    (do-fetch #f))))"
-        "                ((eq? msg 'mutate) (lambda (v)"
-        "                  ((value-sig 'set) v)))"
-        "                ((eq? msg 'peek) (value-sig 'peek))"
-        "                ((eq? msg 'level) (value-sig 'level))"
-        "                ((eq? msg 'id) id)"
-        "                ((eq? msg 'add-observer)"
-        "                 (lambda (obs-id node)"
-        "                   ((value-sig 'add-observer) obs-id node)))"
-        "                ((eq? msg 'remove-observer)"
-        "                 (lambda (obs-id)"
-        "                   ((value-sig 'remove-observer) obs-id)))"
-        "                ((eq? msg '__type__) '__resource__)"
-        "                ((eq? msg 'dispose) (lambda ()"
-        "                  (set! version (+ version 1))"
-        "                  (if watcher (dispose watcher))))"
-        "                ((eq? msg 'close) (lambda ()"
-        "                  ((self 'dispose))))"
-        "                (else (error \"resource: unknown message\" msg))))))))"
-        "      (if has-source"
-        "        (begin"
-        "          (do-fetch (src 'peek))"
-        "          (set! watcher"
-        "            (watch src (lambda (new-val old-val)"
-        "              (do-fetch new-val)))))"
-        "        (do-fetch #f))"
-        "      (if __reactive-current-scope__"
-        "        ((__reactive-current-scope__ 'register-child) self))"
-        "      self)))", -1, env);
-
-    /* --- resource? predicate --- */
-    sexp_eval_string(ctx,
-        "(define (resource? v)"
-        "  (and (procedure? v)"
-        "       (protect (e (else #f))"
-        "         (eq? (v '__type__) '__resource__))))", -1, env);
-
+    sexp_load_module_file(ctx, "eval/reactive.scm", env);
 }
 
 /* Parse and evaluate Eval code in a worker context */
@@ -2028,6 +1241,21 @@ static sexp eval_parse_and_run(sexp ctx, sexp env, const char *code) {
     result = sexp_eval(ctx, parsed, env);
     sexp_gc_release2(ctx);
     return result;
+}
+
+/* Load an embedded .eval file: look up by path, parse as Eval, evaluate */
+void eval_load_eval_file(sexp ctx, sexp env, const char *path) {
+    const char *code = embedded_find_scm(path);
+    if (!code) {
+        fprintf(stderr, "eval_load_eval_file: not found: %s\n", path);
+        return;
+    }
+    sexp result = eval_parse_and_run(ctx, env, code);
+    if (sexp_exceptionp(result)) {
+        sexp_print_exception(ctx, result,
+            sexp_env_ref(ctx, env, sexp_intern(ctx, "current-error-port", -1),
+                         SEXP_FALSE));
+    }
 }
 
 /* Inject all named channels from pool into worker env */

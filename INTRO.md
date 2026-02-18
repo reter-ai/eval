@@ -64,6 +64,61 @@ The single-quote operator creates symbols (quoted identifiers):
 (1, 2, 3 .. 4)   // nested cons -> (1 2 3 . 4)
 ```
 
+## Indexing and Slicing
+
+Python-style bracket indexing and slicing works on lists, vectors, and strings:
+
+### Indexing `expr[i]`
+
+```
+[10, 20, 30][0]         // => 10
+[10, 20, 30][2]         // => 30
+[10, 20, 30][-1]        // => 30 (negative = from end)
+[10, 20, 30][-2]        // => 20
+
+#[10, 20, 30][1]        // => 20 (vector)
+"hello"[0]              // => #\h (string → character)
+"hello"[-1]             // => #\o
+```
+
+Indexing compiles to `(ref expr i)`.
+
+### Slicing `expr[s:e]`
+
+Slicing returns a new list, vector, or string. The start is inclusive, the end is exclusive:
+
+```
+[1, 2, 3, 4, 5][1:3]   // => [2, 3]
+[1, 2, 3][:2]           // => [1, 2]      (omitted start = 0)
+[1, 2, 3][1:]           // => [2, 3]      (omitted end = length)
+[1, 2, 3][:]            // => [1, 2, 3]   (full copy)
+
+// Negative indices
+[1, 2, 3, 4, 5][-3:-1]  // => [3, 4]
+
+// String slicing returns a string
+"hello"[1:3]             // => "el"
+"hello"[:3]              // => "hel"
+"hello"[2:]              // => "llo"
+
+// Vector slicing returns a vector
+#[10, 20, 30, 40][1:3]  // => #[20, 30]
+```
+
+Out-of-range slice bounds are clamped (no error), but out-of-range indexing raises an error.
+
+Slicing compiles to `(slice expr start end)` where omitted bounds are `#f`.
+
+### Chained indexing
+
+Indexing is a postfix operator with the same precedence as function calls and `->`, so it chains naturally:
+
+```
+[[1, 2], [3, 4]][1][0]  // => 3
+define matrix = [[1, 2, 3], [4, 5, 6], [7, 8, 9]];
+matrix[1][2]             // => 6
+```
+
 ## Variables
 
 ```
@@ -165,7 +220,7 @@ The string-based alternative `op("+")` also works.
 *  /  %                (left)
 **                     (right)
 -  !  ~  '             (right, unary)
-()  ->  ++  --         (left, postfix)
+()  []  ->  ++  --     (left, postfix)
 ```
 
 ## Functions
@@ -598,6 +653,106 @@ try gd->fly() catch(e) display("no such method");
 - `interface(...)` compiles to a lambda that dispatches on a quoted symbol (`__msg__`).
 - `super Parent(args)` appends `Parent(args)` to the `__supers__` list.
 - When a message isn't found, the interface's `else` clause searches `__supers__` by calling `((car __supers__) __msg__)`.
+- `area: abstract` in an interface compiles to `(lambda __args__ (error "abstract method" "area"))` — a placeholder that throws.
+- `abstract constructor(...)` wraps the normal constructor in a guard that checks `__abstract_ok__`. Direct calls error; `super` sets the flag before calling the parent.
+
+### Abstract methods
+
+Use `abstract` in an interface entry to declare a method that must be overridden by subclasses. An abstract method is a placeholder that throws an error if called:
+
+```
+define Shape = constructor()
+    interface(
+        area: abstract,
+        name: function() "shape"
+    );
+
+Shape()->name();     // => "shape" (works fine)
+Shape()->area();     // ERROR: "abstract method: area"
+```
+
+Subclasses override abstract methods by providing their own implementation. The child's interface entry matches first, so the parent's abstract placeholder is never reached:
+
+```
+define Circle = constructor(r) {
+    super Shape();
+    interface(area: function() 3.14159 * r * r);
+};
+
+Circle(5)->area();   // => 78.53975
+Circle(5)->name();   // => "shape" (inherited)
+```
+
+### Abstract classes
+
+Prefix `constructor` with `abstract` to prevent direct instantiation. Only subclasses (via `super`) can create instances:
+
+```
+define Animal = abstract constructor()
+    interface(
+        speak: abstract,
+        kind: function() "animal"
+    );
+
+Animal();            // ERROR: "cannot instantiate abstract class"
+
+define Dog = constructor() {
+    super Animal();
+    interface(speak: function() "woof");
+};
+
+Dog()->speak();      // => "woof"
+Dog()->kind();       // => "animal" (inherited)
+```
+
+The mechanism uses a global flag `__abstract_ok__` that `super` sets before calling the parent constructor. Direct calls leave the flag unset, triggering the error.
+
+### Abstract + static
+
+Abstract constructors work with `static` for class-level properties accessible without instantiation:
+
+```
+define Shape = abstract constructor()
+    static(types: ["circle", "rect"])
+    interface(area: abstract);
+
+Shape->types;        // => ["circle", "rect"] (statics accessible)
+Shape();             // ERROR: "cannot instantiate abstract class"
+
+define Circle = constructor(r) {
+    super Shape();
+    interface(area: function() 3.14159 * r * r);
+};
+Circle(5)->area();   // => 78.53975
+```
+
+### Chained abstract inheritance
+
+Abstract classes can inherit from other abstract classes. Each level can declare its own abstract methods:
+
+```
+define A = abstract constructor()
+    interface(foo: abstract, base: function() "A");
+
+define B = abstract constructor() {
+    super A();
+    interface(bar: abstract);
+};
+
+define C = constructor() {
+    super B();
+    interface(
+        foo: function() "foo-impl",
+        bar: function() "bar-impl"
+    );
+};
+
+C()->foo();          // => "foo-impl"
+C()->bar();          // => "bar-impl"
+C()->base();         // => "A" (inherited through chain)
+A();                 // ERROR
+B();                 // ERROR
+```
 
 ## Records
 
@@ -623,6 +778,7 @@ Records are immutable data carriers. Access uses the same `->` syntax as constru
 | **Access** | `obj->field` | `obj->field` |
 | **Mutation** | Closures over mutable state | Immutable fields |
 | **Inheritance** | `super` keyword | None |
+| **Abstract** | `abstract` methods and classes | None |
 | **Methods** | Interface entries can be functions | None (data only) |
 | **Type check** | Not built-in | `Type?(obj)` predicate |
 | **Use case** | Behavior, encapsulation, polymorphism | Simple data aggregates, tagged unions |
@@ -771,6 +927,20 @@ apply(+, [1, 2, 3])                                // => 6
 ```
 
 Note: `fold` follows SRFI-1 conventions where the combining function takes `(element, accumulator)`, not `(accumulator, element)`.
+
+### Indexing and slicing functions
+
+The `[]` syntax compiles to these functions, which can also be called directly:
+
+```
+ref([10, 20, 30], 1)            // => 20 (same as [10, 20, 30][1])
+ref("hello", 0)                 // => #\h
+ref(#[10, 20, 30], -1)          // => 30
+
+slice([1, 2, 3, 4], 1, 3)       // => [2, 3]
+slice("hello", 0, 3)            // => "hel"
+slice(#[10, 20, 30], 1, false)  // => #[20, 30] (false = omit bound)
+```
 
 ### Type predicates
 
@@ -1528,3 +1698,83 @@ Inside blocks, the last expression's semicolon is optional:
 { define x = 10; x + 1 }    // ok, returns 11
 { define x = 10; x + 1; }   // also ok
 ```
+
+## Networking
+
+Eval provides OO wrappers for TCP sockets and HTTP with RAII cleanup and reactive integration. All socket operations are non-blocking with green threads.
+
+### TcpClient / TcpSocket
+
+`TcpClient` connects to a host:port and returns a `TcpSocket` with string-based send/recv:
+
+```
+with(sock = TcpClient("example.com", 80)) {
+    sock->send("GET / HTTP/1.0\r\nHost: example.com\r\n\r\n");
+    define response = sock->recv(4096);
+    display(response);
+};
+// sock->close() called automatically
+```
+
+`TcpSocket` wraps a raw file descriptor:
+
+```
+define sock = TcpSocket(fd);
+sock->send("hello");       // string or bytevector
+sock->recv(4096);          // returns string or false (EOF)
+sock->recv_bytes(4096);    // returns raw bytevector
+sock->fd;                  // underlying file descriptor
+sock->open?;               // true if not closed
+sock->close();             // close (idempotent)
+```
+
+### TcpServer
+
+`TcpServer` creates a listener with green-thread-per-connection dispatch:
+
+```
+define server = TcpServer(8080, function(sock, addr, port) {
+    define data = sock->recv(4096);
+    sock->send("HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nOK");
+    // sock auto-closed when handler returns
+});
+
+server->run();      // blocking accept loop
+server->start();    // or non-blocking (green thread)
+server->stop();     // stop accepting
+```
+
+Reactive signals track connection state:
+
+```
+server->connections;   // Signal — current active connections
+server->requests;      // Signal — total requests served
+
+Effect(function() {
+    display("active=" ++ `number->string`(server->connections()));
+    newline();
+});
+```
+
+### HttpClient
+
+OO HTTP client with `get` and `post`, returning `[status, body]`:
+
+```
+with(client = HttpClient("example.com", 80)) {
+    define result = client->get("/");
+    define status = car(result);
+    define body = car(cdr(result));
+    display(body);
+};
+```
+
+See [NETWORKING.md](NETWORKING.md) for the full networking guide including low-level socket functions, DNS resolution, socket options, and constants.
+
+## Further reading
+
+- [NETWORKING.md](NETWORKING.md) — TCP sockets, HTTP client/server, OO wrappers, non-blocking I/O
+- [FILESYS.md](FILESYS.md) — File I/O, directory operations, metadata, path utilities
+- [ASYNC.md](ASYNC.md) — Async/await, thread pools, channels, pipelines
+- [THREADS.md](THREADS.md) — Green threads, mutexes, condition variables, continuations
+- [REACTIVE.md](REACTIVE.md) — Signals, computed values, effects, scopes, resources

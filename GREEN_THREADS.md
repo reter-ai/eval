@@ -674,7 +674,7 @@ This is fundamentally different from OS threads or the Eval thread pool:
 | **Shared state** | Same heap, same globals | Separate heaps |
 | **Communication** | Direct variable access | Channels (serialized) |
 | **Synchronization** | Scheme mutexes (cooperative) | OS mutexes (blocking) |
-| **I/O** | Non-blocking + poll | Regular blocking |
+| **I/O** | Non-blocking + poll (`TcpSocket`, `TcpServer`) | Regular blocking |
 | **Stack** | Own stack per context | Own heap per worker |
 | **GC** | Single GC for all threads | Independent GC per worker |
 | **Cost** | ~200 bytes per thread | ~MB per worker |

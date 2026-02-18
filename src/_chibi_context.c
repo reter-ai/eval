@@ -233,73 +233,11 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
 
     /* === Pre-define functions that extras.scm and other files depend on === */
 
-    /* Aliases that extras.scm expects (normally set by module rename) */
-    sexp_eval_string(self->ctx,
-        "(define error-object? exception?)", -1, self->env);
+    /* Base definitions: error-object aliases, byte I/O, string/IO fns, callcc */
+    sexp_load_module_file(self->ctx, "eval/base.scm", self->env);
+    self->env = sexp_context_env(self->ctx);
 
-    /* error-object-message via C bridge (exception-message registered in bridge) */
-    sexp_eval_string(self->ctx,
-        "(define error-object-message exception-message)", -1, self->env);
-
-    /* Byte I/O — pure Scheme via char I/O (needed before extras.scm) */
-    sexp_eval_string(self->ctx,
-        "(define (read-u8 . o)"
-        "  (let ((ch (if (pair? o) (read-char (car o)) (read-char))))"
-        "    (if (eof-object? ch) ch (char->integer ch))))", -1, self->env);
-    sexp_eval_string(self->ctx,
-        "(define (write-u8 byte . o)"
-        "  (if (pair? o)"
-        "    (write-char (integer->char byte) (car o))"
-        "    (write-char (integer->char byte))))", -1, self->env);
-    sexp_eval_string(self->ctx,
-        "(define (peek-u8 . o)"
-        "  (let ((ch (if (pair? o) (peek-char (car o)) (peek-char))))"
-        "    (if (eof-object? ch) ch (char->integer ch))))", -1, self->env);
-
-    /* String functions from (chibi string) — pure Scheme implementations */
-    sexp_eval_string(self->ctx,
-        "(define (string-map proc str)"
-        "  (list->string (map proc (string->list str))))", -1, self->env);
-    sexp_eval_string(self->ctx,
-        "(define (string-for-each proc str)"
-        "  (for-each proc (string->list str)))", -1, self->env);
-
-    /* I/O functions — pure Scheme implementations */
-    sexp_eval_string(self->ctx,
-        "(define (write-string str . o)"
-        "  (let ((port (if (pair? o) (car o) (current-output-port))))"
-        "    (let lp ((i 0))"
-        "      (if (< i (string-length str))"
-        "          (begin (write-char (string-ref str i) port)"
-        "                 (lp (+ i 1)))))))", -1, self->env);
-    sexp_eval_string(self->ctx,
-        "(define (read-line . o)"
-        "  (let ((port (if (pair? o) (car o) (current-input-port))))"
-        "    (let lp ((res '()))"
-        "      (let ((ch (read-char port)))"
-        "        (cond ((eof-object? ch)"
-        "               (if (null? res) ch (list->string (reverse res))))"
-        "              ((eqv? ch #\\newline)"
-        "               (list->string (reverse res)))"
-        "              ((eqv? ch #\\return)"
-        "               (let ((next (peek-char port)))"
-        "                 (if (eqv? next #\\newline) (read-char port))"
-        "                 (list->string (reverse res))))"
-        "              (else (lp (cons ch res))))))))", -1, self->env);
-    sexp_eval_string(self->ctx,
-        "(define (read-string n . o)"
-        "  (let ((port (if (pair? o) (car o) (current-input-port))))"
-        "    (let lp ((i 0) (res '()))"
-        "      (if (>= i n)"
-        "          (list->string (reverse res))"
-        "          (let ((ch (read-char port)))"
-        "            (if (eof-object? ch)"
-        "                (if (null? res) ch (list->string (reverse res)))"
-        "                (lp (+ i 1) (cons ch res))))))))", -1, self->env);
-
-    /* Core aliases */
-    sexp_eval_string(self->ctx,
-        "(define callcc call-with-current-continuation)", -1, self->env);
+    /* filter and fold needed before extras.scm (workers get these from srfi/1) */
     sexp_eval_string(self->ctx,
         "(define (filter pred lst)"
         "  (cond ((null? lst) '())"
@@ -339,298 +277,40 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
     /* make-parameter and sort are now provided by srfi/39/syntax.scm
      * and srfi/95/sort.scm loaded in eval_init_all_libs. */
 
-    /* SRFI-18 green thread wrappers (simplified, no timeval dependency) */
-    sexp_eval_string(self->ctx,
-        "(define thread-yield! yield!)", -1, self->env);
-    sexp_eval_string(self->ctx,
-        "(define (thread-join! thread . o)"
-        "  (let ((timeout (and (pair? o) (car o))))"
-        "    (let lp ()"
-        "      (cond"
-        "       ((%thread-join! thread timeout)"
-        "        (if (%thread-exception? thread)"
-        "            (raise (%thread-end-result thread))"
-        "            (%thread-end-result thread)))"
-        "       (else"
-        "        (thread-yield!)"
-        "        (cond"
-        "         ((and timeout (thread-timeout?))"
-        "          (if (and (pair? o) (pair? (cdr o)))"
-        "              (cadr o)"
-        "              (error \"timed out waiting for thread\" thread)))"
-        "         (else (lp))))))))", -1, self->env);
-    sexp_eval_string(self->ctx,
-        "(define (thread-terminate! thread)"
-        "  (if (%thread-terminate! thread) (thread-yield!)))", -1, self->env);
-    sexp_eval_string(self->ctx,
-        "(define (thread-sleep! timeout)"
-        "  (%thread-sleep! timeout) (thread-yield!))", -1, self->env);
-    sexp_eval_string(self->ctx,
-        "(define (mutex-lock! mutex . o)"
-        "  (let ((timeout (and (pair? o) (car o)))"
-        "        (thread (if (and (pair? o) (pair? (cdr o))) (cadr o) #t)))"
-        "    (cond"
-        "     ((%mutex-lock! mutex timeout thread))"
-        "     (else"
-        "      (thread-yield!)"
-        "      (if (thread-timeout?) #f"
-        "          (mutex-lock! mutex timeout thread))))))", -1, self->env);
-    sexp_eval_string(self->ctx,
-        "(define (mutex-unlock! mutex . o)"
-        "  (let ((condvar (and (pair? o) (car o)))"
-        "        (timeout (if (and (pair? o) (pair? (cdr o))) (cadr o) #f)))"
-        "    (cond"
-        "     ((%mutex-unlock! mutex condvar timeout))"
-        "     (else (thread-yield!) (not (thread-timeout?))))))", -1, self->env);
+    /* SRFI-18 green thread wrappers */
+    sexp_load_module_file(self->ctx, "eval/threads.scm", self->env);
+    self->env = sexp_context_env(self->ctx);
 
-    /* Eval underscore aliases for SRFI-18 threads */
-    sexp_eval_string(self->ctx,
-        "(begin"
-        " (define make_thread make-thread)"
-        " (define thread_start thread-start!)"
-        " (define thread_yield thread-yield!)"
-        " (define thread_join thread-join!)"
-        " (define thread_sleep thread-sleep!)"
-        " (define thread_terminate thread-terminate!)"
-        " (define current_thread current-thread)"
-        " (define make_mutex make-mutex)"
-        " (define mutex_lock mutex-lock!)"
-        " (define mutex_unlock mutex-unlock!)"
-        " (define make_condvar make-condition-variable)"
-        " (define condvar_signal condition-variable-signal!)"
-        " (define condvar_broadcast condition-variable-broadcast!))",
-        -1, self->env);
+    /* Underscore aliases for all libraries */
+    sexp_load_module_file(self->ctx, "eval/aliases.scm", self->env);
+    self->env = sexp_context_env(self->ctx);
 
-    /* Eval underscore aliases for other new libraries */
-    sexp_eval_string(self->ctx,
-        "(begin"
-        " (define random_integer random-integer)"
-        " (define random_real random-real)"
-        " (define json_read json-read)"
-        " (define json_write json-write)"
-        " (define get_env get-environment-variable)"
-        " (define current_clock_second current-clock-second)"
-        " (define bit_and bit-and)"
-        " (define bit_ior bit-ior)"
-        " (define bit_xor bit-xor)"
-        " (define bit_count bit-count)"
-        " (define arithmetic_shift arithmetic-shift)"
-        " (define integer_length integer-length)"
-        " (define object_cmp object-cmp)"
-        " (define heap_stats heap-stats)"
-        /* srfi/69 hash table aliases */
-        " (define make_hash_table make-hash-table)"
-        " (define hash_table_ref hash-table-ref)"
-        " (define hash_table_set hash-table-set!)"
-        " (define hash_table_delete hash-table-delete!)"
-        " (define hash_table_exists hash-table-exists?)"
-        " (define hash_table_keys hash-table-keys)"
-        " (define hash_table_values hash-table-values)"
-        " (define hash_table_size hash-table-size)"
-        " (define hash_table_to_alist hash-table->alist)"
-        /* srfi/1 list library aliases */
-        " (define take_while take-while)"
-        " (define drop_while drop-while)"
-        " (define list_index list-index)"
-        " (define delete_duplicates delete-duplicates)"
-        " (define alist_cons alist-cons)"
-        " (define alist_copy alist-copy)"
-        " (define alist_delete alist-delete)"
-        " (define append_map append-map)"
-        " (define filter_map filter-map)"
-        " (define fold_right fold-right)"
-        " (define take_right take-right)"
-        " (define drop_right drop-right)"
-        " (define split_at split-at)"
-        " (define last_pair last-pair)"
-        " (define circular_list circular-list)"
-        " (define is_proper_list proper-list?)"
-        " (define is_dotted_list dotted-list?)"
-        /* math/prime aliases */
-        " (define is_prime prime?)"
-        " (define is_probable_prime probable-prime?)"
-        " (define random_prime random-prime)"
-        " (define nth_prime nth-prime)"
-        " (define prime_above prime-above)"
-        " (define prime_below prime-below))",
-        -1, self->env);
+    /* Dict runtime */
+    sexp_load_module_file(self->ctx, "eval/dict.scm", self->env);
+    self->env = sexp_context_env(self->ctx);
 
-    /* Test framework underscore aliases for Eval syntax */
-    sexp_eval_string(self->ctx,
-        "(define test_begin test-begin)", -1, self->env);
-    sexp_eval_string(self->ctx,
-        "(define test_end test-end)", -1, self->env);
-    sexp_eval_string(self->ctx,
-        "(define test_assert test-assert)", -1, self->env);
-    sexp_eval_string(self->ctx,
-        "(define test_error test-error)", -1, self->env);
-    sexp_eval_string(self->ctx,
-        "(define test_group test-group)", -1, self->env);
+    /* Async/await runtime */
+    sexp_load_module_file(self->ctx, "eval/async.scm", self->env);
+    self->env = sexp_context_env(self->ctx);
 
-    /* Dict runtime: __make_eval_dict__ creates a closure wrapping a hash table */
-    sexp_eval_string(self->ctx,
-        "(define (__make_eval_dict__ pairs)"
-        "  (let ((ht (make-hash-table)))"
-        "    (for-each (lambda (p) (hash-table-set! ht (car p) (cdr p))) pairs)"
-        "    (lambda (__msg__)"
-        "      (cond"
-        "        ((eq? __msg__ 'get)"
-        "         (lambda (k) (hash-table-ref/default ht"
-        "           (if (string? k) (string->symbol k) k) #f)))"
-        "        ((eq? __msg__ 'set)"
-        "         (lambda (k v) (hash-table-set! ht"
-        "           (if (string? k) (string->symbol k) k) v)))"
-        "        ((eq? __msg__ 'delete)"
-        "         (lambda (k) (hash-table-delete! ht"
-        "           (if (string? k) (string->symbol k) k))))"
-        "        ((eq? __msg__ 'keys)"
-        "         (lambda () (hash-table-keys ht)))"
-        "        ((eq? __msg__ 'values)"
-        "         (lambda () (hash-table-values ht)))"
-        "        ((eq? __msg__ 'has?)"
-        "         (lambda (k) (hash-table-exists? ht"
-        "           (if (string? k) (string->symbol k) k))))"
-        "        ((eq? __msg__ 'size)"
-        "         (lambda () (hash-table-size ht)))"
-        "        ((eq? __msg__ 'to_list)"
-        "         (lambda () (hash-table->alist ht)))"
-        "        ((eq? __msg__ '__type__) '__dict__)"
-        "        ((hash-table-exists? ht __msg__)"
-        "         (hash-table-ref ht __msg__))"
-        "        (else #f)))))", -1, self->env);
-    sexp_eval_string(self->ctx,
-        "(define (dict? v)"
-        "  (and (procedure? v)"
-        "       (protect (e (else #f))"
-        "         (eq? (v '__type__) '__dict__))))", -1, self->env);
-
-    /* Async/await runtime: promise type backed by mutex+condvar */
-    sexp_eval_string(self->ctx,
-        "(define (__make-promise__)"
-        "  (let ((m (make-mutex)) (cv (make-condition-variable))"
-        "        (resolved #f) (value #f) (err #f))"
-        "    (lambda (__msg__)"
-        "      (cond"
-        "        ((eq? __msg__ '__resolve__)"
-        "         (lambda (v)"
-        "           (mutex-lock! m)"
-        "           (set! resolved #t) (set! value v)"
-        "           (condition-variable-broadcast! cv)"
-        "           (mutex-unlock! m)))"
-        "        ((eq? __msg__ '__reject__)"
-        "         (lambda (e)"
-        "           (mutex-lock! m)"
-        "           (set! resolved #t) (set! err e)"
-        "           (condition-variable-broadcast! cv)"
-        "           (mutex-unlock! m)))"
-        "        ((eq? __msg__ '__await__)"
-        "         (mutex-lock! m)"
-        "         (let loop ()"
-        "           (if resolved"
-        "               (begin (mutex-unlock! m)"
-        "                      (if err (raise err) value))"
-        "               (begin (mutex-unlock! m cv)"
-        "                      (mutex-lock! m)"
-        "                      (loop)))))"
-        "        ((eq? __msg__ 'ready?)"
-        "         (mutex-lock! m)"
-        "         (let ((r resolved)) (mutex-unlock! m) r))"
-        "        ((eq? __msg__ '__type__) '__promise__)"
-        "        (else (error \"promise: unknown message\" __msg__))))))", -1, self->env);
-    sexp_eval_string(self->ctx,
-        "(define (__promise-resolve!__ p val)"
-        "  (protect (e (else ((p '__reject__) e)))"
-        "    ((p '__resolve__) val)))", -1, self->env);
-    sexp_eval_string(self->ctx,
-        "(define (promise? v)"
-        "  (and (procedure? v)"
-        "       (protect (e (else #f))"
-        "         (eq? (v '__type__) '__promise__))))", -1, self->env);
-    sexp_eval_string(self->ctx,
-        "(define (__await__ x)"
-        "  (cond"
-        "    ((and (procedure? x)"
-        "          (protect (e (else #f)) (eq? (x '__type__) '__promise__)))"
-        "     (x '__await__))"
-        "    (else (future-result x))))", -1, self->env);
-
-    /* OO wrapper: Channel-wrap — wraps raw channel cpointer */
-    sexp_eval_string(self->ctx,
-        "(define (Channel-wrap raw)"
-        "  (lambda (__msg__)"
-        "    (cond"
-        "      ((eq? __msg__ 'send)"
-        "       (lambda (val) (channel-send raw val)))"
-        "      ((eq? __msg__ 'recv)"
-        "       (lambda () (channel-recv raw)))"
-        "      ((eq? __msg__ 'try_recv)"
-        "       (lambda () (channel-try-recv raw)))"
-        "      ((eq? __msg__ 'close)"
-        "       (lambda () (channel-close raw)))"
-        "      ((eq? __msg__ '__type__) '__channel__)"
-        "      ((eq? __msg__ '__raw__) raw)"
-        "      (else (error \"Channel: unknown message\" __msg__)))))",
-        -1, self->env);
-
-    /* OO wrapper: Future-wrap — wraps raw cpointer future */
-    sexp_eval_string(self->ctx,
-        "(define (Future-wrap raw)"
-        "  (lambda (__msg__)"
-        "    (cond"
-        "      ((eq? __msg__ 'result)"
-        "       (lambda () (future-result raw)))"
-        "      ((eq? __msg__ 'ready?)"
-        "       (future-ready? raw))"
-        "      ((eq? __msg__ '__await__)"
-        "       (future-result raw))"
-        "      ((eq? __msg__ '__type__) '__future__)"
-        "      ((eq? __msg__ '__raw__) raw)"
-        "      (else (error \"Future: unknown message\" __msg__)))))",
-        -1, self->env);
-
-    /* OO wrapper: Pool(n) — wraps raw pool with -> access and RAII close */
-    sexp_eval_string(self->ctx,
-        "(define (Pool n)"
-        "  (let ((raw (make-pool n)) (alive #t))"
-        "    (lambda (__msg__)"
-        "      (cond"
-        "        ((eq? __msg__ 'submit)"
-        "         (lambda (code) (Future-wrap (pool-submit raw code))))"
-        "        ((eq? __msg__ 'apply)"
-        "         (lambda (fn args) (Future-wrap (pool-apply raw fn args))))"
-        "        ((eq? __msg__ 'channel)"
-        "         (lambda (name) (Channel-wrap (pool-channel raw name))))"
-        "        ((eq? __msg__ 'shutdown)"
-        "         (lambda () (if alive (begin (set! alive #f)"
-        "           (pool-shutdown raw)))))"
-        "        ((eq? __msg__ 'close)"
-        "         (lambda () (if alive (begin (set! alive #f)"
-        "           (pool-shutdown raw)))))"
-        "        ((eq? __msg__ '__type__) '__pool__)"
-        "        ((eq? __msg__ '__raw__) raw)"
-        "        (else (error \"Pool: unknown message\" __msg__))))))",
-        -1, self->env);
-
-    /* Update __await__ to handle OO Future objects too */
-    sexp_eval_string(self->ctx,
-        "(let ((orig-await __await__))"
-        "  (set! __await__"
-        "    (lambda (x)"
-        "      (cond"
-        "        ((and (procedure? x)"
-        "              (protect (e (else #f)) (eq? (x '__type__) '__promise__)))"
-        "         (x '__await__))"
-        "        ((and (procedure? x)"
-        "              (protect (e (else #f)) (eq? (x '__type__) '__future__)))"
-        "         (x '__await__))"
-        "        (else (future-result x))))))",
-        -1, self->env);
-
-    /* Reactive runtime: Signal, Computed, Effect, batch, dispose */
+    /* OO wrappers: Channel-wrap, Future-wrap, Pool (Eval syntax) */
     {
-        extern void eval_reactive_runtime(sexp ctx, sexp env);
-        eval_reactive_runtime(self->ctx, self->env);
+        extern void eval_load_eval_file(sexp ctx, sexp env, const char *path);
+
+        eval_load_eval_file(self->ctx, self->env, "eval/threadpool.eval");
+        self->env = sexp_context_env(self->ctx);
+
+        /* Reactive runtime: Signal, Computed, Effect, batch, dispose */
+        sexp_load_module_file(self->ctx, "eval/reactive.scm", self->env);
+        self->env = sexp_context_env(self->ctx);
+
+        /* OO networking: TcpSocket, TcpClient, TcpServer, HttpClient */
+        eval_load_eval_file(self->ctx, self->env, "eval/net-oo.eval");
+        self->env = sexp_context_env(self->ctx);
     }
+
+    /* Abstract class support: global flag checked by abstract constructors */
+    sexp_eval_string(self->ctx, "(define __abstract_ok__ #f)", -1, self->env);
 
     self->initialized = 1;
     return 0;

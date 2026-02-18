@@ -1,0 +1,38 @@
+// threadpool.eval -- OO wrappers for Pool, Channel, Future
+// Loaded only in main context (workers use raw C functions).
+
+// OO wrapper: Channel_wrap
+define Channel_wrap = function(raw)
+    interface(
+        send: function(val) channel_send(raw, val),
+        recv: function() channel_recv(raw),
+        try_recv: function() channel_try_recv(raw),
+        close: function() channel_close(raw),
+        __type__: '__channel__,
+        __raw__: raw
+    );
+
+// OO wrapper: Future_wrap
+define Future_wrap = function(raw)
+    interface(
+        result: function() future_result(raw),
+        `ready?`: future_ready?(raw),
+        __await__: future_result(raw),
+        __type__: '__future__,
+        __raw__: raw
+    );
+
+// OO wrapper: Pool(n)
+define Pool = function(n) {
+    define raw = make_pool(n);
+    define alive = true;
+    interface(
+        submit: function(code) Future_wrap(pool_submit(raw, code)),
+        apply: function(fn, args) Future_wrap(pool_apply(raw, fn, args)),
+        channel: function(name) Channel_wrap(pool_channel(raw, name)),
+        shutdown: function() if(alive) { alive = false; pool_shutdown(raw); },
+        close: function() if(alive) { alive = false; pool_shutdown(raw); },
+        __type__: '__pool__,
+        __raw__: raw
+    );
+};
