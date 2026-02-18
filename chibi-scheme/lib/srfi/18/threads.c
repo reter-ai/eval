@@ -159,7 +159,7 @@ sexp sexp_thread_terminate (sexp ctx, sexp self, sexp_sint_t n, sexp thread) {
   return res;
 }
 
-static void sexp_insert_timed (sexp ctx, sexp thread, sexp timeout) {
+void sexp_insert_timed (sexp ctx, sexp thread, sexp timeout) {
 #if SEXP_USE_FLONUMS
   double d;
 #endif
@@ -371,7 +371,7 @@ sexp sexp_free_pollfds (sexp ctx, sexp self, sexp_sint_t n, sexp pollfds) {
 }
 
 /* return true if this fd was already being polled */
-static sexp sexp_insert_pollfd (sexp ctx, int fd, int events) {
+sexp sexp_insert_pollfd (sexp ctx, int fd, int events) {
   int i;
   struct pollfd *pfd;
   sexp pollfds = sexp_global(ctx, SEXP_G_THREADS_POLL_FDS);

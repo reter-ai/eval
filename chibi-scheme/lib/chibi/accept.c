@@ -11,6 +11,20 @@
 #define SEXP_WOULDBLOCK (errno == EWOULDBLOCK)
 #endif
 
+#if SEXP_USE_GREEN_THREADS
+/* From threads.c — needed for POLLOUT blocking (connect, send). */
+extern sexp sexp_insert_pollfd(sexp ctx, int fd, int events);
+extern void sexp_insert_timed(sexp ctx, sexp thread, sexp timeout);
+
+/* Block the current green thread waiting for fd to be writable. */
+static void sexp_block_on_write(sexp ctx, int fd, sexp timeout) {
+  sexp_insert_pollfd(ctx, fd, POLLOUT);
+  sexp_context_waitp(ctx) = 1;
+  sexp_context_event(ctx) = sexp_make_fixnum(fd);
+  sexp_insert_timed(ctx, ctx, timeout);
+}
+#endif
+
 sexp sexp_accept (sexp ctx, sexp self, int sock, struct sockaddr* addr, socklen_t len) {
 #if SEXP_USE_GREEN_THREADS
   sexp f;
@@ -31,25 +45,53 @@ sexp sexp_accept (sexp ctx, sexp self, int sock, struct sockaddr* addr, socklen_
   return sexp_make_fileno(ctx, sexp_make_fixnum(res), SEXP_FALSE);
 }
 
+/* Non-blocking connect: sets socket non-blocking, handles EINPROGRESS by
+   registering for POLLOUT and yielding to the green thread scheduler.
+   On retry after the scheduler unblocks us, connect() returns EISCONN
+   (already connected) which we treat as success. */
+
+sexp sexp_connect (sexp ctx, sexp self, int sock, struct sockaddr* addr, socklen_t len) {
+  int res;
+#if SEXP_USE_GREEN_THREADS
+  /* Ensure socket is non-blocking before connect */
+  fcntl(sock, F_SETFL, fcntl(sock, F_GETFL) | O_NONBLOCK);
+#endif
+  res = connect(sock, addr, len);
+#if SEXP_USE_GREEN_THREADS
+  if (res < 0) {
+#ifdef _WIN32
+    int err = WSAGetLastError();
+    if (err == WSAEWOULDBLOCK || err == WSAEINPROGRESS || err == WSAEALREADY) {
+      sexp_block_on_write(ctx, sock, SEXP_FALSE);
+      return sexp_global(ctx, SEXP_G_IO_BLOCK_ERROR);
+    }
+    if (err == WSAEISCONN) return sexp_make_fixnum(0);
+#else
+    if (errno == EINPROGRESS || errno == EALREADY) {
+      sexp_block_on_write(ctx, sock, SEXP_FALSE);
+      return sexp_global(ctx, SEXP_G_IO_BLOCK_ERROR);
+    }
+    if (errno == EISCONN) return sexp_make_fixnum(0);
+#endif
+  }
+#endif
+  return sexp_make_fixnum(res);
+}
+
 /* likewise sendto and recvfrom should suspend the thread gracefully */
 
 #define sexp_zerop(x) ((x) == SEXP_ZERO || (sexp_flonump(x) && sexp_flonum_value(x) == 0.0))
 
 sexp sexp_sendto (sexp ctx, sexp self, int sock, const void* buffer, size_t len, int flags, struct sockaddr* addr, socklen_t addr_len, sexp timeout) {
-#if SEXP_USE_GREEN_THREADS
-  sexp f;
-#endif
   ssize_t res;
   res = sendto(sock, buffer, len, flags, addr, addr_len);
 #if SEXP_USE_GREEN_THREADS
   if (res < 0 && SEXP_WOULDBLOCK && !sexp_zerop(timeout)) {
-    f = sexp_global(ctx, SEXP_G_THREADS_BLOCKER);
-    if (sexp_applicablep(f)) {
-      sexp_apply2(ctx, f, sexp_make_fixnum(sock), timeout);
-      return sexp_not(timeout)
-        ? sexp_global(ctx, SEXP_G_IO_BLOCK_ERROR)
-        : sexp_global(ctx, SEXP_G_IO_BLOCK_ONCE_ERROR);
-    }
+    /* send needs POLLOUT, not POLLIN — use direct pollfd registration */
+    sexp_block_on_write(ctx, sock, timeout);
+    return sexp_not(timeout)
+      ? sexp_global(ctx, SEXP_G_IO_BLOCK_ERROR)
+      : sexp_global(ctx, SEXP_G_IO_BLOCK_ONCE_ERROR);
   }
 #endif
   return sexp_make_fixnum(res);
@@ -63,6 +105,7 @@ sexp sexp_recvfrom (sexp ctx, sexp self, int sock, void* buffer, size_t len, int
   res = recvfrom(sock, buffer, len, flags, addr, &addr_len);
 #if SEXP_USE_GREEN_THREADS
   if (res < 0 && SEXP_WOULDBLOCK && !sexp_zerop(timeout)) {
+    /* recv needs POLLIN — use the standard blocker */
     f = sexp_global(ctx, SEXP_G_THREADS_BLOCKER);
     if (sexp_applicablep(f)) {
       sexp_apply2(ctx, f, sexp_make_fixnum(sock), timeout);
