@@ -922,4 +922,8 @@ The entire chibi-scheme runtime is statically linked. The standalone binary embe
 
 MIT License. See [LICENSE](LICENSE).
 
-chibi-scheme is included under the BSD-3-Clause license. See [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES).
+Third-party components are included under their own licenses. See [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES) for details:
+- **chibi-scheme** — BSD-3-Clause
+- **Lemon parser generator** — Public Domain
+- **re2c** — Public Domain
+- **LLVM/Clang** (optional) — Apache 2.0 with LLVM Exceptions
