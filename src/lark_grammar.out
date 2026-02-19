@@ -1,0 +1,386 @@
+State 0:
+          grammar ::= * lines
+          lines ::= * lines line
+     (22) lines ::= *
+
+                       grammar accept
+                         lines shift        3      
+                     {default} reduce       22     lines ::=
+
+State 1:
+          alts ::= * alt
+          alts ::= * alts pipe_start alt
+          alt ::= * items
+          alt ::= * items ARROW RULE_NAME
+     (34) alt ::= *
+          items ::= * items item
+          items ::= * item
+          item ::= * atom_base
+          item ::= * atom_base QUESTION
+          item ::= * atom_base STAR
+          item ::= * atom_base PLUS
+          atom_base ::= * RULE_NAME
+          atom_base ::= * TERM_NAME
+          atom_base ::= * STRING
+          group_start ::= * LPAREN
+          atom_base ::= * group_start alts RPAREN
+          atom_base ::= group_start * alts RPAREN
+
+                     RULE_NAME shift-reduce 7      atom_base ::= RULE_NAME
+                     TERM_NAME shift-reduce 8      atom_base ::= TERM_NAME
+                        STRING shift-reduce 9      atom_base ::= STRING
+                        LPAREN shift-reduce 10     group_start ::= LPAREN
+                          alts shift        8      
+                           alt shift        8        /* because alt==alts */
+                         items shift        5      
+                          item shift        5        /* because item==items */
+                     atom_base shift        10     
+                   group_start shift        1      
+                     {default} reduce       34     alt ::=
+
+State 2:
+          rule_def ::= rule_header * alts
+          alts ::= * alt
+          alts ::= * alts pipe_start alt
+          alt ::= * items
+          alt ::= * items ARROW RULE_NAME
+     (34) alt ::= *
+          items ::= * items item
+          items ::= * item
+          item ::= * atom_base
+          item ::= * atom_base QUESTION
+          item ::= * atom_base STAR
+          item ::= * atom_base PLUS
+          atom_base ::= * RULE_NAME
+          atom_base ::= * TERM_NAME
+          atom_base ::= * STRING
+          group_start ::= * LPAREN
+          atom_base ::= * group_start alts RPAREN
+
+                     RULE_NAME shift-reduce 7      atom_base ::= RULE_NAME
+                     RULE_NAME reduce       34      ** Parsing conflict **
+                     TERM_NAME shift-reduce 8      atom_base ::= TERM_NAME
+                     TERM_NAME reduce       34      ** Parsing conflict **
+                        STRING shift-reduce 9      atom_base ::= STRING
+                        LPAREN shift-reduce 10     group_start ::= LPAREN
+                          alts shift        9      
+                           alt shift        9        /* because alt==alts */
+                         items shift        5      
+                          item shift        5        /* because item==items */
+                     atom_base shift        10     
+                   group_start shift        1      
+                     {default} reduce       34     alt ::=
+
+State 3:
+     (20) grammar ::= lines *
+          lines ::= lines * line
+          line ::= * rule_def NEWLINE
+          line ::= * term_def NEWLINE
+          line ::= * ignore_def NEWLINE
+          line ::= * NEWLINE
+          line ::= * rule_def
+          line ::= * term_def
+          line ::= * ignore_def
+          rule_def ::= * rule_header alts
+          rule_header ::= * RULE_NAME COLON
+          rule_header ::= * QUESTION RULE_NAME COLON
+          term_def ::= * TERM_NAME COLON term_body
+          term_def ::= * TERM_NAME DOT NUMBER COLON term_body
+          ignore_def ::= * PERCENT_IGNORE REGEX
+          ignore_def ::= * PERCENT_IGNORE STRING
+
+                             $ reduce       20     grammar ::= lines
+                     RULE_NAME shift        20     
+                     TERM_NAME shift        13     
+                      QUESTION shift        19     
+                PERCENT_IGNORE shift        11     
+                       NEWLINE shift-reduce 26     line ::= NEWLINE
+                          line shift-reduce 21     lines ::= lines line
+                      rule_def shift        24     
+                      term_def shift        23     
+                    ignore_def shift        22     
+                   rule_header shift        2      
+
+State 4:
+          alts ::= alts pipe_start * alt
+          alt ::= * items
+          alt ::= * items ARROW RULE_NAME
+     (34) alt ::= *
+          items ::= * items item
+          items ::= * item
+          item ::= * atom_base
+          item ::= * atom_base QUESTION
+          item ::= * atom_base STAR
+          item ::= * atom_base PLUS
+          atom_base ::= * RULE_NAME
+          atom_base ::= * TERM_NAME
+          atom_base ::= * STRING
+          group_start ::= * LPAREN
+          atom_base ::= * group_start alts RPAREN
+
+                     RULE_NAME shift-reduce 7      atom_base ::= RULE_NAME
+                     RULE_NAME reduce       34      ** Parsing conflict **
+                     TERM_NAME shift-reduce 8      atom_base ::= TERM_NAME
+                     TERM_NAME reduce       34      ** Parsing conflict **
+                        STRING shift-reduce 9      atom_base ::= STRING
+                        LPAREN shift-reduce 10     group_start ::= LPAREN
+                           alt shift-reduce 32     alts ::= alts pipe_start alt
+                         items shift        5      
+                          item shift        5        /* because item==items */
+                     atom_base shift        10     
+                   group_start shift        1      
+                     {default} reduce       34     alt ::=
+
+State 5:
+     (33) alt ::= items *
+          alt ::= items * ARROW RULE_NAME
+          items ::= items * item
+          item ::= * atom_base
+          item ::= * atom_base QUESTION
+          item ::= * atom_base STAR
+          item ::= * atom_base PLUS
+          atom_base ::= * RULE_NAME
+          atom_base ::= * TERM_NAME
+          atom_base ::= * STRING
+          group_start ::= * LPAREN
+          atom_base ::= * group_start alts RPAREN
+
+                     RULE_NAME shift-reduce 7      atom_base ::= RULE_NAME
+                     RULE_NAME reduce       33      ** Parsing conflict **
+                     TERM_NAME shift-reduce 8      atom_base ::= TERM_NAME
+                     TERM_NAME reduce       33      ** Parsing conflict **
+                        STRING shift-reduce 9      atom_base ::= STRING
+                         ARROW shift        21     
+                        LPAREN shift-reduce 10     group_start ::= LPAREN
+                          item shift-reduce 35     items ::= items item
+                     atom_base shift        10     
+                   group_start shift        1      
+                     {default} reduce       33     alt ::= items
+
+State 6:
+          term_def ::= TERM_NAME DOT NUMBER COLON * term_body
+          term_body ::= * REGEX
+          term_body ::= * STRING
+          term_body ::= * term_body PIPE REGEX
+          term_body ::= * term_body PIPE STRING
+
+                        STRING shift-reduce 15     term_body ::= STRING
+                         REGEX shift-reduce 14     term_body ::= REGEX
+                     term_body shift        14     
+
+State 7:
+          term_def ::= TERM_NAME COLON * term_body
+          term_body ::= * REGEX
+          term_body ::= * STRING
+          term_body ::= * term_body PIPE REGEX
+          term_body ::= * term_body PIPE STRING
+
+                        STRING shift-reduce 15     term_body ::= STRING
+                         REGEX shift-reduce 14     term_body ::= REGEX
+                     term_body shift        17     
+
+State 8:
+          alts ::= alts * pipe_start alt
+          pipe_start ::= * PIPE
+          atom_base ::= group_start alts * RPAREN
+
+                          PIPE shift-reduce 2      pipe_start ::= PIPE
+                        RPAREN shift-reduce 11     atom_base ::= group_start alts RPAREN
+                    pipe_start shift        4      
+
+State 9:
+     (30) rule_def ::= rule_header alts *
+          alts ::= alts * pipe_start alt
+          pipe_start ::= * PIPE
+
+                          PIPE shift-reduce 2      pipe_start ::= PIPE
+                    pipe_start shift        4      
+                     {default} reduce       30     rule_def ::= rule_header alts
+
+State 10:
+     (37) item ::= atom_base *
+          item ::= atom_base * QUESTION
+          item ::= atom_base * STAR
+          item ::= atom_base * PLUS
+
+                      QUESTION shift-reduce 4      item ::= atom_base QUESTION
+                      QUESTION reduce       37      ** Parsing conflict **
+                          STAR shift-reduce 5      item ::= atom_base STAR
+                          PLUS shift-reduce 6      item ::= atom_base PLUS
+                     {default} reduce       37     item ::= atom_base
+
+State 11:
+          ignore_def ::= PERCENT_IGNORE * REGEX
+          ignore_def ::= PERCENT_IGNORE * STRING
+
+                        STRING shift-reduce 19     ignore_def ::= PERCENT_IGNORE STRING
+                         REGEX shift-reduce 18     ignore_def ::= PERCENT_IGNORE REGEX
+
+State 12:
+          term_body ::= term_body PIPE * REGEX
+          term_body ::= term_body PIPE * STRING
+
+                        STRING shift-reduce 17     term_body ::= term_body PIPE STRING
+                         REGEX shift-reduce 16     term_body ::= term_body PIPE REGEX
+
+State 13:
+          term_def ::= TERM_NAME * COLON term_body
+          term_def ::= TERM_NAME * DOT NUMBER COLON term_body
+
+                         COLON shift        7      
+                           DOT shift        16     
+
+State 14:
+     (13) term_def ::= TERM_NAME DOT NUMBER COLON term_body *
+          term_body ::= term_body * PIPE REGEX
+          term_body ::= term_body * PIPE STRING
+
+                          PIPE shift        12     
+                     {default} reduce       13     term_def ::= TERM_NAME DOT NUMBER COLON term_body
+
+State 15:
+          term_def ::= TERM_NAME DOT NUMBER * COLON term_body
+
+                         COLON shift        6      
+
+State 16:
+          term_def ::= TERM_NAME DOT * NUMBER COLON term_body
+
+                        NUMBER shift        15     
+
+State 17:
+     (12) term_def ::= TERM_NAME COLON term_body *
+          term_body ::= term_body * PIPE REGEX
+          term_body ::= term_body * PIPE STRING
+
+                          PIPE shift        12     
+                     {default} reduce       12     term_def ::= TERM_NAME COLON term_body
+
+State 18:
+          rule_header ::= QUESTION RULE_NAME * COLON
+
+                         COLON shift-reduce 1      rule_header ::= QUESTION RULE_NAME COLON
+
+State 19:
+          rule_header ::= QUESTION * RULE_NAME COLON
+
+                     RULE_NAME shift        18     
+
+State 20:
+          rule_header ::= RULE_NAME * COLON
+
+                         COLON shift-reduce 0      rule_header ::= RULE_NAME COLON
+
+State 21:
+          alt ::= items ARROW * RULE_NAME
+
+                     RULE_NAME shift-reduce 3      alt ::= items ARROW RULE_NAME
+
+State 22:
+          line ::= ignore_def * NEWLINE
+     (29) line ::= ignore_def *
+
+                       NEWLINE shift-reduce 25     line ::= ignore_def NEWLINE
+                       NEWLINE reduce       29      ** Parsing conflict **
+                     {default} reduce       29     line ::= ignore_def
+
+State 23:
+          line ::= term_def * NEWLINE
+     (28) line ::= term_def *
+
+                       NEWLINE shift-reduce 24     line ::= term_def NEWLINE
+                       NEWLINE reduce       28      ** Parsing conflict **
+                     {default} reduce       28     line ::= term_def
+
+State 24:
+          line ::= rule_def * NEWLINE
+     (27) line ::= rule_def *
+
+                       NEWLINE shift-reduce 23     line ::= rule_def NEWLINE
+                       NEWLINE reduce       27      ** Parsing conflict **
+                     {default} reduce       27     line ::= rule_def
+
+----------------------------------------------------
+Symbols:
+The first-set of non-terminals is shown after the name.
+
+    0: $:
+    1: RULE_NAME
+    2: TERM_NAME
+    3: STRING
+    4: REGEX
+    5: ARROW
+    6: COLON
+    7: PIPE
+    8: QUESTION
+    9: STAR
+   10: PLUS
+   11: LPAREN
+   12: RPAREN
+   13: DOT
+   14: NUMBER
+   15: PERCENT_IGNORE
+   16: NEWLINE
+   17: TILDE
+   18: grammar: <lambda> RULE_NAME TERM_NAME QUESTION PERCENT_IGNORE NEWLINE
+   19: lines: <lambda> RULE_NAME TERM_NAME QUESTION PERCENT_IGNORE NEWLINE
+   20: line: RULE_NAME TERM_NAME QUESTION PERCENT_IGNORE NEWLINE
+   21: rule_def: RULE_NAME QUESTION
+   22: term_def: TERM_NAME
+   23: ignore_def: PERCENT_IGNORE
+   24: rule_header: RULE_NAME QUESTION
+   25: alts: <lambda> RULE_NAME TERM_NAME STRING PIPE LPAREN
+   26: alt: <lambda> RULE_NAME TERM_NAME STRING LPAREN
+   27: pipe_start: PIPE
+   28: items: RULE_NAME TERM_NAME STRING LPAREN
+   29: item: RULE_NAME TERM_NAME STRING LPAREN
+   30: atom_base: RULE_NAME TERM_NAME STRING LPAREN
+   31: group_start: LPAREN
+   32: term_body: STRING REGEX
+----------------------------------------------------
+Syntax-only Symbols:
+The following symbols never carry semantic content.
+
+$ ARROW COLON PIPE QUESTION STAR PLUS LPAREN RPAREN DOT PERCENT_IGNORE
+NEWLINE TILDE grammar lines line rule_def term_def ignore_def rule_header
+alts alt pipe_start items item atom_base group_start
+----------------------------------------------------
+Rules:
+   0: rule_header ::= RULE_NAME COLON.
+   1: rule_header ::= QUESTION RULE_NAME COLON.
+   2: pipe_start ::= PIPE.
+   3: alt ::= items ARROW RULE_NAME.
+   4: item ::= atom_base QUESTION.
+   5: item ::= atom_base STAR.
+   6: item ::= atom_base PLUS.
+   7: atom_base ::= RULE_NAME.
+   8: atom_base ::= TERM_NAME.
+   9: atom_base ::= STRING.
+  10: group_start ::= LPAREN.
+  11: atom_base ::= group_start alts RPAREN.
+  12: term_def ::= TERM_NAME COLON term_body.
+  13: term_def ::= TERM_NAME DOT NUMBER COLON term_body.
+  14: term_body ::= REGEX.
+  15: term_body ::= STRING.
+  16: term_body ::= term_body PIPE REGEX.
+  17: term_body ::= term_body PIPE STRING.
+  18: ignore_def ::= PERCENT_IGNORE REGEX.
+  19: ignore_def ::= PERCENT_IGNORE STRING.
+  20: grammar ::= lines.
+  21: lines ::= lines line.
+  22: lines ::=.
+  23: line ::= rule_def NEWLINE.
+  24: line ::= term_def NEWLINE.
+  25: line ::= ignore_def NEWLINE.
+  26: line ::= NEWLINE.
+  27: line ::= rule_def.
+  28: line ::= term_def.
+  29: line ::= ignore_def.
+  30: rule_def ::= rule_header alts.
+  31: alts ::= alt.
+  32: alts ::= alts pipe_start alt.
+  33: alt ::= items.
+  34: alt ::=.
+  35: items ::= items item.
+  36: items ::= item.
+  37: item ::= atom_base.

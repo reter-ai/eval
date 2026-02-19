@@ -21,6 +21,8 @@ Every Eval expression compiles down to an s-expression. You can think of Eval as
 3.14            // float
 1e-2            // scientific notation
 "hello\n"       // string (escapes: \n \t \r \\ \" \0)
+"""multi
+line"""         // triple-quoted raw string (literal newlines, embedded "quotes", no escapes)
 true            // boolean #t
 false           // boolean #f
 nil             // empty list '()
@@ -1291,6 +1293,35 @@ thread_join(t);
 
 Available functions: `make_thread`, `thread_start`, `thread_join`, `thread_yield`, `thread_sleep`, `thread_terminate`, `current_thread`, `make_mutex`, `mutex_lock`, `mutex_unlock`, `make_condvar`, `condvar_signal`, `condvar_broadcast`.
 
+### OO Synchronization Wrappers
+
+Eval provides OO wrappers with RAII for common synchronization patterns:
+
+```
+// Mutex — auto-unlock via with
+define m = Mutex();
+with(guard = m->lock()) {
+    counter += 1;
+};
+
+// Monitor — wait/pulse (producer-consumer)
+define mon = Monitor();
+with(guard = mon->enter()) {
+    while(!ready) mon->wait();
+};
+
+// ReadWriteLock — concurrent readers, exclusive writer
+define rwl = ReadWriteLock();
+with(guard = rwl->read_lock()) { /* read */ };
+with(guard = rwl->write_lock()) { /* write */ };
+
+// Semaphore — limit concurrency
+define sem = Semaphore(3);
+with(guard = sem->acquire()) { /* at most 3 */ };
+```
+
+See [MULTITHREADING.md](MULTITHREADING.md) for the full synchronization guide.
+
 See [THREADS.md](THREADS.md) for a comprehensive guide to green threads, mutexes, condition variables, and cross-thread continuations.
 
 ## Async / Await
@@ -2061,4 +2092,6 @@ See [NETWORKING.md](NETWORKING.md) for the full networking guide including low-l
 - [FILESYS.md](FILESYS.md) — File I/O, directory operations, metadata, path utilities
 - [ASYNC.md](ASYNC.md) — Async/await, thread pools, channels, pipelines
 - [THREADS.md](THREADS.md) — Green threads, mutexes, condition variables, continuations
+- [MULTITHREADING.md](MULTITHREADING.md) — OO synchronization: Mutex, Monitor, ReadWriteLock, Semaphore
 - [REACTIVE.md](REACTIVE.md) — Signals, computed values, effects, scopes, resources
+- [TESTS.md](TESTS.md) — Built-in test framework: test, test_assert, test_error, test_group

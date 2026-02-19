@@ -213,6 +213,47 @@ condvar_broadcast(cv);    // wake all waiting threads
 | `condvar_signal(cv)` | Wake one waiting thread |
 | `condvar_broadcast(cv)` | Wake all waiting threads |
 
+### OO Synchronization Wrappers
+
+For higher-level synchronization with automatic lock management, Eval provides OO wrappers that integrate with the `with` RAII pattern:
+
+```
+// Mutex with RAII — lock released automatically on scope exit
+define m = Mutex();
+with(guard = m->lock()) {
+    // critical section
+};
+
+// Monitor — combined mutex + condition variable (C# style)
+define mon = Monitor();
+
+// Consumer:
+with(guard = mon->enter()) {
+    while(!ready) mon->wait();     // atomic unlock + wait + re-acquire
+    display(data);
+};
+
+// Producer:
+with(guard = mon->enter()) {
+    data = "hello";
+    ready = true;
+    mon->pulse();                  // wake one waiter
+};
+
+// ReadWriteLock — concurrent readers, exclusive writer
+define rwl = ReadWriteLock();
+with(guard = rwl->read_lock()) { /* read shared data */ };
+with(guard = rwl->write_lock()) { /* write shared data */ };
+
+// Semaphore — limit concurrency to n
+define sem = Semaphore(3);
+with(guard = sem->acquire()) {
+    // at most 3 threads here simultaneously
+};
+```
+
+See [MULTITHREADING.md](MULTITHREADING.md) for complete documentation, API reference, patterns (thread-safe queue, connection pool, cached values), and execution traces.
+
 ### Nested Threads
 
 Threads can spawn more threads:
@@ -540,5 +581,6 @@ define process_batch = function(items) {
 
 ## See also
 
+- [MULTITHREADING.md](MULTITHREADING.md) — OO synchronization: Mutex, Monitor, ReadWriteLock, Semaphore with RAII
 - [NETWORKING.md](NETWORKING.md) — TCP sockets and HTTP with OO wrappers (`TcpSocket`, `TcpServer`, `HttpClient`) that integrate with green threads
 - [ASYNC.md](ASYNC.md) — Async/await, thread pools, channels, pipelines

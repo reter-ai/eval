@@ -15,14 +15,6 @@ typedef struct {
 extern const EmbeddedSchemeFile embedded_scheme_files[];
 extern const int embedded_scheme_file_count;
 
-/* Extract all embedded .scm files to a temp directory.
- * Returns the path to the temp directory (caller must free with
- * embedded_scm_cleanup). Returns NULL on failure. */
-char *embedded_scm_extract(void);
-
-/* Remove the temp directory and all extracted files. */
-void embedded_scm_cleanup(char *tmpdir);
-
 /* Look up an embedded .scm file by relative path.
  * Returns the file content (NUL-terminated) or NULL if not found. */
 const char *embedded_find_scm(const char *path);

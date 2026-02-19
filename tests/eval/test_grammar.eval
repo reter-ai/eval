@@ -1,0 +1,1453 @@
+// ============================================================
+// Comprehensive Grammar Test Suite
+// ============================================================
+//
+// Tests for the Grammar JIT system:
+//   Grammar(text) → g->compile() → p->parse(input) → AST
+//
+// Section 1: Grammar creation (Lark EBNF parsing, no JIT)
+// Section 2: Compile + Parse (full pipeline, requires LLVM JIT)
+//
+// AST format:
+//   Token (leaf):  ("TOKEN_NAME" "matched_text")
+//   Rule (node):   ("rule_name" child1 child2 ...)
+
+test_begin("Grammar");
+
+// -- AST helpers --
+define node_name = function(n) car(n);
+define node_children = function(n) cdr(n);
+define node_child = function(n, i) ref(cdr(n), i);
+define node_value = function(n) car(cdr(n));
+define child_count = function(n) length(cdr(n));
+
+// ============================================================
+// Section 1: Grammar creation (no JIT needed)
+// ============================================================
+
+// --- 1.1 Basic grammars ---
+
+test_assert("create: single terminal", Grammar("start: NUMBER\nNUMBER: /[0-9]+/\n") != false);
+
+test_assert("create: multiple rules", Grammar("""
+    start: expr
+    expr: NUMBER
+    NUMBER: /[0-9]+/
+""") != false);
+
+test_assert("create: alternatives", Grammar("""
+    start: NUMBER | WORD
+    NUMBER: /[0-9]+/
+    WORD: /[a-z]+/
+""") != false);
+
+test_assert("create: multi-line alternatives", Grammar("""
+    start: expr
+    expr: NUMBER
+        | WORD
+        | SYMBOL
+    NUMBER: /[0-9]+/
+    WORD: /[a-z]+/
+    SYMBOL: /[+\-*]/
+""") != false);
+
+test_assert("create: many rules", Grammar("""
+    start: a
+    a: b
+    b: c
+    c: d
+    d: NUMBER
+    NUMBER: /[0-9]+/
+""") != false);
+
+// --- 1.2 Inline rules and aliases ---
+
+test_assert("create: inline rule", Grammar("""
+    start: expr
+    ?expr: NUMBER | WORD
+    NUMBER: /[0-9]+/
+    WORD: /[a-z]+/
+""") != false);
+
+test_assert("create: alias", Grammar("""
+    start: expr
+    ?expr: expr "+" term -> add
+         | term
+    ?term: NUMBER
+    NUMBER: /[0-9]+/
+""") != false);
+
+test_assert("create: multiple aliases", Grammar("""
+    start: expr
+    ?expr: expr "+" term -> add
+         | expr "-" term -> sub
+         | expr "*" term -> mul
+         | expr "/" term -> div
+         | term
+    ?term: NUMBER
+    NUMBER: /[0-9]+/
+""") != false);
+
+test_assert("create: alias on multi-token", Grammar("""
+    start: expr
+    ?expr: IDENT "=" expr -> assign
+         | NUMBER
+    IDENT: /[a-z]+/
+    NUMBER: /[0-9]+/
+""") != false);
+
+// --- 1.3 EBNF modifiers ---
+
+test_assert("create: star modifier", Grammar("""
+    start: item*
+    item: "a"
+""") != false);
+
+test_assert("create: plus modifier", Grammar("""
+    start: item+
+    item: "a"
+""") != false);
+
+test_assert("create: optional modifier", Grammar("""
+    start: "a" "b"?
+""") != false);
+
+test_assert("create: mixed modifiers", Grammar("""
+    start: header body? footer*
+    header: "H"
+    body: "B"+
+    footer: "F"
+""") != false);
+
+test_assert("create: modifier on rule ref", Grammar("""
+    start: item+ sep?
+    item: WORD
+    sep: ","
+    WORD: /[a-z]+/
+""") != false);
+
+// --- 1.4 String literals and regex terminals ---
+
+test_assert("create: string literal in rule", Grammar("""
+    start: "+" NUMBER
+    NUMBER: /[0-9]+/
+""") != false);
+
+test_assert("create: multiple string literals", Grammar("""
+    start: "(" NUMBER "," NUMBER ")"
+    NUMBER: /[0-9]+/
+""") != false);
+
+test_assert("create: named string terminal", Grammar("""
+    start: PLUS NUMBER
+    PLUS: "+"
+    NUMBER: /[0-9]+/
+""") != false);
+
+test_assert("create: regex with character class", Grammar("""
+    start: IDENT
+    IDENT: /[a-zA-Z_][a-zA-Z0-9_]*/
+""") != false);
+
+test_assert("create: regex with quantifiers", Grammar("""
+    start: HEX
+    HEX: /0x[0-9a-fA-F]+/
+""") != false);
+
+test_assert("create: regex with alternation", Grammar("""
+    start: BOOL
+    BOOL: /true|false/
+""") != false);
+
+test_assert("create: multiple terminals", Grammar("""
+    start: NUMBER OP NUMBER
+    NUMBER: /[0-9]+/
+    OP: /[+\-*/]/
+""") != false);
+
+test_assert("create: regex dot (any char)", Grammar("""
+    start: ANY
+    ANY: /./
+""") != false);
+
+test_assert("create: regex with braces quantifier", Grammar("""
+    start: CODE
+    CODE: /[0-9]{3,5}/
+""") != false);
+
+// --- 1.5 %ignore directive ---
+
+test_assert("create: single ignore", Grammar("""
+    start: NUMBER
+    NUMBER: /[0-9]+/
+    %ignore /\s+/
+""") != false);
+
+test_assert("create: multiple ignores", Grammar("""
+    start: WORD+
+    WORD: /[a-z]+/
+    %ignore /\s+/
+    %ignore /\/\/.*/
+""") != false);
+
+test_assert("create: ignore string", Grammar("""
+    start: WORD+
+    WORD: /[a-z]+/
+    %ignore " "
+""") != false);
+
+// --- 1.6 Terminal priority ---
+
+test_assert("create: terminal priority", Grammar("""
+    start: (KEYWORD | IDENT)+
+    KEYWORD.2: /if|else|while/
+    IDENT.1: /[a-z]+/
+    %ignore /\s+/
+""") != false);
+
+test_assert("create: priority on string terminal", Grammar("""
+    start: (KW | IDENT)+
+    KW.3: "def"
+    IDENT.1: /[a-z]+/
+    %ignore /\s+/
+""") != false);
+
+// --- 1.7 Terminal alternatives ---
+
+test_assert("create: terminal regex alternatives", Grammar("""
+    start: VALUE
+    VALUE: /[a-z]+/ | /[0-9]+/
+""") != false);
+
+test_assert("create: terminal string alternatives", Grammar("""
+    start: KEYWORD+
+    KEYWORD: "if" | "else" | "while" | "for"
+    %ignore /\s+/
+""") != false);
+
+test_assert("create: terminal mixed alternatives", Grammar("""
+    start: TOKEN+
+    TOKEN: "null" | "true" | "false" | /[0-9]+/ | /[a-z]+/
+    %ignore /\s+/
+""") != false);
+
+test_assert("create: terminal two regex alt", Grammar("""
+    start: VALUE
+    VALUE: /[a-z]+/ | /[0-9]+/
+""") != false);
+
+// --- 1.8 Parenthesized groups ---
+
+test_assert("create: bare group", Grammar("""
+    start: (WORD | NUM)
+    WORD: /[a-z]+/
+    NUM: /[0-9]+/
+""") != false);
+
+test_assert("create: group star", Grammar("""
+    start: item ("," item)*
+    item: WORD
+    WORD: /[a-z]+/
+    %ignore /\s+/
+""") != false);
+
+test_assert("create: group plus", Grammar("""
+    start: item ("," item)+
+    item: WORD
+    WORD: /[a-z]+/
+    %ignore /\s+/
+""") != false);
+
+test_assert("create: group optional", Grammar("""
+    start: WORD ("," WORD)?
+    WORD: /[a-z]+/
+    %ignore /\s+/
+""") != false);
+
+test_assert("create: group alternation", Grammar("""
+    start: ("x" | "y") WORD
+    WORD: /[a-z]+/
+    %ignore /\s+/
+""") != false);
+
+test_assert("create: nested groups", Grammar("""
+    start: ((WORD | NUM) ","?)*
+    WORD: /[a-z]+/
+    NUM: /[0-9]+/
+    %ignore /\s+/
+""") != false);
+
+test_assert("create: group with multiple items", Grammar("""
+    start: ("(" WORD ")")+
+    WORD: /[a-z]+/
+    %ignore /\s+/
+""") != false);
+
+// --- 1.9 Comments ---
+
+test_assert("create: line comment //", Grammar("""
+    start: NUMBER   // this is the start rule
+    NUMBER: /[0-9]+/
+""") != false);
+
+test_assert("create: line comment #", Grammar("""
+    # A simple grammar
+    start: NUMBER
+    NUMBER: /[0-9]+/
+""") != false);
+
+test_assert("create: comment between rules", Grammar("""
+    start: expr
+    // the expression rule
+    ?expr: NUMBER
+    # terminal
+    NUMBER: /[0-9]+/
+""") != false);
+
+// --- 1.10 Empty alternative ---
+
+test_assert("create: empty alternative trailing", Grammar("""
+    start: "a" tail
+    tail: "," "b" |
+""") != false);
+
+test_assert("create: empty alternative leading", Grammar("""
+    start: "a" tail
+    tail: | "," "b"
+""") != false);
+
+// --- 1.11 Complex grammars ---
+
+test_assert("create: arithmetic", Grammar("""
+    start: expr
+    ?expr: expr "+" term -> add
+         | expr "-" term -> sub
+         | term
+    ?term: term "*" atom -> mul
+         | term "/" atom -> div
+         | atom
+    ?atom: NUMBER
+         | "(" expr ")"
+    NUMBER: /[0-9]+/
+    %ignore /\s+/
+""") != false);
+
+test_assert("create: JSON-like", Grammar("""
+    start: value
+    ?value: object | array | STRING | NUMBER | "true" | "false" | "null"
+    object: "{" (pair ("," pair)*)? "}"
+    pair: STRING ":" value
+    array: "[" (value ("," value)*)? "]"
+    STRING: /"[^"]*"/
+    NUMBER: /[0-9]+/
+    %ignore /\s+/
+""") != false);
+
+test_assert("create: SQL-like", Grammar("""
+    start: select
+    select: "SELECT" columns "FROM" IDENT where?
+    columns: column ("," column)*
+    column: IDENT
+    where: "WHERE" condition
+    condition: IDENT "=" VALUE
+    IDENT: /[a-zA-Z_]+/
+    VALUE: /"[^"]*"/ | /[0-9]+/
+    %ignore /\s+/
+""") != false);
+
+test_assert("create: S-expression", Grammar("""
+    start: sexpr
+    ?sexpr: atom | list
+    list: "(" sexpr* ")"
+    ?atom: SYMBOL | NUMBER
+    SYMBOL: /[a-zA-Z_+\-*\/=<>!?][a-zA-Z0-9_+\-*\/=<>!?]*/
+    NUMBER: /[0-9]+/
+    %ignore /\s+/
+""") != false);
+
+test_assert("create: config file", Grammar("""
+    start: entry+
+    entry: KEY "=" VALUE NEWLINE
+    KEY: /[a-zA-Z_][a-zA-Z0-9_.]*/
+    VALUE: /[^\n]+/
+    NEWLINE: /\n/
+""") != false);
+
+// --- 1.12 Error cases ---
+
+test_error("error: invalid grammar syntax", function() Grammar("not a grammar!!!"));
+test_error("error: non-string argument", function() Grammar(42));
+
+// --- 1.13 Triple-quoted grammar strings ---
+
+test_assert("create: triple-quoted grammar", Grammar("""
+    start: column ("," column)*
+    column: WORD
+    WORD: /[a-zA-Z_]+/
+    %ignore /\s+/
+""") != false);
+
+test_assert("create: triple-quoted with quotes", Grammar("""
+    start: "(" expr ")"
+    ?expr: NUMBER
+    NUMBER: /[0-9]+/
+    %ignore /\s+/
+""") != false);
+
+// Triple-quoted strings are raw — \s stays as literal \s (for regex)
+test_assert("create: triple-quoted raw regex", Grammar("""
+    start: WORD+
+    WORD: /\w+/
+    %ignore /\s+/
+""") != false);
+
+// Regular string needs double backslash for the same effect
+test_assert("create: regular string escaped regex",
+    Grammar("start: WORD+\nWORD: /\\w+/\n%ignore /\\s+/\n") != false);
+
+
+// ============================================================
+// Section 2: Compile + Parse (requires LLVM JIT)
+// ============================================================
+
+define jit_available = try {
+    Grammar("start: NUMBER\nNUMBER: /[0-9]+/\n")->compile();
+    true;
+} catch(e) false;
+
+when(jit_available) {
+
+    // ========================================================
+    // 2.1 Basic parsing and AST structure
+    // ========================================================
+
+    define p_num = Grammar("""
+        start: NUMBER
+        NUMBER: /[0-9]+/
+    """)->compile();
+
+    define r = p_num->parse("42");
+    test("basic: root name", "start", node_name(r));
+    test("basic: one child", 1, child_count(r));
+    test("basic: token name", "NUMBER", node_name(node_child(r, 0)));
+    test("basic: token value", "42", node_value(node_child(r, 0)));
+
+    // Multi-digit
+    test("basic: multi-digit", "12345", node_value(node_child(p_num->parse("12345"), 0)));
+
+    // Single digit
+    test("basic: single digit", "0", node_value(node_child(p_num->parse("0"), 0)));
+
+    // Parser reuse — same parser, different inputs
+    test("reuse: parse 1", "1", node_value(node_child(p_num->parse("1"), 0)));
+    test("reuse: parse 99", "99", node_value(node_child(p_num->parse("99"), 0)));
+    test("reuse: parse 0", "0", node_value(node_child(p_num->parse("0"), 0)));
+
+    // ========================================================
+    // 2.2 Multiple tokens in a rule
+    // ========================================================
+
+    define p_pair = Grammar("""
+        start: NUMBER NUMBER
+        NUMBER: /[0-9]+/
+        %ignore /\s+/
+    """)->compile();
+
+    define rp = p_pair->parse("10 20");
+    test("multi-token: child count", 2, child_count(rp));
+    test("multi-token: first value", "10", node_value(node_child(rp, 0)));
+    test("multi-token: second value", "20", node_value(node_child(rp, 1)));
+
+    // Three tokens
+    define p_triple = Grammar("""
+        start: NUMBER NUMBER NUMBER
+        NUMBER: /[0-9]+/
+        %ignore /\s+/
+    """)->compile();
+    define rt = p_triple->parse("1 2 3");
+    test("three tokens: count", 3, child_count(rt));
+    test("three tokens: values", "3", node_value(node_child(rt, 2)));
+
+    // ========================================================
+    // 2.3 Whitespace handling (%ignore)
+    // ========================================================
+
+    define p_ws = Grammar("""
+        start: NUMBER NUMBER
+        NUMBER: /[0-9]+/
+        %ignore /\s+/
+    """)->compile();
+
+    test("ws: leading space", "10", node_value(node_child(p_ws->parse("  10 20"), 0)));
+    test("ws: trailing space", "20", node_value(node_child(p_ws->parse("10 20  "), 1)));
+    test("ws: multiple spaces", "start", node_name(p_ws->parse("10    20")));
+    test("ws: tabs", "start", node_name(p_ws->parse("10\t20")));
+    test("ws: mixed whitespace", "start", node_name(p_ws->parse("  10 \t 20  ")));
+    test("ws: newlines", "start", node_name(p_ws->parse("10\n20")));
+
+    // Without %ignore — whitespace should cause parse error
+    define p_nows = Grammar("""
+        start: "a" "b"
+    """)->compile();
+    test_error("no-ws: space fails", function() p_nows->parse("a b"));
+    test("no-ws: adjacent works", "start", node_name(p_nows->parse("ab")));
+
+    // ========================================================
+    // 2.4 Alternatives
+    // ========================================================
+
+    define p_alt = Grammar("""
+        start: NUMBER | WORD
+        NUMBER: /[0-9]+/
+        WORD: /[a-z]+/
+    """)->compile();
+
+    test("alt: match number name", "NUMBER", node_name(node_child(p_alt->parse("42"), 0)));
+    test("alt: match number value", "42", node_value(node_child(p_alt->parse("42"), 0)));
+    test("alt: match word name", "WORD", node_name(node_child(p_alt->parse("hello"), 0)));
+    test("alt: match word value", "hello", node_value(node_child(p_alt->parse("hello"), 0)));
+
+    // Three alternatives
+    define p_alt3 = Grammar("""
+        start: NUMBER | WORD | SYMBOL
+        NUMBER: /[0-9]+/
+        WORD: /[a-z]+/
+        SYMBOL: /[+\-*\/]/
+    """)->compile();
+    test("alt3: symbol", "SYMBOL", node_name(node_child(p_alt3->parse("+"), 0)));
+    test("alt3: word", "WORD", node_name(node_child(p_alt3->parse("abc"), 0)));
+    test("alt3: number", "NUMBER", node_name(node_child(p_alt3->parse("7"), 0)));
+
+    // ========================================================
+    // 2.5 Inline rules — passthrough behavior
+    // ========================================================
+
+    define p_inl = Grammar("""
+        start: expr
+        ?expr: NUMBER
+        NUMBER: /[0-9]+/
+    """)->compile();
+
+    define ri = p_inl->parse("7");
+    test("inline: root", "start", node_name(ri));
+    test("inline: passthrough token name", "NUMBER", node_name(node_child(ri, 0)));
+    test("inline: passthrough token value", "7", node_value(node_child(ri, 0)));
+
+    // Inline with multiple alternatives — still passes through single match
+    define p_inl2 = Grammar("""
+        start: expr
+        ?expr: NUMBER | WORD
+        NUMBER: /[0-9]+/
+        WORD: /[a-z]+/
+    """)->compile();
+    test("inline alt: number", "NUMBER", node_name(node_child(p_inl2->parse("42"), 0)));
+    test("inline alt: word", "WORD", node_name(node_child(p_inl2->parse("abc"), 0)));
+
+    // Inline with alias — alias wins over passthrough
+    define p_inl3 = Grammar("""
+        start: expr
+        ?expr: NUMBER "+" NUMBER -> add
+             | NUMBER
+        NUMBER: /[0-9]+/
+        %ignore /\s+/
+    """)->compile();
+    // With alias: creates named node
+    define ri3a = p_inl3->parse("1 + 2");
+    test("inline alias: add name", "add", node_name(node_child(ri3a, 0)));
+    // Without alias: single match passes through
+    define ri3b = p_inl3->parse("42");
+    test("inline alias: passthrough", "NUMBER", node_name(node_child(ri3b, 0)));
+
+    // Chained inline rules
+    define p_inl_chain = Grammar("""
+        start: a
+        ?a: b
+        ?b: c
+        ?c: NUMBER
+        NUMBER: /[0-9]+/
+    """)->compile();
+    define ric = p_inl_chain->parse("5");
+    test("inline chain: deep passthrough", "NUMBER", node_name(node_child(ric, 0)));
+    test("inline chain: value", "5", node_value(node_child(ric, 0)));
+
+    // ========================================================
+    // 2.6 Aliases
+    // ========================================================
+
+    define p_alias = Grammar("""
+        start: expr
+        ?expr: expr "+" term -> add
+             | expr "-" term -> sub
+             | term
+        ?term: NUMBER
+        NUMBER: /[0-9]+/
+        %ignore /\s+/
+    """)->compile();
+
+    // 1 + 2 → add node
+    define ral = p_alias->parse("1 + 2");
+    define add_node = node_child(ral, 0);
+    test("alias: add name", "add", node_name(add_node));
+    test("alias: add left", "1", node_value(node_child(add_node, 0)));
+    test("alias: add op", "+", node_value(node_child(add_node, 1)));
+    test("alias: add right", "2", node_value(node_child(add_node, 2)));
+
+    // 5 - 3 → sub node
+    test("alias: sub name", "sub", node_name(node_child(p_alias->parse("5 - 3"), 0)));
+
+    // Single number — inline passthrough
+    test("alias: single passthrough", "NUMBER", node_name(node_child(p_alias->parse("42"), 0)));
+
+    // Chained: 1 + 2 + 3 → add(add(1, 2), 3) left-associative
+    define rchain = p_alias->parse("1 + 2 + 3");
+    define outer = node_child(rchain, 0);
+    test("alias chain: outer add", "add", node_name(outer));
+    define inner = node_child(outer, 0);
+    test("alias chain: inner add", "add", node_name(inner));
+    test("alias chain: innermost", "1", node_value(node_child(inner, 0)));
+    test("alias chain: outer right", "3", node_value(node_child(outer, 2)));
+
+    // Mixed: 1 + 2 - 3 → sub(add(1, 2), 3)
+    define rmix = p_alias->parse("1 + 2 - 3");
+    test("alias mixed: outer sub", "sub", node_name(node_child(rmix, 0)));
+    test("alias mixed: inner add", "add", node_name(node_child(node_child(rmix, 0), 0)));
+
+    // ========================================================
+    // 2.7 EBNF star modifier (*)
+    // ========================================================
+
+    define p_star = Grammar("""
+        start: item*
+        item: "a"
+    """)->compile();
+
+    // Zero matches
+    test("star: zero matches", "start", node_name(p_star->parse("")));
+
+    // One match
+    test("star: one match", "start", node_name(p_star->parse("a")));
+
+    // Multiple matches
+    test("star: five matches", "start", node_name(p_star->parse("aaaaa")));
+
+    // Star with whitespace-separated tokens
+    define p_star_ws = Grammar("""
+        start: NUMBER*
+        NUMBER: /[0-9]+/
+        %ignore /\s+/
+    """)->compile();
+    test("star ws: empty", "start", node_name(p_star_ws->parse("")));
+    define rs3 = p_star_ws->parse("1 2 3");
+    test("star ws: three", "start", node_name(rs3));
+
+    // ========================================================
+    // 2.8 EBNF plus modifier (+)
+    // ========================================================
+
+    define p_plus = Grammar("""
+        start: item+
+        item: "a"
+    """)->compile();
+
+    test("plus: one", "start", node_name(p_plus->parse("a")));
+    test("plus: many", "start", node_name(p_plus->parse("aaaa")));
+    test_error("plus: zero fails", function() p_plus->parse(""));
+
+    // Plus with regex terminal
+    define p_plus_num = Grammar("""
+        start: NUMBER+
+        NUMBER: /[0-9]+/
+        %ignore /\s+/
+    """)->compile();
+    define rpl = p_plus_num->parse("10 20 30");
+    test("plus regex: root", "start", node_name(rpl));
+
+    // ========================================================
+    // 2.9 EBNF optional modifier (?)
+    // ========================================================
+
+    define p_opt = Grammar("""
+        start: "a" "b"?
+    """)->compile();
+
+    test("opt: present", "start", node_name(p_opt->parse("ab")));
+    test("opt: absent", "start", node_name(p_opt->parse("a")));
+
+    // Optional in middle
+    define p_opt_mid = Grammar("""
+        start: "a" "b"? "c"
+    """)->compile();
+    test("opt mid: with", "start", node_name(p_opt_mid->parse("abc")));
+    test("opt mid: without", "start", node_name(p_opt_mid->parse("ac")));
+
+    // Optional rule ref
+    define p_opt_rule = Grammar("""
+        start: "x" trailer?
+        trailer: "," NUMBER
+        NUMBER: /[0-9]+/
+    """)->compile();
+    test("opt rule: with", "start", node_name(p_opt_rule->parse("x,5")));
+    test("opt rule: without", "start", node_name(p_opt_rule->parse("x")));
+
+    // ========================================================
+    // 2.10 Anonymous string literals
+    // ========================================================
+
+    define p_anon = Grammar("""
+        start: "+" NUMBER
+        NUMBER: /[0-9]+/
+    """)->compile();
+
+    define ra = p_anon->parse("+5");
+    test("anon: root", "start", node_name(ra));
+    define anon_tok = node_child(ra, 0);
+    test("anon: name starts with ANON", true, node_name(anon_tok)->starts_with("ANON"));
+    test("anon: literal value", "+", node_value(anon_tok));
+    test("anon: number value", "5", node_value(node_child(ra, 1)));
+
+    // Multiple anonymous literals — each gets unique ANON_N
+    define p_anon2 = Grammar("""
+        start: "(" NUMBER "," NUMBER ")"
+        NUMBER: /[0-9]+/
+    """)->compile();
+    define ra2 = p_anon2->parse("(1,2)");
+    test("anon multi: lparen", "(", node_value(node_child(ra2, 0)));
+    test("anon multi: first num", "1", node_value(node_child(ra2, 1)));
+    test("anon multi: comma", ",", node_value(node_child(ra2, 2)));
+    test("anon multi: second num", "2", node_value(node_child(ra2, 3)));
+    test("anon multi: rparen", ")", node_value(node_child(ra2, 4)));
+
+    // ========================================================
+    // 2.11 Named string terminals
+    // ========================================================
+
+    define p_named = Grammar("""
+        start: PLUS NUMBER
+        PLUS: "+"
+        NUMBER: /[0-9]+/
+    """)->compile();
+    define rn = p_named->parse("+5");
+    test("named term: name", "PLUS", node_name(node_child(rn, 0)));
+    test("named term: value", "+", node_value(node_child(rn, 0)));
+
+    // Multi-char string terminal
+    define p_arrow = Grammar("""
+        start: ARROW NUMBER
+        ARROW: "->"
+        NUMBER: /[0-9]+/
+    """)->compile();
+    define rarr = p_arrow->parse("->42");
+    test("named term multi-char: name", "ARROW", node_name(node_child(rarr, 0)));
+    test("named term multi-char: value", "->", node_value(node_child(rarr, 0)));
+
+    // ========================================================
+    // 2.12 Left-recursive arithmetic with precedence
+    // ========================================================
+
+    define p_arith = Grammar("""
+        start: expr
+        ?expr: expr "+" term -> add
+             | expr "-" term -> sub
+             | term
+        ?term: term "*" atom -> mul
+             | term "/" atom -> div
+             | atom
+        ?atom: NUMBER
+             | "(" expr ")"
+        NUMBER: /[0-9]+/
+        %ignore /\s+/
+    """)->compile();
+
+    // 1 + 2 * 3 → add(1, mul(2, 3))
+    define c1 = p_arith->parse("1 + 2 * 3");
+    define top1 = node_child(c1, 0);
+    test("arith prec: top is add", "add", node_name(top1));
+    test("arith prec: left is 1", "1", node_value(node_child(top1, 0)));
+    define right1 = node_child(top1, 2);
+    test("arith prec: right is mul", "mul", node_name(right1));
+    test("arith prec: mul left", "2", node_value(node_child(right1, 0)));
+    test("arith prec: mul right", "3", node_value(node_child(right1, 2)));
+
+    // (1 + 2) * 3 → mul(add(1, 2), 3) parens override
+    define c2 = p_arith->parse("(1 + 2) * 3");
+    define top2 = node_child(c2, 0);
+    test("arith paren: top is mul", "mul", node_name(top2));
+    test("arith paren: left is add", "add", node_name(node_child(top2, 0)));
+    test("arith paren: right is 3", "3", node_value(node_child(top2, 2)));
+
+    // 10 - 3 - 2 → sub(sub(10, 3), 2) left-associative
+    define c3 = p_arith->parse("10 - 3 - 2");
+    define top3 = node_child(c3, 0);
+    test("arith left-assoc: outer sub", "sub", node_name(top3));
+    test("arith left-assoc: inner sub", "sub", node_name(node_child(top3, 0)));
+    test("arith left-assoc: rightmost", "2", node_value(node_child(top3, 2)));
+
+    // Nested parentheses
+    test("arith nested parens: add", "add", node_name(node_child(p_arith->parse("((1 + 2))"), 0)));
+
+    // Single number — inline passthrough
+    test("arith single: passthrough", "NUMBER", node_name(node_child(p_arith->parse("42"), 0)));
+
+    // All four ops
+    test("arith: div", "div", node_name(node_child(p_arith->parse("6 / 2"), 0)));
+    test("arith: mul", "mul", node_name(node_child(p_arith->parse("3 * 4"), 0)));
+
+    // Complex expression: 2 * 3 + 4 * 5 → add(mul(2,3), mul(4,5))
+    define c6 = node_child(p_arith->parse("2 * 3 + 4 * 5"), 0);
+    test("arith complex: top add", "add", node_name(c6));
+    test("arith complex: left mul", "mul", node_name(node_child(c6, 0)));
+    test("arith complex: right mul", "mul", node_name(node_child(c6, 2)));
+
+    // ========================================================
+    // 2.13 Parenthesized groups
+    // ========================================================
+
+    // Group bare: (A | B)
+    define p_gb = Grammar("""
+        start: ("x" | "y") WORD
+        WORD: /[a-z]+/
+        %ignore /\s+/
+    """)->compile();
+    test("group bare: x", "start", node_name(p_gb->parse("x hello")));
+    test("group bare: y", "start", node_name(p_gb->parse("y world")));
+    test_error("group bare: mismatch", function() p_gb->parse("z foo"));
+
+    // Group star: (sep item)*
+    define p_gs = Grammar("""
+        start: item ("," item)*
+        item: WORD
+        WORD: /[a-z]+/
+        %ignore /\s+/
+    """)->compile();
+    test("group star: single", "start", node_name(p_gs->parse("a")));
+    test("group star: two", "start", node_name(p_gs->parse("a, b")));
+    test("group star: many", "start", node_name(p_gs->parse("a, b, c, d, e")));
+
+    // Group plus: (sep item)+
+    define p_gp = Grammar("""
+        start: item ("," item)+
+        item: WORD
+        WORD: /[a-z]+/
+        %ignore /\s+/
+    """)->compile();
+    test("group plus: two", "start", node_name(p_gp->parse("a, b")));
+    test("group plus: many", "start", node_name(p_gp->parse("a, b, c")));
+
+    // Group optional: (sep item)?
+    define p_go = Grammar("""
+        start: WORD ("," WORD)?
+        WORD: /[a-z]+/
+        %ignore /\s+/
+    """)->compile();
+    test("group opt: present", "start", node_name(p_go->parse("a, b")));
+    test("group opt: absent", "start", node_name(p_go->parse("a")));
+
+    // Nested groups: ((A | B) C)*
+    define p_ng = Grammar("""
+        start: ((LETTER | DIGIT) WORD)*
+        LETTER: /[A-Z]/
+        DIGIT: /[0-9]/
+        WORD: /[a-z]+/
+        %ignore /\s+/
+    """)->compile();
+    test("nested group: empty", "start", node_name(p_ng->parse("")));
+    test("nested group: one", "start", node_name(p_ng->parse("A foo")));
+    test("nested group: two", "start", node_name(p_ng->parse("A foo 3 bar")));
+
+    // Multiple groups in one rule
+    define p_mg = Grammar("""
+        start: ("a" | "b") WORD ("," WORD)*
+        WORD: /[a-z]+/
+        %ignore /\s+/
+    """)->compile();
+    test("multi group: basic", "start", node_name(p_mg->parse("a foo, bar, baz")));
+    test("multi group: alt b", "start", node_name(p_mg->parse("b x")));
+
+    // ========================================================
+    // 2.14 Terminal alternatives
+    // ========================================================
+
+    // Two regex alternatives
+    define p_ta1 = Grammar("""
+        start: VALUE+
+        VALUE: /[a-z]+/ | /[0-9]+/
+        %ignore /\s+/
+    """)->compile();
+    define rta1 = p_ta1->parse("hello 42 world 7");
+    test("term alt regex: count", 4, child_count(rta1));
+    test("term alt regex: first word", "hello", node_value(node_child(rta1, 0)));
+    test("term alt regex: first num", "42", node_value(node_child(rta1, 1)));
+    test("term alt regex: second word", "world", node_value(node_child(rta1, 2)));
+    test("term alt regex: second num", "7", node_value(node_child(rta1, 3)));
+
+    // String alternatives
+    define p_ta2 = Grammar("""
+        start: KEYWORD+
+        KEYWORD: "if" | "else" | "while"
+        %ignore /\s+/
+    """)->compile();
+    define rta2 = p_ta2->parse("if else while if");
+    test("term alt string: count", 4, child_count(rta2));
+    test("term alt string: first", "if", node_value(node_child(rta2, 0)));
+    test("term alt string: second", "else", node_value(node_child(rta2, 1)));
+    test("term alt string: third", "while", node_value(node_child(rta2, 2)));
+    test_error("term alt string: no match", function() p_ta2->parse("for"));
+
+    // Mixed string + regex alternatives
+    define p_ta3 = Grammar("""
+        start: TOKEN+
+        TOKEN: "null" | "true" | "false" | /[0-9]+/ | /[a-z]+/
+        %ignore /\s+/
+    """)->compile();
+    define rta3 = p_ta3->parse("null 42 true hello false 7");
+    test("term alt mixed: count", 6, child_count(rta3));
+    test("term alt mixed: null", "null", node_value(node_child(rta3, 0)));
+    test("term alt mixed: num", "42", node_value(node_child(rta3, 1)));
+    test("term alt mixed: true", "true", node_value(node_child(rta3, 2)));
+    test("term alt mixed: word", "hello", node_value(node_child(rta3, 3)));
+
+    // Terminal alt with priority
+    define p_ta4 = Grammar("""
+        start: (KEYWORD | IDENT)+
+        KEYWORD.2: "if" | "else" | "while"
+        IDENT.1: /[a-z]+/
+        %ignore /\s+/
+    """)->compile();
+    define rta4 = p_ta4->parse("if foo else bar");
+    test("term alt prio: keyword if", "KEYWORD", node_name(node_child(rta4, 0)));
+    test("term alt prio: ident foo", "IDENT", node_name(node_child(rta4, 1)));
+    test("term alt prio: keyword else", "KEYWORD", node_name(node_child(rta4, 2)));
+    test("term alt prio: ident bar", "IDENT", node_name(node_child(rta4, 3)));
+
+    // ========================================================
+    // 2.15 Terminal priority
+    // ========================================================
+
+    define p_pri = Grammar("""
+        start: (KEYWORD | IDENT)+
+        KEYWORD.2: /if|else|while/
+        IDENT.1: /[a-z]+/
+        %ignore /\s+/
+    """)->compile();
+
+    define rpr = p_pri->parse("if foo else bar while baz");
+    test("priority: keyword if", "KEYWORD", node_name(node_child(rpr, 0)));
+    test("priority: keyword value", "if", node_value(node_child(rpr, 0)));
+    test("priority: ident foo", "IDENT", node_name(node_child(rpr, 1)));
+    test("priority: keyword else", "KEYWORD", node_name(node_child(rpr, 2)));
+    test("priority: ident bar", "IDENT", node_name(node_child(rpr, 3)));
+    test("priority: keyword while", "KEYWORD", node_name(node_child(rpr, 4)));
+    test("priority: ident baz", "IDENT", node_name(node_child(rpr, 5)));
+
+    // ========================================================
+    // 2.16 Regex patterns
+    // ========================================================
+
+    // Identifiers
+    define p_id = Grammar("""
+        start: IDENT+
+        IDENT: /[a-zA-Z_][a-zA-Z0-9_]*/
+        %ignore /\s+/
+    """)->compile();
+    define rid = p_id->parse("foo bar_2 _baz Hello");
+    test("regex ident: count", 4, child_count(rid));
+    test("regex ident: foo", "foo", node_value(node_child(rid, 0)));
+    test("regex ident: bar_2", "bar_2", node_value(node_child(rid, 1)));
+    test("regex ident: _baz", "_baz", node_value(node_child(rid, 2)));
+    test("regex ident: Hello", "Hello", node_value(node_child(rid, 3)));
+
+    // Hex numbers
+    define p_hex = Grammar("""
+        start: HEX
+        HEX: /0x[0-9a-fA-F]+/
+    """)->compile();
+    test("regex hex: DEAD", "0xDEAD", node_value(node_child(p_hex->parse("0xDEAD"), 0)));
+    test("regex hex: lower", "0xff", node_value(node_child(p_hex->parse("0xff"), 0)));
+    test("regex hex: mixed", "0xAbCd", node_value(node_child(p_hex->parse("0xAbCd"), 0)));
+
+    // IP addresses
+    define p_ip = Grammar("""
+        start: OCTET "." OCTET "." OCTET "." OCTET
+        OCTET: /[0-9]{1,3}/
+    """)->compile();
+    define rip = p_ip->parse("192.168.1.1");
+    test("regex ip: first", "192", node_value(node_child(rip, 0)));
+    test("regex ip: last", "1", node_value(node_child(rip, 6)));
+
+    // Floating point numbers
+    define p_float = Grammar("""
+        start: FLOAT
+        FLOAT: /[0-9]+\.[0-9]+/
+    """)->compile();
+    test("regex float: 3.14", "3.14", node_value(node_child(p_float->parse("3.14"), 0)));
+    test("regex float: 0.5", "0.5", node_value(node_child(p_float->parse("0.5"), 0)));
+
+    // Regex dot (any character)
+    define p_dot = Grammar("""
+        start: CHAR+
+        CHAR: /./
+    """)->compile();
+    test("regex dot: a", "a", node_value(node_child(p_dot->parse("abc"), 0)));
+    test("regex dot: count", 3, child_count(p_dot->parse("xyz")));
+
+    // ========================================================
+    // 2.17 Regex shorthands (\d, \w, \s)
+    // ========================================================
+
+    // \d matches digits
+    define p_d = Grammar("""
+        start: NUM
+        NUM: /\d+/
+    """)->compile();
+    test("shorthand \\d: digits", "42", node_value(node_child(p_d->parse("42"), 0)));
+    test("shorthand \\d: long", "123456", node_value(node_child(p_d->parse("123456"), 0)));
+
+    // \w matches word characters
+    define p_w = Grammar("""
+        start: WORD+
+        WORD: /\w+/
+        %ignore /\s+/
+    """)->compile();
+    define rw = p_w->parse("hello world_42");
+    test("shorthand \\w: count", 2, child_count(rw));
+    test("shorthand \\w: first", "hello", node_value(node_child(rw, 0)));
+    test("shorthand \\w: second", "world_42", node_value(node_child(rw, 1)));
+
+    // \s in ignore pattern
+    define p_s = Grammar("""
+        start: NUMBER+
+        NUMBER: /[0-9]+/
+        %ignore /\s+/
+    """)->compile();
+    test("shorthand \\s ignore: works", "start", node_name(p_s->parse("1 2 3")));
+
+    // ========================================================
+    // 2.18 Empty alternative
+    // ========================================================
+
+    define p_maybe = Grammar("""
+        start: "a" tail
+        tail: "," "b" |
+    """)->compile();
+    test("empty alt: with tail", "start", node_name(p_maybe->parse("a,b")));
+    test("empty alt: without tail", "start", node_name(p_maybe->parse("a")));
+
+    // ========================================================
+    // 2.19 JSON-like grammar
+    // ========================================================
+
+    define p_json = Grammar("""
+        start: value
+        ?value: object | array | STRING | NUMBER | "true" | "false" | "null"
+        object: "{" (pair ("," pair)*)? "}"
+        pair: STRING ":" value
+        array: "[" (value ("," value)*)? "]"
+        STRING: /"[^"]*"/
+        NUMBER: /[0-9]+/
+        %ignore /\s+/
+    """)->compile();
+
+    // Number
+    define rjn = p_json->parse("42");
+    test("json: number root", "start", node_name(rjn));
+    test("json: number value", "42", node_value(node_child(rjn, 0)));
+
+    // String
+    test("json: string root", "start", node_name(p_json->parse("\"hello\"")));
+
+    // Array
+    define rja = p_json->parse("[1, 2, 3]");
+    test("json: array name", "array", node_name(node_child(rja, 0)));
+
+    // Object
+    define rjo = p_json->parse("{\"a\": 1, \"b\": 2}");
+    test("json: object name", "object", node_name(node_child(rjo, 0)));
+
+    // Nested
+    define rjnest = p_json->parse("{\"x\": [1, 2], \"y\": {\"z\": 3}}");
+    test("json: nested root", "start", node_name(rjnest));
+    test("json: nested object", "object", node_name(node_child(rjnest, 0)));
+
+    // Empty containers
+    test("json: empty array", "array", node_name(node_child(p_json->parse("[]"), 0)));
+    test("json: empty object", "object", node_name(node_child(p_json->parse("{}"), 0)));
+
+    // Keywords
+    test("json: true", "start", node_name(p_json->parse("true")));
+    test("json: false", "start", node_name(p_json->parse("false")));
+    test("json: null", "start", node_name(p_json->parse("null")));
+
+    // Deep nesting
+    test("json: deeply nested", "start", node_name(p_json->parse("[[[1]]]")));
+
+    // ========================================================
+    // 2.20 CSV-like grammar
+    // ========================================================
+
+    define p_csv = Grammar("""
+        start: row ("\n" row)*
+        row: field ("," field)*
+        field: WORD
+        WORD: /[a-zA-Z0-9_]+/
+    """)->compile();
+
+    test("csv: single row", "start", node_name(p_csv->parse("one,two,three")));
+    test("csv: multi row", "start", node_name(p_csv->parse("a,b,c\nx,y,z")));
+
+    // ========================================================
+    // 2.21 S-expression grammar
+    // ========================================================
+
+    define p_sexpr = Grammar("""
+        start: sexpr
+        ?sexpr: atom | list
+        list: "(" sexpr* ")"
+        ?atom: SYMBOL | NUMBER
+        SYMBOL: /[a-zA-Z_+\-*=<>!?][a-zA-Z0-9_+\-*=<>!?]*/
+        NUMBER: /[0-9]+/
+        %ignore /\s+/
+    """)->compile();
+
+    test("sexpr: atom", "NUMBER", node_name(node_child(p_sexpr->parse("42"), 0)));
+    test("sexpr: symbol", "SYMBOL", node_name(node_child(p_sexpr->parse("hello"), 0)));
+    test("sexpr: list", "list", node_name(node_child(p_sexpr->parse("(+ 1 2)"), 0)));
+    test("sexpr: nested list", "list", node_name(node_child(p_sexpr->parse("(define x (+ 1 2))"), 0)));
+    test("sexpr: empty list", "list", node_name(node_child(p_sexpr->parse("()"), 0)));
+
+    // ========================================================
+    // 2.22 Assignment language
+    // ========================================================
+
+    define p_assign = Grammar("""
+        start: statement
+        statement: IDENT "=" expr
+        ?expr: expr OP term -> binop
+             | term
+        ?term: NUMBER | IDENT
+        IDENT: /[a-zA-Z_][a-zA-Z0-9_]*/
+        NUMBER: /[0-9]+/
+        OP: /[+\-*/]/
+        %ignore /\s+/
+    """)->compile();
+
+    define ras = p_assign->parse("result = x + 1");
+    define stmt = node_child(ras, 0);
+    test("assign: statement name", "statement", node_name(stmt));
+    test("assign: var name", "result", node_value(node_child(stmt, 0)));
+    define binop = node_child(stmt, 2);
+    test("assign: binop", "binop", node_name(binop));
+    test("assign: op", "+", node_value(node_child(binop, 1)));
+
+    // ========================================================
+    // 2.23 Expression with exponentiation
+    // ========================================================
+
+    define p_calc = Grammar("""
+        start: expr
+        ?expr: expr "+" term -> add
+             | expr "-" term -> sub
+             | term
+        ?term: term "*" factor -> mul
+             | term "/" factor -> div
+             | factor
+        ?factor: factor "**" atom -> pow
+               | atom
+        ?atom: NUMBER
+             | "(" expr ")"
+        NUMBER: /[0-9]+\.?[0-9]*/
+        %ignore /\s+/
+    """)->compile();
+
+    // Precedence: 2 + 3 * 4 → add(2, mul(3, 4))
+    define ec1 = node_child(p_calc->parse("2 + 3 * 4"), 0);
+    test("calc: add over mul", "add", node_name(ec1));
+    test("calc: right is mul", "mul", node_name(node_child(ec1, 2)));
+
+    // Exponentiation: 2 ** 3 → pow(2, 3)
+    define ec3 = node_child(p_calc->parse("2 ** 3"), 0);
+    test("calc: pow", "pow", node_name(ec3));
+    test("calc: pow base", "2", node_value(node_child(ec3, 0)));
+    test("calc: pow exp", "3", node_value(node_child(ec3, 2)));
+
+    // Float token
+    test("calc: float value", "3.14", node_value(node_child(p_calc->parse("3.14"), 0)));
+
+    // Complex: 1 + 2 * 3 ** 4
+    define ec5 = node_child(p_calc->parse("1 + 2 * 3 ** 4"), 0);
+    test("calc: complex top", "add", node_name(ec5));
+
+    // ========================================================
+    // 2.24 Group with literal alternatives
+    // ========================================================
+
+    define p_ops = Grammar("""
+        start: NUMBER ("+" | "-") NUMBER
+        NUMBER: /[0-9]+/
+        %ignore /\s+/
+    """)->compile();
+
+    test("group lit alt: plus", "start", node_name(p_ops->parse("1 + 2")));
+    test("group lit alt: minus", "start", node_name(p_ops->parse("3 - 4")));
+    test_error("group lit alt: bad op", function() p_ops->parse("1 * 2"));
+
+    // ========================================================
+    // 2.25 Comments in grammar
+    // ========================================================
+
+    define p_comm1 = Grammar("""
+        start: NUMBER  // the start rule
+        // terminals below
+        NUMBER: /[0-9]+/  // matches integers
+    """)->compile();
+    test("comment //: parse", "42", node_value(node_child(p_comm1->parse("42"), 0)));
+
+    define p_comm2 = Grammar("""
+        # A grammar with hash comments
+        start: NUMBER
+        # terminal definition
+        NUMBER: /[0-9]+/
+    """)->compile();
+    test("comment #: parse", "7", node_value(node_child(p_comm2->parse("7"), 0)));
+
+    // ========================================================
+    // 2.26 Triple-quoted grammar definitions
+    // ========================================================
+
+    // Quotes without escaping
+    define p_tq = Grammar("""
+        start: "(" expr ")"
+        ?expr: NUMBER
+        NUMBER: /[0-9]+/
+        %ignore /\s+/
+    """)->compile();
+    define rtq = p_tq->parse("(42)");
+    test("triple-quoted: lparen", "(", node_value(node_child(rtq, 0)));
+    test("triple-quoted: number", "42", node_value(node_child(rtq, 1)));
+    test("triple-quoted: rparen", ")", node_value(node_child(rtq, 2)));
+
+    // Same grammar with regular string needs heavy escaping
+    define p_esc = Grammar("start: \"(\" expr \")\"\n?expr: NUMBER\nNUMBER: /[0-9]+/\n%ignore /\\s+/\n")->compile();
+    define resc = p_esc->parse("(42)");
+    test("escaped equiv: same result", node_value(node_child(rtq, 1)),
+        node_value(node_child(resc, 1)));
+
+    // Raw behavior: \s in triple-quoted is literal backslash+s (for regex)
+    define p_tq2 = Grammar("""
+        start: WORD+
+        WORD: /\w+/
+        %ignore /\s+/
+    """)->compile();
+    define rtq2 = p_tq2->parse("hello world");
+    test("triple-quoted raw: count", 2, child_count(rtq2));
+    test("triple-quoted raw: first", "hello", node_value(node_child(rtq2, 0)));
+
+    // ========================================================
+    // 2.27 Multiple parsers coexisting
+    // ========================================================
+
+    define pa = Grammar("""start: "a"+""")->compile();
+    define pb = Grammar("""start: "b"+""")->compile();
+    define pc = Grammar("""
+        start: NUMBER
+        NUMBER: /[0-9]+/
+    """)->compile();
+
+    test("multi parsers: a", "start", node_name(pa->parse("aaa")));
+    test("multi parsers: b", "start", node_name(pb->parse("bbb")));
+    test("multi parsers: c", "start", node_name(pc->parse("42")));
+    // Verify they don't interfere
+    test("multi parsers: a still works", "start", node_name(pa->parse("a")));
+    test("multi parsers: b still works", "start", node_name(pb->parse("bb")));
+
+    // ========================================================
+    // 2.28 Parse errors
+    // ========================================================
+
+    define p_strict = Grammar("""
+        start: "a" "b" "c"
+    """)->compile();
+
+    test_error("parse error: wrong token", function() p_strict->parse("abd"));
+    test_error("parse error: incomplete", function() p_strict->parse("ab"));
+    test_error("parse error: empty", function() p_strict->parse(""));
+    test_error("parse error: extra at end", function() p_strict->parse("abcd"));
+
+    define p_num_only = Grammar("""
+        start: NUMBER
+        NUMBER: /[0-9]+/
+    """)->compile();
+    test_error("parse error: letters for number", function() p_num_only->parse("abc"));
+    test_error("parse error: empty for number", function() p_num_only->parse(""));
+
+    // After error, parser still works for valid input
+    test("parse error recovery: still works", "42",
+        node_value(node_child(p_num_only->parse("42"), 0)));
+
+    // ========================================================
+    // 2.29 Comma-separated lists
+    // ========================================================
+
+    define p_sql = Grammar("""
+        start: column ("," column)*
+        column: WORD
+        WORD: /[a-zA-Z_]+/
+        %ignore /\s+/
+    """)->compile();
+
+    test("comma list: single", "start", node_name(p_sql->parse("name")));
+    test("comma list: three", "start", node_name(p_sql->parse("name, age, city")));
+    test("comma list: underscored", "start", node_name(p_sql->parse("first_name, last_name")));
+
+    // ========================================================
+    // 2.30 Parser reuse under varied input
+    // ========================================================
+
+    define p_reuse = Grammar("""
+        start: expr
+        ?expr: expr "+" term -> add
+             | term
+        ?term: NUMBER
+        NUMBER: /[0-9]+/
+        %ignore /\s+/
+    """)->compile();
+
+    test("reuse: simple", "NUMBER", node_name(node_child(p_reuse->parse("5"), 0)));
+    test("reuse: add", "add", node_name(node_child(p_reuse->parse("1 + 2"), 0)));
+    test("reuse: chain", "add", node_name(node_child(p_reuse->parse("1 + 2 + 3"), 0)));
+    test("reuse: big nums", "NUMBER", node_name(node_child(p_reuse->parse("999999"), 0)));
+    test_error("reuse: bad input", function() p_reuse->parse("abc"));
+    // After error, parser still works
+    test("reuse: after error", "add", node_name(node_child(p_reuse->parse("1 + 2"), 0)));
+
+    // ========================================================
+    // 2.31 Stress tests
+    // ========================================================
+
+    // Many tokens
+    define p_many = Grammar("""
+        start: NUMBER+
+        NUMBER: /[0-9]+/
+        %ignore /\s+/
+    """)->compile();
+    define long_input = ","->join(
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]->map(function(x) `number->string`(x))
+    )->replace(",", " ");
+    define rlong = p_many->parse(long_input);
+    test("stress: 10 tokens", 10, child_count(rlong));
+
+    // Deeply nested parens
+    define rdeep = p_arith->parse("((((42))))");
+    test("stress: nested parens", "NUMBER", node_name(node_child(rdeep, 0)));
+    test("stress: nested value", "42", node_value(node_child(rdeep, 0)));
+
+    // Long expression chain
+    define rlong_expr = p_arith->parse("1 + 2 + 3 + 4 + 5 + 6 + 7 + 8");
+    test("stress: long chain", "add", node_name(node_child(rlong_expr, 0)));
+
+    // ========================================================
+    // 2.32 Edge cases
+    // ========================================================
+
+    // Single character
+    define p_single = Grammar("""
+        start: CHAR
+        CHAR: /./
+    """)->compile();
+    test("edge: single char a", "a", node_value(node_child(p_single->parse("a"), 0)));
+    test("edge: single char 1", "1", node_value(node_child(p_single->parse("1"), 0)));
+
+    // Whitespace-only input with ignore (should fail — no tokens)
+    define p_req = Grammar("""
+        start: NUMBER
+        NUMBER: /[0-9]+/
+        %ignore /\s+/
+    """)->compile();
+    test_error("edge: whitespace only", function() p_req->parse("   "));
+
+    // Large token
+    test("edge: large number", "99999999999",
+        node_value(node_child(p_num->parse("99999999999"), 0)));
+
+    // Token with special chars in regex
+    define p_special = Grammar("""
+        start: EMAIL
+        EMAIL: /[a-z]+@[a-z]+\.[a-z]+/
+    """)->compile();
+    test("edge: email-like", "a@b.c",
+        node_value(node_child(p_special->parse("a@b.c"), 0)));
+
+    // ========================================================
+    // 2.33 Grammar reuse — compile same grammar twice
+    // ========================================================
+
+    define g_reuse = Grammar("""
+        start: NUMBER
+        NUMBER: /[0-9]+/
+    """);
+    define p_r1 = g_reuse->compile();
+    define p_r2 = g_reuse->compile();
+    test("grammar reuse: first", "42", node_value(node_child(p_r1->parse("42"), 0)));
+    test("grammar reuse: second", "99", node_value(node_child(p_r2->parse("99"), 0)));
+    // Both still work
+    test("grammar reuse: first again", "7", node_value(node_child(p_r1->parse("7"), 0)));
+
+    // ========================================================
+    // 2.34 Left recursion with multiple levels
+    // ========================================================
+
+    define p_lr = Grammar("""
+        start: list
+        list: list "," item
+            | item
+        item: NUMBER
+        NUMBER: /[0-9]+/
+        %ignore /\s+/
+    """)->compile();
+
+    // Single item
+    define rlr1 = p_lr->parse("1");
+    test("left-rec: single root", "start", node_name(rlr1));
+
+    // Two items: list(item(1), item(2))
+    define rlr2 = p_lr->parse("1, 2");
+    test("left-rec: two root", "start", node_name(rlr2));
+
+    // Three items: list(list(item(1), item(2)), item(3))
+    define rlr3 = p_lr->parse("1, 2, 3");
+    test("left-rec: three root", "start", node_name(rlr3));
+
+    // ========================================================
+    // 2.35 Real-world: simple programming language
+    // ========================================================
+
+    define p_lang = Grammar("""
+        start: stmt+
+        stmt: assign | print_stmt
+        assign: IDENT "=" expr ";"
+        print_stmt: "print" expr ";"
+        ?expr: expr "+" term -> add
+             | term
+        ?term: NUMBER | IDENT
+        IDENT: /[a-zA-Z_]+/
+        NUMBER: /[0-9]+/
+        %ignore /\s+/
+    """)->compile();
+
+    define rlang = p_lang->parse("x = 1; y = x + 2; print y;");
+    test("lang: root", "start", node_name(rlang));
+    // First statement is assign
+    define first_stmt = node_child(rlang, 0);
+    test("lang: first stmt", "assign", node_name(first_stmt));
+    test("lang: first var", "x", node_value(node_child(first_stmt, 0)));
+    // Third statement is print
+    define third_stmt = node_child(rlang, 2);
+    test("lang: third stmt", "print_stmt", node_name(third_stmt));
+
+    display("  (JIT tests ran)\n");
+};
+
+unless(jit_available) {
+    display("  (JIT unavailable -- compile/parse tests skipped)\n");
+};
+
+test_end();

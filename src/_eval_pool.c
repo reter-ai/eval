@@ -1200,6 +1200,10 @@ static void eval_standard_aliases(sexp ctx, sexp env) {
     sexp_load_module_file(ctx, "eval/collection-oo.scm", env);
     env = sexp_context_env(ctx);
 
+    /* Grammar/Parser OO wrappers */
+    sexp_load_module_file(ctx, "eval/grammar-rt.scm", env);
+    env = sexp_context_env(ctx);
+
     /* Abstract class support: global flag checked by abstract constructors */
     sexp_eval_string(ctx, "(define __abstract_ok__ #f)", -1, env);
 
@@ -1304,9 +1308,19 @@ static EVAL_THREAD_FUNC worker_main(void *arg) {
     register_pyobject_type(ctx);
     register_channel_type(ctx);
     register_pool_type(ctx);
+    {
+        extern void register_grammar_type(sexp ctx);
+        extern void register_parser_type(sexp ctx);
+        register_grammar_type(ctx);
+        register_parser_type(ctx);
+    }
 
     /* 4. Register C-only bridge functions */
     register_bridge_functions_c(ctx, env);
+    {
+        extern void register_grammar_bridge_functions(sexp ctx, sexp env);
+        register_grammar_bridge_functions(ctx, env);
+    }
 
     /* 5. Load scheme extras, test framework */
     sexp_load_module_file(ctx, "scheme/extras.scm", env);

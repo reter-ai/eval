@@ -53,7 +53,7 @@
 %nonassoc RPAREN COMMA DOTDOT RBRACKET RBRACE SEMICOLON COLON.
 /* Additional keyword tokens recognized by the lexer.
    Declaring them here makes lemon generate their TOK_ defines. */
-%token LIBRARY EXPORT INCLUDE MACRO SYNTAX_RULES OPVAL TEST_GROUP DEFINE IN DICT WITH ASYNC AWAIT STATIC ABSTRACT YIELD GENERATOR.
+%token LIBRARY EXPORT INCLUDE MACRO SYNTAX_RULES OPVAL TEST_GROUP DEFINE IN DICT WITH ASYNC AWAIT STATIC ABSTRACT YIELD GENERATOR RAW_STRING.
 
 /* Non-terminal types - all are sexp */
 %type program { sexp }
@@ -281,6 +281,9 @@ expr(A) ::= FLOAT(V). {
 }
 expr(A) ::= STRING(V). {
     A = ps_make_string(ctx, V.start, V.length);
+}
+expr(A) ::= RAW_STRING(V). {
+    A = sexp_c_string(ctx, V.start, V.length);
 }
 expr(A) ::= IDENT(V). {
     A = ps_make_ident(ctx, V.start, V.length);
@@ -784,6 +787,12 @@ string_list(A) ::= STRING(S). {
 }
 string_list(A) ::= string_list(L) COMMA STRING(S). {
     A = ps_append(ctx, L, ps_make_string(ctx, S.start, S.length));
+}
+string_list(A) ::= RAW_STRING(S). {
+    A = sexp_list1(ctx, sexp_c_string(ctx, S.start, S.length));
+}
+string_list(A) ::= string_list(L) COMMA RAW_STRING(S). {
+    A = ps_append(ctx, L, sexp_c_string(ctx, S.start, S.length));
 }
 
 /* Syntax-rules clauses: (pattern): template, ... */

@@ -266,9 +266,19 @@ static sexp init_context(const char *extra_module_dir) {
     register_pyobject_type(ctx);
     register_channel_type(ctx);
     register_pool_type(ctx);
+    {
+        extern void register_grammar_type(sexp ctx);
+        extern void register_parser_type(sexp ctx);
+        register_grammar_type(ctx);
+        register_parser_type(ctx);
+    }
 
     /* Register C bridge functions */
     register_bridge_functions_c(ctx, env);
+    {
+        extern void register_grammar_bridge_functions(sexp ctx, sexp env);
+        register_grammar_bridge_functions(ctx, env);
+    }
 
     /* Load scheme extras, test framework */
     sexp_load_module_file(ctx, "scheme/extras.scm", env);

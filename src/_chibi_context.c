@@ -208,11 +208,25 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
     /* Register pool type (must be same order as workers for tag consistency) */
     register_pool_type(self->ctx);
 
+    /* Register grammar/parser types (must be same order as workers for tag consistency) */
+    {
+        extern void register_grammar_type(sexp ctx);
+        extern void register_parser_type(sexp ctx);
+        register_grammar_type(self->ctx);
+        register_parser_type(self->ctx);
+    }
+
     /* Register bridge functions */
     register_bridge_functions(self->ctx, self->env);
 
     /* Register pool/channel/future functions for pure-Eval use */
     register_pool_eval_functions(self->ctx, self->env);
+
+    /* Register grammar/parser bridge functions */
+    {
+        extern void register_grammar_bridge_functions(sexp ctx, sexp env);
+        register_grammar_bridge_functions(self->ctx, self->env);
+    }
 
     /* Import (scheme base) via the meta-environment — this adds:
      * error-object?, error-object-message, square, boolean=?, symbol=?,
@@ -311,6 +325,43 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
         /* OO networking: TcpSocket, TcpClient, TcpServer, HttpClient */
         eval_load_eval_file(self->ctx, self->env, "eval/net-oo.eval");
         self->env = sexp_context_env(self->ctx);
+
+        /* OO sync: Mutex, Monitor, ReadWriteLock, Semaphore
+         * Save SRFI-18 record types before sync.eval overwrites 'Mutex'.
+         * Must be separate sexp_eval_string calls because eval_load_eval_file
+         * wraps the whole file in letrec, so inner defines can't reference
+         * the outer Mutex binding. */
+        sexp_eval_string(self->ctx,
+            "(begin"
+            "  (define __MutexType__ Mutex)"
+            "  (define __CondVarType__ Condition-Variable))", -1, self->env);
+        self->env = sexp_context_env(self->ctx);
+
+        eval_load_eval_file(self->ctx, self->env, "eval/sync.eval");
+        self->env = sexp_context_env(self->ctx);
+
+        /* Patch make-mutex/make-condition-variable to use saved types
+         * (the Mutex binding is now the OO wrapper, not the record type) */
+        sexp_eval_string(self->ctx,
+            "(define (make-mutex . o)"
+            "  (let ((m (%%alloc-mutex)))"
+            "    (slot-set! __MutexType__ m 0 (and (pair? o) (car o)))"
+            "    (slot-set! __MutexType__ m 1 #f)"
+            "    (slot-set! __MutexType__ m 2 #f)"
+            "    (slot-set! __MutexType__ m 3 #f)"
+            "    m))", -1, self->env);
+        sexp_eval_string(self->ctx,
+            "(define make_mutex make-mutex)", -1, self->env);
+        sexp_eval_string(self->ctx,
+            "(define (make-condition-variable . o)"
+            "  (let ((cv (%%alloc-condvar)))"
+            "    (slot-set! __CondVarType__ cv 0 (and (pair? o) (car o)))"
+            "    (slot-set! __CondVarType__ cv 1 #f)"
+            "    (slot-set! __CondVarType__ cv 2 '())"
+            "    cv))", -1, self->env);
+        sexp_eval_string(self->ctx,
+            "(define make_condvar make-condition-variable)", -1, self->env);
+        self->env = sexp_context_env(self->ctx);
     }
 
     /* OO string methods: "hello"->upper(), etc. */
@@ -319,6 +370,10 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
 
     /* OO list/vector methods: [1,2,3]->map(...), #[1,2]->length, etc. */
     sexp_load_module_file(self->ctx, "eval/collection-oo.scm", self->env);
+    self->env = sexp_context_env(self->ctx);
+
+    /* Grammar/Parser OO wrappers: Grammar("lark EBNF") constructor */
+    sexp_load_module_file(self->ctx, "eval/grammar-rt.scm", self->env);
     self->env = sexp_context_env(self->ctx);
 
     /* Abstract class support: global flag checked by abstract constructors */

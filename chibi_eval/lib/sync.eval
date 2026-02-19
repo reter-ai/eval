@@ -1,0 +1,178 @@
+// sync.eval -- OO wrappers for SRFI-18 synchronization primitives
+// Provides: Mutex, Monitor, ReadWriteLock, Semaphore
+// All support RAII via with(guard = ...) { body }
+//
+// Prerequisites (defined in _chibi_context.c before this file loads):
+//   __MutexType__, __CondVarType__ -- saved SRFI-18 record types
+//   __alloc_mutex, __alloc_condvar -- raw allocators
+//   __slot_set -- slot-set! function
+//   make-mutex / make_condvar are patched after this file loads.
+
+// --- MutexGuard: lightweight RAII unlock ---
+define MutexGuard = function(raw)
+    interface(
+        close: function() mutex_unlock(raw),
+        __type__: '__mutex_guard__
+    );
+
+// --- Mutex: OO wrapper with RAII lock/unlock ---
+define Mutex = function() {
+    define raw = make_mutex();
+    interface(
+        lock: function() {
+            mutex_lock(raw);
+            MutexGuard(raw);
+        },
+        try_lock: function() {
+            if(mutex_lock(raw, 0))
+                MutexGuard(raw)
+            else
+                false;
+        },
+        unlock: function() mutex_unlock(raw),
+        __type__: '__mutex__,
+        __raw__: raw
+    );
+};
+
+// --- Monitor: combined mutex + condition variable (C# style) ---
+define Monitor = function() {
+    define raw_m = make_mutex();
+    define raw_cv = make_condvar();
+
+    define guard = function()
+        interface(
+            close: function() mutex_unlock(raw_m),
+            __type__: '__monitor_guard__
+        );
+
+    interface(
+        enter: function() {
+            mutex_lock(raw_m);
+            guard();
+        },
+        exit: function() mutex_unlock(raw_m),
+        wait: function() {
+            mutex_unlock(raw_m, raw_cv);
+            mutex_lock(raw_m);
+        },
+        wait_timeout: function(timeout) {
+            define signaled = mutex_unlock(raw_m, raw_cv, timeout);
+            mutex_lock(raw_m);
+            signaled;
+        },
+        pulse: function() condvar_signal(raw_cv),
+        pulse_all: function() condvar_broadcast(raw_cv),
+        __type__: '__monitor__
+    );
+};
+
+// --- ReadWriteLock: multiple readers or one exclusive writer ---
+// Writer preference: writers don't starve.
+define ReadWriteLock = function() {
+    define m = make_mutex();
+    define read_cv = make_condvar();
+    define write_cv = make_condvar();
+    define readers = 0;
+    define writer = false;
+    define waiting_writers = 0;
+
+    define read_guard = function()
+        interface(
+            close: function() {
+                mutex_lock(m);
+                readers = readers - 1;
+                when(readers == 0) condvar_signal(write_cv);
+                mutex_unlock(m);
+            },
+            __type__: '__read_guard__
+        );
+
+    define write_guard = function()
+        interface(
+            close: function() {
+                mutex_lock(m);
+                writer = false;
+                condvar_broadcast(read_cv);
+                condvar_signal(write_cv);
+                mutex_unlock(m);
+            },
+            __type__: '__write_guard__
+        );
+
+    interface(
+        read_lock: function() {
+            mutex_lock(m);
+            while(writer || waiting_writers > 0) {
+                mutex_unlock(m, read_cv);
+                mutex_lock(m);
+            };
+            readers = readers + 1;
+            mutex_unlock(m);
+            read_guard();
+        },
+        write_lock: function() {
+            mutex_lock(m);
+            waiting_writers = waiting_writers + 1;
+            while(writer || readers > 0) {
+                mutex_unlock(m, write_cv);
+                mutex_lock(m);
+            };
+            waiting_writers = waiting_writers - 1;
+            writer = true;
+            mutex_unlock(m);
+            write_guard();
+        },
+        __type__: '__rw_lock__
+    );
+};
+
+// --- Semaphore: counting semaphore with RAII ---
+define Semaphore = function(n) {
+    define m = make_mutex();
+    define cv = make_condvar();
+    define count = n;
+
+    define sem_guard = function()
+        interface(
+            close: function() {
+                mutex_lock(m);
+                count = count + 1;
+                condvar_signal(cv);
+                mutex_unlock(m);
+            },
+            __type__: '__semaphore_guard__
+        );
+
+    interface(
+        acquire: function() {
+            mutex_lock(m);
+            while(count <= 0) {
+                mutex_unlock(m, cv);
+                mutex_lock(m);
+            };
+            count = count - 1;
+            mutex_unlock(m);
+            sem_guard();
+        },
+        try_acquire: function() {
+            mutex_lock(m);
+            if(count > 0) {
+                count = count - 1;
+                mutex_unlock(m);
+                sem_guard();
+            } else {
+                mutex_unlock(m);
+                false;
+            };
+        },
+        release: function() {
+            mutex_lock(m);
+            count = count + 1;
+            condvar_signal(cv);
+            mutex_unlock(m);
+        },
+        get_count: function() count,
+        __type__: '__semaphore__
+    );
+};

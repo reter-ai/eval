@@ -1,0 +1,17 @@
+#define LTOK_RULE_NAME                        1
+#define LTOK_TERM_NAME                        2
+#define LTOK_STRING                           3
+#define LTOK_REGEX                            4
+#define LTOK_ARROW                            5
+#define LTOK_COLON                            6
+#define LTOK_PIPE                             7
+#define LTOK_QUESTION                         8
+#define LTOK_STAR                             9
+#define LTOK_PLUS                            10
+#define LTOK_LPAREN                          11
+#define LTOK_RPAREN                          12
+#define LTOK_DOT                             13
+#define LTOK_NUMBER                          14
+#define LTOK_PERCENT_IGNORE                  15
+#define LTOK_NEWLINE                         16
+#define LTOK_TILDE                           17

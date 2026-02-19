@@ -13,16 +13,16 @@ This document explains how green threads work at the lowest level in chibi-schem
 │  │                                             │    │
 │  │  fuel counter: 500 instructions per slice   │    │
 │  │                                             │    │
-│  │  ┌──────┐  ┌──────┐  ┌──────┐  ┌──────┐   │    │
-│  │  │ ctx0 │  │ ctx1 │  │ ctx2 │  │ ctx3 │   │    │
-│  │  │(root)│  │(thrd)│  │(thrd)│  │(thrd)│   │    │
-│  │  │stack │  │stack │  │stack │  │stack │   │    │
-│  │  │ip    │  │ip    │  │ip    │  │ip    │   │    │
-│  │  │dk    │  │dk    │  │dk    │  │dk    │   │    │
-│  │  │params│  │params│  │params│  │params│   │    │
-│  │  └──────┘  └──────┘  └──────┘  └──────┘   │    │
-│  │       ▲         │          │         │     │    │
-│  │       └─────────┴──────────┴─────────┘     │    │
+│  │    ┌──────┐  ┌──────┐  ┌──────┐  ┌──────┐   │    │
+│  │    │ ctx0 │  │ ctx1 │  │ ctx2 │  │ ctx3 │   │    │
+│  │    │(root)│  │(thrd)│  │(thrd)│  │(thrd)│   │    │
+│  │    │stack │  │stack │  │stack │  │stack │   │    │
+│  │    │ip    │  │ip    │  │ip    │  │ip    │   │    │
+│  │    │dk    │  │dk    │  │dk    │  │dk    │   │    │
+│  │    │params│  │params│  │params│  │params│   │    │
+│  │    └──────┘  └──────┘  └──────┘  └──────┘   │    │
+│  │       ▲         │          │         │      │    │
+│  │       └─────────┴──────────┴─────────┘      │    │
 │  │              round-robin queue              │    │
 │  │                                             │    │
 │  │  Scheduler: sexp_scheduler() in threads.c   │    │
@@ -625,6 +625,8 @@ sexp sexp_condition_variable_signal (sexp ctx, ..., sexp condvar) {
 ```
 
 All synchronization is cooperative — there are no OS-level locks. A mutex is just a Scheme record with a boolean flag. Blocking means "put this context on the paused list." The scheduler later moves it back when the mutex is unlocked.
+
+For higher-level OO wrappers with RAII (`Mutex`, `Monitor`, `ReadWriteLock`, `Semaphore`), see [MULTITHREADING.md](MULTITHREADING.md).
 
 ## 13. Thread Termination
 

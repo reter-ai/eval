@@ -34,3 +34,4 @@ Thumbs.db
 NUL
 .reter_code/
 build_standalone/
+vcpkg_installed/

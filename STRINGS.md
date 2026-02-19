@@ -1,4 +1,48 @@
-# String Methods
+# Strings
+
+## String Literals
+
+Eval supports two forms of string literal:
+
+### Regular strings
+
+Delimited by double quotes. Escape sequences are processed: `\n` `\t` `\r` `\\` `\"` `\0`.
+
+```
+"hello world"
+"line one\nline two"
+"she said \"hi\""
+```
+
+### Triple-quoted strings `"""..."""`
+
+Delimited by three double quotes. Literal newlines and embedded `"` quotes are allowed without escaping, making multiline content much more readable:
+
+```
+"""hello world"""
+
+"""line one
+line two"""
+
+"""she said "hi" to me"""
+```
+
+Triple-quoted strings are **raw** — no escape processing. Backslash sequences like `\n`, `\t`, `\s` are kept as literal characters. This makes them ideal for regex patterns, grammars, and structured text where backslashes are common. Use regular strings when you need escape sequences like `\n` for newline.
+
+Triple-quoted strings are especially useful for embedding grammars, code templates, or structured text:
+
+```
+define g = Grammar("""
+    start: expr
+    ?expr: expr "+" term -> add
+         | term
+    ?term: NUMBER
+    NUMBER: /[0-9]+/
+    %ignore /\s+/
+""");
+```
+
+## String Methods
 
 Eval provides Python/JS-style OO string methods via the `->` operator. Every string supports property access and method calls that chain naturally:
 

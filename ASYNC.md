@@ -366,6 +366,8 @@ pool_shutdown(pool);
 
 **Mix both** when you need both: use the thread pool for heavy computation, and `async` within each worker or the main thread for lightweight concurrent coordination. For example, a `TcpServer` can dispatch CPU-bound work to a thread pool while handling I/O with green threads.
 
+**For shared-state synchronization** between green threads, use the OO wrappers: `Mutex`, `Monitor`, `ReadWriteLock`, `Semaphore` — all support RAII via `with`. See [MULTITHREADING.md](MULTITHREADING.md) for the full guide.
+
 ### Proving True Parallelism
 
 Thread pools use real OS threads, so CPU-bound work runs faster in parallel:

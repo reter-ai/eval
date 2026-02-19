@@ -25,12 +25,13 @@ e.eval("""
 
 ## Features
 
-- **Infix syntax** — familiar C-style expressions with `define`, `let`, `if/else`, `while`, `for`, `{ blocks }`
+- **Infix syntax** — familiar C-style expressions with `define`, `let`, `if/else`, `while`, `for`, `{ blocks }`, `"""raw triple-quoted strings"""`
 - **First-class functions** — closures, higher-order functions, `map`, `filter`, `fold`
 - **Generators** — lazy sequences with `yield`, generator comprehensions, infinite streams, lazy pipelines
 - **Reactive programming** — signals, computed values, effects, scopes, async resources
 - **Continuations** — `callcc`, serializable to bytes for checkpointing and migration
 - **Green threads** — cooperative multitasking with fuel-based VM scheduling
+- **Synchronization** — OO wrappers: Mutex, Monitor, ReadWriteLock, Semaphore with RAII lock management
 - **Thread pool** — true OS-level parallelism with worker threads, futures, and channels
 - **String methods** — OO-style `"hello"->upper()`, `->trim()`, `->split(",")`, `->contains()`, chaining
 - **Collection methods** — OO-style `[1,2,3]->map(f)`, `->filter()`, `->sort(<)`, `->join(",")`, `#[1,2,3]->length`
@@ -605,9 +606,15 @@ define t2 = make_thread(inc);
 thread_start(t1); thread_start(t2);
 thread_join(t1); thread_join(t2);
 counter;    // => 100
+
+// OO mutex with RAII — lock released automatically
+define m2 = Mutex();
+with(guard = m2->lock()) {
+    // critical section
+};
 ```
 
-See [`examples/green_threads/`](examples/green_threads/) for complete demos, [THREADS.md](THREADS.md) for the full green threads and continuations guide, [ASYNC.md](ASYNC.md) for the async programming guide, [NETWORKING.md](NETWORKING.md) for the networking guide, and [LISTS.md](LISTS.md)/[VECTORS.md](VECTORS.md) for collection methods.
+See [`examples/green_threads/`](examples/green_threads/) for complete demos, [THREADS.md](THREADS.md) for the full green threads and continuations guide, [MULTITHREADING.md](MULTITHREADING.md) for OO synchronization wrappers, [ASYNC.md](ASYNC.md) for the async programming guide, [NETWORKING.md](NETWORKING.md) for the networking guide, and [LISTS.md](LISTS.md)/[VECTORS.md](VECTORS.md) for collection methods.
 
 ## Reactive programming
 
@@ -806,7 +813,7 @@ Block until the worker finishes, then return the result. Raises `EvalError` on f
 
 Send or receive values through a channel. `recv()` blocks until a value is available. `try_recv()` returns `(ok, value)` without blocking — `ok` is `True` if a value was received.
 
-See [ASYNC.md](ASYNC.md) for the full async programming guide, [THREADS.md](THREADS.md) for the complete threads and continuations guide, [GENERATORS.md](GENERATORS.md) for generators and lazy sequences, [NETWORKING.md](NETWORKING.md) for TCP/HTTP networking, [FILESYS.md](FILESYS.md) for filesystem operations, and [LISTS.md](LISTS.md)/[VECTORS.md](VECTORS.md) for collection methods.
+See [ASYNC.md](ASYNC.md) for the full async programming guide, [THREADS.md](THREADS.md) for the complete threads and continuations guide, [MULTITHREADING.md](MULTITHREADING.md) for OO synchronization wrappers, [GENERATORS.md](GENERATORS.md) for generators and lazy sequences, [NETWORKING.md](NETWORKING.md) for TCP/HTTP networking, [FILESYS.md](FILESYS.md) for filesystem operations, [LISTS.md](LISTS.md)/[VECTORS.md](VECTORS.md) for collection methods, and [TESTS.md](TESTS.md) for the built-in test framework.
 
 ## Scheme-to-Eval transpiler
 

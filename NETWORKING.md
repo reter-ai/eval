@@ -549,6 +549,36 @@ define handle_connection = function(conn) {
 };
 ```
 
+## Synchronization with networking
+
+When multiple green threads access shared state (e.g., server request handlers modifying a shared cache), use OO synchronization wrappers for safe coordination:
+
+```
+define cache = dict();
+define rwl = ReadWriteLock();
+
+define server = TcpServer(8080, function(sock, addr, port) {
+    define data = sock->recv(4096);
+    define key = parse_key(data);
+
+    // Multiple readers can look up the cache concurrently
+    define value = with(guard = rwl->read_lock()) {
+        cache->get(key);
+    };
+
+    when(!value) {
+        // Exclusive write access to update the cache
+        with(guard = rwl->write_lock()) {
+            cache->set(key, compute_value(key));
+        };
+    };
+
+    sock->send("OK");
+});
+```
+
+See [MULTITHREADING.md](MULTITHREADING.md) for the complete guide to `Mutex`, `Monitor`, `ReadWriteLock`, and `Semaphore`.
+
 ## Constants reference
 
 ### Address families

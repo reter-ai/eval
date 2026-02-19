@@ -200,6 +200,28 @@ static int lex_string(EvalLexer *lexer, EvalToken *token) {
     const char *start = lexer->current;
     advance(lexer); /* consume opening quote */
 
+    /* Triple-quoted raw string: """...""" — no escape processing */
+    if (peek(lexer) == '"' && peek_next(lexer) == '"') {
+        advance(lexer); /* second " */
+        advance(lexer); /* third " */
+        const char *content_start = lexer->current;
+        while (peek(lexer) != '\0') {
+            if (peek(lexer) == '"'
+                && *(lexer->current + 1) == '"'
+                && *(lexer->current + 2) == '"') {
+                token->type = TOK_RAW_STRING;
+                token->start = content_start;
+                token->length = (int)(lexer->current - content_start);
+                advance(lexer); advance(lexer); advance(lexer);
+                return 0;
+            }
+            advance(lexer);
+        }
+        lexer_error(lexer, "unterminated triple-quoted string");
+        return -1;
+    }
+
+    /* Regular single-quoted string */
     while (peek(lexer) != '\0' && peek(lexer) != '"') {
         if (peek(lexer) == '\\') {
             advance(lexer); /* consume backslash */
