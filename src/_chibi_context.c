@@ -293,6 +293,10 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
     sexp_load_module_file(self->ctx, "eval/async.scm", self->env);
     self->env = sexp_context_env(self->ctx);
 
+    /* Generator runtime */
+    sexp_load_module_file(self->ctx, "eval/generator.scm", self->env);
+    self->env = sexp_context_env(self->ctx);
+
     /* OO wrappers: Channel-wrap, Future-wrap, Pool (Eval syntax) */
     {
         extern void eval_load_eval_file(sexp ctx, sexp env, const char *path);

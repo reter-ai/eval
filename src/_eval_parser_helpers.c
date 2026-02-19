@@ -1018,10 +1018,15 @@ sexp ps_make_dict(sexp ctx, sexp entries) {
     sexp p = entries;
     while (sexp_pairp(p)) {
         sexp entry = sexp_car(p);
-        sexp key = sexp_car(entry);    /* symbol */
+        sexp key = sexp_car(entry);    /* symbol or expr */
         sexp val = sexp_cdr(entry);    /* expr */
-        sexp quoted_key = sexp_list2(ctx, ps_intern(ctx, "quote"), key);
-        sexp cons_form = sexp_list3(ctx, ps_intern(ctx, "cons"), quoted_key, val);
+        sexp key_form;
+        if (sexp_symbolp(key)) {
+            key_form = sexp_list2(ctx, ps_intern(ctx, "quote"), key);
+        } else {
+            key_form = key;
+        }
+        sexp cons_form = sexp_list3(ctx, ps_intern(ctx, "cons"), key_form, val);
         items = sexp_cons(ctx, cons_form, items);
         p = sexp_cdr(p);
     }
@@ -1035,6 +1040,12 @@ sexp ps_make_dict(sexp ctx, sexp entries) {
 
     sexp list_form = sexp_cons(ctx, ps_intern(ctx, "list"), reversed);
     return sexp_list2(ctx, dict_fn, list_form);
+}
+
+/* Build dict comprehension: wraps list comprehension result in __make_eval_dict__ */
+sexp ps_make_dict_comp(sexp ctx, sexp body, sexp clauses) {
+    sexp list_expr = ps_make_list_comp(ctx, body, clauses);
+    return sexp_list2(ctx, ps_intern(ctx, "__make_eval_dict__"), list_expr);
 }
 
 /* Build (define-library (name...) body-forms...)
@@ -1220,6 +1231,141 @@ sexp ps_expr_safe(sexp ctx, sexp expr) {
 
     sexp_gc_release5(ctx);
     return result;
+}
+
+/* Build list comprehension:
+   [body for x in xs]            → (__comp_map__ (lambda (x) body) xs)
+   [body for x in xs if p]       → (__comp_map__ (lambda (x) body) (__comp_filter__ (lambda (x) p) xs))
+   [body for x in xs for y in ys] → (__comp_append_map__ (lambda (x) (__comp_map__ ...)) xs)
+   Uses polymorphic helpers that accept both list and generator sources.
+   Clauses list: each element is (var . iter) for for-clauses, (#f . cond) for if-clauses. */
+sexp ps_make_list_comp(sexp ctx, sexp body, sexp clauses) {
+    /* Step 1: Attach if-conditions to preceding for-clause iterators
+       via filter wrapping. Build list of (var . effective_iter) pairs. */
+    sexp for_groups = SEXP_NULL;
+    sexp current_var = SEXP_FALSE, current_iter = SEXP_FALSE;
+    sexp p = clauses;
+    while (sexp_pairp(p)) {
+        sexp clause = sexp_car(p);
+        if (sexp_car(clause) != SEXP_FALSE) {
+            /* for-clause: push previous group, start new */
+            if (current_var != SEXP_FALSE)
+                for_groups = sexp_cons(ctx,
+                    sexp_cons(ctx, current_var, current_iter), for_groups);
+            current_var = sexp_car(clause);
+            current_iter = sexp_cdr(clause);
+        } else {
+            /* if-clause: wrap current_iter in __comp_filter__ */
+            sexp lam = sexp_list3(ctx, ps_intern(ctx, "lambda"),
+                           sexp_list1(ctx, current_var), sexp_cdr(clause));
+            current_iter = sexp_list3(ctx, ps_intern(ctx, "__comp_filter__"),
+                               lam, current_iter);
+        }
+        p = sexp_cdr(p);
+    }
+    if (current_var != SEXP_FALSE)
+        for_groups = sexp_cons(ctx,
+            sexp_cons(ctx, current_var, current_iter), for_groups);
+
+    /* for_groups is reversed: innermost first.
+       Step 2: Build nested __comp_map__/__comp_append_map__ from innermost to outermost. */
+    sexp result = body;
+    int first = 1;
+    p = for_groups;
+    while (sexp_pairp(p)) {
+        sexp var = sexp_car(sexp_car(p));
+        sexp iter = sexp_cdr(sexp_car(p));
+        sexp lam = sexp_list3(ctx, ps_intern(ctx, "lambda"),
+                       sexp_list1(ctx, var), result);
+        if (first) {
+            result = sexp_list3(ctx, ps_intern(ctx, "__comp_map__"), lam, iter);
+            first = 0;
+        } else {
+            result = sexp_list3(ctx, ps_intern(ctx, "__comp_append_map__"), lam, iter);
+        }
+        p = sexp_cdr(p);
+    }
+    return result;
+}
+
+/* Build generator function:
+   (lambda (params) (make-coroutine-generator (lambda (__yield__)
+     (call-with-current-continuation (lambda (__return__) body))))) */
+sexp ps_make_generator(sexp ctx, sexp params, sexp body) {
+    sexp yield_sym = ps_intern(ctx, "__yield__");
+    sexp return_sym = ps_intern(ctx, "__return__");
+    /* (call-with-current-continuation (lambda (__return__) body)) */
+    sexp ret_lambda = sexp_list3(ctx, ps_intern(ctx, "lambda"),
+                          sexp_list1(ctx, return_sym), body);
+    sexp callcc = sexp_list2(ctx, ps_intern(ctx, "call-with-current-continuation"),
+                             ret_lambda);
+    /* (make-coroutine-generator (lambda (__yield__) callcc)) */
+    sexp yield_lambda = sexp_list3(ctx, ps_intern(ctx, "lambda"),
+                            sexp_list1(ctx, yield_sym), callcc);
+    sexp gen = sexp_list2(ctx, ps_intern(ctx, "make-coroutine-generator"),
+                          yield_lambda);
+    return sexp_list3(ctx, ps_intern(ctx, "lambda"), params, gen);
+}
+
+/* Build generator function with rest params */
+sexp ps_make_generator_rest(sexp ctx, sexp params, sexp rest, sexp body) {
+    sexp dotted;
+    if (sexp_nullp(params)) {
+        dotted = rest;
+    } else {
+        dotted = params;
+        sexp p = params;
+        while (!sexp_nullp(sexp_cdr(p)) && sexp_pairp(sexp_cdr(p)))
+            p = sexp_cdr(p);
+        sexp_cdr(p) = rest;
+    }
+    sexp yield_sym = ps_intern(ctx, "__yield__");
+    sexp return_sym = ps_intern(ctx, "__return__");
+    sexp ret_lambda = sexp_list3(ctx, ps_intern(ctx, "lambda"),
+                          sexp_list1(ctx, return_sym), body);
+    sexp callcc = sexp_list2(ctx, ps_intern(ctx, "call-with-current-continuation"),
+                             ret_lambda);
+    sexp yield_lambda = sexp_list3(ctx, ps_intern(ctx, "lambda"),
+                            sexp_list1(ctx, yield_sym), callcc);
+    sexp gen = sexp_list2(ctx, ps_intern(ctx, "make-coroutine-generator"),
+                          yield_lambda);
+    return sexp_list3(ctx, ps_intern(ctx, "lambda"), dotted, gen);
+}
+
+/* Build generator comprehension:
+   (make-coroutine-generator (lambda (__yield__)
+     (__gen_for_each__ (lambda (x) (__yield__ body)) xs))) */
+sexp ps_make_gen_comp(sexp ctx, sexp body, sexp clauses) {
+    sexp yield_sym = ps_intern(ctx, "__yield__");
+    sexp gfe = ps_intern(ctx, "__gen_for_each__");
+
+    /* Collect clauses into array for reverse processing */
+    sexp arr[64];
+    int n = 0;
+    sexp p = clauses;
+    while (sexp_pairp(p) && n < 64) {
+        arr[n++] = sexp_car(p);
+        p = sexp_cdr(p);
+    }
+
+    /* Build from innermost to outermost */
+    sexp result = sexp_list2(ctx, yield_sym, body);  /* (__yield__ body) */
+    for (int i = n - 1; i >= 0; i--) {
+        sexp clause = arr[i];
+        if (sexp_car(clause) == SEXP_FALSE) {
+            /* if-clause: (if cond result) */
+            result = sexp_list3(ctx, ps_intern(ctx, "if"), sexp_cdr(clause), result);
+        } else {
+            /* for-clause: (__gen_for_each__ (lambda (var) result) iter) */
+            sexp lam = sexp_list3(ctx, ps_intern(ctx, "lambda"),
+                           sexp_list1(ctx, sexp_car(clause)), result);
+            result = sexp_list3(ctx, gfe, lam, sexp_cdr(clause));
+        }
+    }
+    /* (make-coroutine-generator (lambda (__yield__) result)) */
+    sexp inner = sexp_list3(ctx, ps_intern(ctx, "lambda"),
+                     sexp_list1(ctx, yield_sym), result);
+    return sexp_list2(ctx, ps_intern(ctx, "make-coroutine-generator"), inner);
 }
 
 /* Build (ref obj index) */

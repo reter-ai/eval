@@ -136,6 +136,19 @@ sexp ps_expr_safe(sexp ctx, sexp expr);
 sexp ps_intern_op(sexp ctx, int token_type);
 sexp ps_make_include(sexp ctx, sexp string_list);
 sexp ps_make_dict(sexp ctx, sexp entries);
+sexp ps_make_dict_comp(sexp ctx, sexp body, sexp clauses);
+
+/* Build list comprehension from body expr and clause list */
+sexp ps_make_list_comp(sexp ctx, sexp body, sexp clauses);
+
+/* Build generator function: (lambda (params) (make-coroutine-generator ...)) */
+sexp ps_make_generator(sexp ctx, sexp params, sexp body);
+
+/* Build generator function with rest params */
+sexp ps_make_generator_rest(sexp ctx, sexp params, sexp rest, sexp body);
+
+/* Build generator comprehension: (make-coroutine-generator (lambda (__yield__) ...)) */
+sexp ps_make_gen_comp(sexp ctx, sexp body, sexp clauses);
 
 /* Build (ref obj index) for indexing */
 sexp ps_make_ref(sexp ctx, sexp obj, sexp index);

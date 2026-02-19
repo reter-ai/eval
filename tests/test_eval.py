@@ -314,7 +314,7 @@ class TestDict:
     def test_empty(self, e):
         e.eval("define d = dict();")
         assert e.eval("dict?(d);") is True
-        assert e.eval("d->size();") == 0
+        assert e.eval("d->size;") == 0
 
     def test_get(self, e):
         e.eval('define d = dict(name: "Alice");')
@@ -333,13 +333,13 @@ class TestDict:
         e.eval('d->delete("a");')
         assert e.eval('d->has?("a");') is False
         assert e.eval('d->has?("b");') is True
-        assert e.eval("d->size();") == 1
+        assert e.eval("d->size;") == 1
 
     def test_keys_values_size(self, e):
         e.eval("define d = dict(a: 1, b: 2, c: 3);")
-        assert e.eval("d->size();") == 3
-        assert e.eval("`length`(d->keys());") == 3
-        assert e.eval("`length`(d->values());") == 3
+        assert e.eval("d->size;") == 3
+        assert e.eval("`length`(d->keys);") == 3
+        assert e.eval("`length`(d->values);") == 3
 
     def test_nested(self, e):
         e.eval("define d = dict(inner: dict(v: 42));")

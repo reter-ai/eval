@@ -135,6 +135,8 @@ static const Keyword keywords[] = {
     {"define",      TOK_DEFINE},
     {"static",      TOK_STATIC},
     {"abstract",    TOK_ABSTRACT},
+    {"yield",       TOK_YIELD},
+    {"generator",   TOK_GENERATOR},
     {"true",        TOK_TRUE},
     {"false",       TOK_FALSE},
     {"nil",         TOK_NIL},
@@ -689,6 +691,8 @@ const char *eval_token_name(int type) {
     case TOK_DEFINE:        return "define";
     case TOK_OPVAL:         return "OPVAL";
     case TOK_ABSTRACT:      return "abstract";
+    case TOK_YIELD:         return "yield";
+    case TOK_GENERATOR:     return "generator";
     default:                return "UNKNOWN";
     }
 }

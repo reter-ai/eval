@@ -1188,6 +1188,10 @@ static void eval_standard_aliases(sexp ctx, sexp env) {
     sexp_load_module_file(ctx, "eval/async.scm", env);
     env = sexp_context_env(ctx);
 
+    /* Generator runtime */
+    sexp_load_module_file(ctx, "eval/generator.scm", env);
+    env = sexp_context_env(ctx);
+
     /* OO string methods: "hello"->upper(), etc. */
     sexp_load_module_file(ctx, "eval/string-oo.scm", env);
     env = sexp_context_env(ctx);

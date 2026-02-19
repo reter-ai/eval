@@ -1,0 +1,101 @@
+test_begin("Generators");
+
+// Basic generator function
+define count = generator(n) {
+    for(let i = 0, i < n, i++)
+        yield i;
+};
+define g = count(3);
+test("gen 1st", 0, g());
+test("gen 2nd", 1, g());
+test("gen 3rd", 2, g());
+test("gen eof", true, eof?(g()));
+test("gen eof2", true, eof?(g()));
+
+// collect
+test("collect", [0, 1, 2, 3, 4], collect(count(5)));
+test("collect empty", [], collect(count(0)));
+
+// return = early termination
+define take_pos = generator(xs) {
+    for(let x in xs) {
+        if(x < 0) return nil;
+        yield x;
+    };
+};
+test("gen return", [1, 2, 3], collect(take_pos([1, 2, 3, -1, 4, 5])));
+
+// Generator comprehension (parenthesized)
+test("gencomp basic", [2, 4, 6], collect((x * 2 for x in [1, 2, 3])));
+test("gencomp filter", [4, 6], collect((x * 2 for x in [1, 2, 3] if x > 1)));
+test("gencomp nested", [4, 5, 5, 6], collect((x + y for x in [1, 2] for y in [3, 4])));
+test("gencomp empty", [], collect((x for x in [])));
+
+// Generator from generator (lazy pipeline)
+define g1 = (x * 2 for x in [1, 2, 3, 4, 5]);
+define g2 = (x + 100 for x in g1);
+test("gen from gen", [102, 104, 106, 108, 110], collect(g2));
+
+// Generator with generator function as source
+define squares = generator(n) {
+    for(let i = 1, i <= n, i++)
+        yield i * i;
+};
+test("gen pipeline", [1, 4, 9], collect((x for x in squares(5) if x < 10)));
+
+// Laziness: only computes values on demand
+define counter = 0;
+define lazy = ({ counter++; x } for x in [1, 2, 3, 4, 5]);
+lazy();
+lazy();
+test("lazy eval", 2, counter);
+
+// Infinite generator
+define naturals = generator() {
+    define i = 0;
+    while(true) {
+        yield i;
+        i++;
+    };
+};
+define ng = naturals();
+test("inf 0", 0, ng());
+test("inf 1", 1, ng());
+test("inf 2", 2, ng());
+test("inf 99", 99, { for(let i = 0, i < 96, i++) ng(); ng() });
+
+// Closures in generators
+define fib_gen = generator() {
+    define a = 0;
+    define b = 1;
+    while(true) {
+        yield a;
+        define temp = a + b;
+        a = b;
+        b = temp;
+    };
+};
+define fg = fib_gen();
+test("fib 0", 0, fg());
+test("fib 1", 1, fg());
+test("fib 2", 1, fg());
+test("fib 3", 2, fg());
+test("fib 4", 3, fg());
+test("fib 5", 5, fg());
+
+// List comprehension from generator source
+test("listcomp from gen", [0, 2, 4, 6, 8], [x * 2 for x in count(5)]);
+test("listcomp gen filter", [6, 8], [x * 2 for x in count(5) if x > 2]);
+
+// Vector comprehension from generator source
+test("veccomp from gen", #[0, 1, 4, 9, 16], #[x * x for x in count(5)]);
+
+// Dict comprehension from generator source
+define d = dict(x: x * x for x in count(4));
+test("dictcomp from gen keys", [0, 1, 4, 9], [d->get(0), d->get(1), d->get(2), d->get(3)]);
+
+// List comprehension from generator comprehension source
+test("listcomp from gencomp", [2, 4, 6],
+    [x for x in (x * 2 for x in [1, 2, 3])]);
+
+test_end();

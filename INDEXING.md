@@ -95,6 +95,20 @@ Strings support brackets and string arrow methods, but not all the same names:
 
 Note: strings don't have `->first`/`->second`/`->rest` — they have their own method set (see [STRINGS.md](STRINGS.md)).
 
+### Dict equivalences
+
+Dicts use string keys with bracket indexing, not integer indices:
+
+| Bracket | Arrow | Method | Description |
+|---------|-------|--------|-------------|
+| `d["name"]` | `d->name` | `d->get("name")` | Lookup by key |
+| `d["missing"]` | `d->missing` | `d->get("missing")` | Missing key → `false` |
+| — | — | `d->get("key", default)` | Lookup with default *(method only)* |
+
+All three forms auto-convert string keys to symbols. Bracket and arrow return `false` for missing keys; `->get` accepts an optional default.
+
+See [DICTS.md](DICTS.md) for the complete dict method reference.
+
 ## When to use which
 
 ### Use brackets `[]` when:
@@ -252,7 +266,7 @@ The `ref` function supports negative indices on all types. The `slice` function 
 | `xs[s:]` | `(slice xs s #f)` | From `s` to end |
 | `xs[:]` | `(slice xs 0 #f)` | Full copy |
 
-Works on: lists, vectors, strings.
+Works on: lists, vectors, strings. For dicts, `d["key"]` does hash-table lookup (see [DICTS.md](DICTS.md)).
 
 ### Arrow properties (no parentheses)
 
@@ -276,4 +290,4 @@ Works on: lists, vectors, strings.
 | `->drop(n)` | `xs[n:]` | Skip first `n` elements |
 | `->copy()` | `xs[:]` | Full copy |
 
-See [LISTS.md](LISTS.md), [VECTORS.md](VECTORS.md), and [STRINGS.md](STRINGS.md) for the complete method references.
+See [LISTS.md](LISTS.md), [VECTORS.md](VECTORS.md), [STRINGS.md](STRINGS.md), and [DICTS.md](DICTS.md) for the complete method references.

@@ -8,7 +8,7 @@ Eval provides Python/JS-style OO methods on lists via the `->` operator. Every l
 ["a", "b", "c"]->join(",");                     // => "a,b,c"
 ```
 
-The `->` operator dispatches by type: lists get list methods, vectors get vector methods (see [VECTORS.md](VECTORS.md)), strings get string methods (see [STRINGS.md](STRINGS.md)), and all other types (interfaces, constructors, records, dicts) work as before.
+The `->` operator dispatches by type: lists get list methods, vectors get vector methods (see [VECTORS.md](VECTORS.md)), strings get string methods (see [STRINGS.md](STRINGS.md)), dicts get dict methods (see [DICTS.md](DICTS.md)), and all other types (interfaces, constructors, records) work as before.
 
 ## Properties
 
@@ -72,10 +72,21 @@ Methods return a closure that you call with `()`. Most return a new list, enabli
 | `->map(fn)` | list | Transform each element with `fn` |
 | `->filter(fn)` | list | Keep elements where `fn` returns true |
 | `->reject(fn)` | list | Remove elements where `fn` returns true |
+| `->filter_map(fn)` | list | Map + filter: keep non-false results of `fn` |
 | `->reverse()` | list | Reversed copy |
 | `->flatten()` | list | Flatten one level of nesting |
 | `->unique()` | list | Remove duplicate elements |
+| `->delete(x)` | list | Remove all occurrences of `x` (by `equal?`) |
 | `->copy()` | list | Shallow copy |
+
+```
+// filter_map: map and filter in one pass
+[1, 2, 3, 4]->filter_map(function(x) if(x > 2) x * 10 else false);
+// => [30, 40]
+
+// delete: remove all occurrences of a value
+[1, 2, 3, 2, 1]->delete(2);    // => [1, 3, 1]
+```
 
 ### Folding
 
@@ -89,8 +100,15 @@ Methods return a closure that you call with `()`. Most return a new list, enabli
 |--------|---------|-------------|
 | `->fold(fn, init)` | any | Left fold: `fn(element, accumulator)` |
 | `->fold_right(fn, init)` | any | Right fold: `fn(element, accumulator)` |
+| `->reduce(fn)` | any | Left fold using first element as init (error on empty) |
+| `->reduce_right(fn)` | any | Right fold using last element as init (error on empty) |
 
 Note: `fold` follows SRFI-1 conventions where the combining function takes `(element, accumulator)`.
+
+```
+[1, 2, 3, 4, 5]->reduce(+);       // => 15 (no initial value needed)
+[1, 2, 3, 4, 5]->reduce_right(+); // => 15
+```
 
 ### Searching
 
@@ -134,6 +152,17 @@ Note: `->index_of` takes a predicate, not a value. To find the index of a specif
 | `->drop(n)` | list | All but first `n` elements |
 | `->take_while(pred)` | list | Leading elements while `pred` is true |
 | `->drop_while(pred)` | list | Skip leading elements while `pred` is true |
+| `->take_right(n)` | list | Last `n` elements |
+| `->drop_right(n)` | list | All but last `n` elements |
+| `->split_at(n)` | [list, list] | Split at position: `[first_n, rest]` |
+| `->span(pred)` | [list, list] | Split where predicate becomes false: `[head, tail]` |
+
+```
+[1, 2, 3, 4, 5]->take_right(2);                         // => [4, 5]
+[1, 2, 3, 4, 5]->drop_right(2);                         // => [1, 2, 3]
+[1, 2, 3, 4, 5]->split_at(3);                           // => [[1, 2, 3], [4, 5]]
+[1, 2, 3, 4, 5]->span(function(x) x < 3);              // => [[1, 2], [3, 4, 5]]
+```
 
 ### Sorting and combining
 
@@ -305,3 +334,11 @@ v->a;                                   // => 1
 | `->join(sep)` | string | Join with separator |
 | `->to_vector()` | vector | Convert to vector |
 | `->copy()` | list | Shallow copy |
+| `->take_right(n)` | list | Last n elements |
+| `->drop_right(n)` | list | All but last n elements |
+| `->split_at(n)` | [list, list] | Split at position |
+| `->span(pred)` | [list, list] | Split where predicate changes |
+| `->filter_map(fn)` | list | Map + filter (keep non-false) |
+| `->reduce(fn)` | any | Left fold (no init, error if empty) |
+| `->reduce_right(fn)` | any | Right fold (no init, error if empty) |
+| `->delete(x)` | list | Remove all occurrences of x |

@@ -70,5 +70,17 @@
                               #f
                               (string-cursor-ref obj c)))))
         ((eq? msg 'copy)       (lambda () (string-copy obj)))
+        ((eq? msg 'find_right) (lambda (pred)
+                        (let ((c (string-find-right obj pred)))
+                          (if (string-cursor<=? c (string-cursor-start obj))
+                              #f
+                              (string-cursor-ref obj
+                                (string-cursor-prev obj c))))))
+        ((eq? msg 'skip)       (lambda (pred)
+                        (let ((c (string-skip obj pred)))
+                          (if (string-cursor>=? c (string-cursor-end obj))
+                              #f
+                              (string-cursor-ref obj c)))))
+        ((eq? msg 'fold_right) (lambda (fn init) (string-fold-right fn init obj)))
         (else (error "unknown string method" msg)))
       (obj msg)))

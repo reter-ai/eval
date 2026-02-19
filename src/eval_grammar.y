@@ -49,11 +49,11 @@
 %left STAR SLASH PERCENT.
 %right STARSTAR.
 %right UMINUS BANG BITNOT BANGBANG QUOTE_PREC.
-%left LPAREN LBRACKET ARROW PLUSPLUS MINUSMINUS.
+%left LPAREN LBRACKET ARROW PLUSPLUS MINUSMINUS FOR.
 %nonassoc RPAREN COMMA DOTDOT RBRACKET RBRACE SEMICOLON COLON.
 /* Additional keyword tokens recognized by the lexer.
    Declaring them here makes lemon generate their TOK_ defines. */
-%token LIBRARY EXPORT INCLUDE MACRO SYNTAX_RULES OPVAL TEST_GROUP DEFINE IN DICT WITH ASYNC AWAIT STATIC ABSTRACT.
+%token LIBRARY EXPORT INCLUDE MACRO SYNTAX_RULES OPVAL TEST_GROUP DEFINE IN DICT WITH ASYNC AWAIT STATIC ABSTRACT YIELD GENERATOR.
 
 /* Non-terminal types - all are sexp */
 %type program { sexp }
@@ -78,11 +78,15 @@
 %type string_list { sexp }
 %type sr_clauses { sexp }
 %type sr_pattern { sexp }
+%type comp_clauses { sexp }
+%type dict_entries { sexp }
 %type member_name { EvalToken }
 
 /* ===== PROGRAM ===== */
 
 program ::= stmt_list(L). { state->result = L; }
+program ::= stmt_list(L) expr(E). [ARGLIST_PREC] { state->result = ps_sexp_begin(ctx, L, E); }
+program ::= expr(E). [ARGLIST_PREC] { state->result = E; }
 program ::= . { state->result = SEXP_VOID; }
 
 /* ===== STATEMENT LIST ===== */
@@ -238,6 +242,8 @@ member_name(A) ::= ASYNC(T).  { A = T; }
 member_name(A) ::= AWAIT(T).  { A = T; }
 member_name(A) ::= STATIC(T). { A = T; }
 member_name(A) ::= ABSTRACT(T). { A = T; }
+member_name(A) ::= YIELD(T). { A = T; }
+member_name(A) ::= GENERATOR(T). { A = T; }
 
 /* --- Postfix: indexing expr[i] --- */
 expr(A) ::= expr(E) LBRACKET expr(I) RBRACKET. {
@@ -371,6 +377,31 @@ expr(A) ::= HASH_LBRACKET RBRACKET. {
     A = sexp_list1(ctx, ps_intern(ctx, "vector"));
 }
 
+/* --- List comprehension: [expr for x in xs], [expr for x in xs if cond] --- */
+expr(A) ::= LBRACKET expr(B) comp_clauses(C) RBRACKET. [ARGLIST_PREC] {
+    A = ps_make_list_comp(ctx, B, C);
+}
+
+/* --- Vector comprehension: #[expr for x in xs] --- */
+expr(A) ::= HASH_LBRACKET expr(B) comp_clauses(C) RBRACKET. [ARGLIST_PREC] {
+    A = sexp_list2(ctx, ps_intern(ctx, "list->vector"),
+                   ps_make_list_comp(ctx, B, C));
+}
+
+/* --- Comprehension clauses --- */
+comp_clauses(A) ::= FOR IDENT(V) IN expr(L). [ARGLIST_PREC] {
+    A = sexp_list1(ctx,
+        sexp_cons(ctx, ps_make_ident(ctx, V.start, V.length), L));
+}
+comp_clauses(A) ::= comp_clauses(C) FOR IDENT(V) IN expr(L). [ARGLIST_PREC] {
+    A = ps_append(ctx, C,
+        sexp_cons(ctx, ps_make_ident(ctx, V.start, V.length), L));
+}
+comp_clauses(A) ::= comp_clauses(C) IF expr(E). [ARGLIST_PREC] {
+    A = ps_append(ctx, C,
+        sexp_cons(ctx, SEXP_FALSE, E));
+}
+
 /* --- Function --- */
 expr(A) ::= FUNCTION LPAREN params(P) RPAREN expr(B). [ARGLIST_PREC] {
     A = ps_make_function(ctx, P, B);
@@ -424,6 +455,27 @@ expr(A) ::= BREAK. {
 }
 expr(A) ::= RETURN expr(E). [RETURN_PREC] {
     A = ps_make_return(ctx, E);
+}
+
+/* --- Yield --- */
+expr(A) ::= YIELD expr(E). [RETURN_PREC] {
+    A = sexp_list2(ctx, ps_intern(ctx, "__yield__"), E);
+}
+
+/* --- Generator function --- */
+expr(A) ::= GENERATOR LPAREN params(P) RPAREN expr(B). [ARGLIST_PREC] {
+    A = ps_make_generator(ctx, P, B);
+}
+expr(A) ::= GENERATOR LPAREN params_inner(P) DOTDOT IDENT(R) RPAREN expr(B). [ARGLIST_PREC] {
+    A = ps_make_generator_rest(ctx, P, ps_make_ident(ctx, R.start, R.length), B);
+}
+expr(A) ::= GENERATOR LPAREN DOTDOT IDENT(R) RPAREN expr(B). [ARGLIST_PREC] {
+    A = ps_make_generator_rest(ctx, SEXP_NULL, ps_make_ident(ctx, R.start, R.length), B);
+}
+
+/* --- Generator comprehension: (expr for x in xs) --- */
+expr(A) ::= LPAREN expr(B) comp_clauses(C) RPAREN. [ARGLIST_PREC] {
+    A = ps_make_gen_comp(ctx, B, C);
 }
 
 /* --- OOP --- */
@@ -583,11 +635,22 @@ expr(A) ::= RECORD IDENT(N) LPAREN field_list(F) RPAREN. {
 }
 
 /* --- Dict --- */
-expr(A) ::= DICT LPAREN iface_entries(E) RPAREN. {
+expr(A) ::= DICT LPAREN dict_entries(E) RPAREN. {
     A = ps_make_dict(ctx, E);
 }
 expr(A) ::= DICT LPAREN RPAREN. {
     A = ps_make_dict(ctx, SEXP_NULL);
+}
+
+/* --- Dict comprehension: dict(k: v for x in xs) --- */
+expr(A) ::= DICT LPAREN expr(K) COLON expr(V) comp_clauses(C) RPAREN. [ARGLIST_PREC] {
+    A = ps_make_dict_comp(ctx,
+        sexp_list3(ctx, ps_intern(ctx, "cons"), K, V), C);
+}
+
+/* --- Dict comprehension from pairs: dict(pair_expr for x in xs) --- */
+expr(A) ::= DICT LPAREN expr(E) comp_clauses(C) RPAREN. [ARGLIST_PREC] {
+    A = ps_make_dict_comp(ctx, E, C);
 }
 
 /* --- Test group --- */
@@ -641,6 +704,14 @@ ident_list(A) ::= ident_list(L) COMMA IDENT(N). {
 list_items(A) ::= expr(E). [ARGLIST_PREC] { A = sexp_list1(ctx, E); }
 list_items(A) ::= list_items(L) COMMA expr(E). {
     A = ps_append(ctx, L, E);
+}
+
+/* Dict entries: expr: expr, expr: expr */
+dict_entries(A) ::= expr(K) COLON expr(V). [ARGLIST_PREC] {
+    A = sexp_list1(ctx, sexp_cons(ctx, K, V));
+}
+dict_entries(A) ::= dict_entries(L) COMMA expr(K) COLON expr(V). {
+    A = ps_append(ctx, L, sexp_cons(ctx, K, V));
 }
 
 /* Interface entries: name: expr, name: expr */

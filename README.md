@@ -27,6 +27,7 @@ e.eval("""
 
 - **Infix syntax** — familiar C-style expressions with `define`, `let`, `if/else`, `while`, `for`, `{ blocks }`
 - **First-class functions** — closures, higher-order functions, `map`, `filter`, `fold`
+- **Generators** — lazy sequences with `yield`, generator comprehensions, infinite streams, lazy pipelines
 - **Reactive programming** — signals, computed values, effects, scopes, async resources
 - **Continuations** — `callcc`, serializable to bytes for checkpointing and migration
 - **Green threads** — cooperative multitasking with fuel-based VM scheduling
@@ -363,6 +364,32 @@ fold(+, 0, [1, 2, 3, 4, 5]);                  // => 15
 apply(+, [3, 4]);                              // => 7
 ```
 
+### Generators
+
+Lazy sequences with `yield` — values are computed on demand:
+
+```
+define count = generator(n) {
+    for(let i = 0, i < n, i++) yield i;
+};
+collect(count(5));  // => [0, 1, 2, 3, 4]
+
+// Generator comprehension (lazy)
+define doubled = (x * 2 for x in [1, 2, 3, 4, 5]);
+collect(doubled);   // => [2, 4, 6, 8, 10]
+
+// Lazy pipeline — no intermediate lists
+define g1 = (x * 2 for x in count(100));
+define g2 = (x + 1 for x in g1);
+g2();  // => 1  (only computes first value)
+
+// All comprehension types accept generators as sources
+[x * x for x in count(5)];        // => [0, 1, 4, 9, 16]
+dict(x: x * x for x in count(3)); // dict with 0:0, 1:1, 2:4
+```
+
+See [GENERATORS.md](GENERATORS.md) for the full guide including infinite generators, early termination, and compilation details.
+
 ### Error handling
 
 ```
@@ -680,7 +707,7 @@ user->settle();
 user();                  // => new user data
 ```
 
-See [REACTIVE.md](REACTIVE.md) for the full reactive programming guide, and [INTRO.md](INTRO.md) for the complete language reference.
+See [REACTIVE.md](REACTIVE.md) for the full reactive programming guide, [GENERATORS.md](GENERATORS.md) for generators and lazy sequences, and [INTRO.md](INTRO.md) for the complete language reference.
 
 ## Networking
 
@@ -779,7 +806,7 @@ Block until the worker finishes, then return the result. Raises `EvalError` on f
 
 Send or receive values through a channel. `recv()` blocks until a value is available. `try_recv()` returns `(ok, value)` without blocking — `ok` is `True` if a value was received.
 
-See [ASYNC.md](ASYNC.md) for the full async programming guide, [THREADS.md](THREADS.md) for the complete threads and continuations guide, [NETWORKING.md](NETWORKING.md) for TCP/HTTP networking, [FILESYS.md](FILESYS.md) for filesystem operations, and [LISTS.md](LISTS.md)/[VECTORS.md](VECTORS.md) for collection methods.
+See [ASYNC.md](ASYNC.md) for the full async programming guide, [THREADS.md](THREADS.md) for the complete threads and continuations guide, [GENERATORS.md](GENERATORS.md) for generators and lazy sequences, [NETWORKING.md](NETWORKING.md) for TCP/HTTP networking, [FILESYS.md](FILESYS.md) for filesystem operations, and [LISTS.md](LISTS.md)/[VECTORS.md](VECTORS.md) for collection methods.
 
 ## Scheme-to-Eval transpiler
 

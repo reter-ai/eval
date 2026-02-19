@@ -530,7 +530,7 @@ obj->x;       // => 10
 obj->sum();   // => 30
 ```
 
-The `->` operator sends a message: `obj->x` compiles to `(__send__ obj 'x)`. Dispatch is type-based: lists get list methods (see [LISTS.md](LISTS.md)), vectors get vector methods (see [VECTORS.md](VECTORS.md)), strings get string methods (see [STRINGS.md](STRINGS.md)), and all other types (interfaces, constructors, records, dicts) are called directly.
+The `->` operator sends a message: `obj->x` compiles to `(__send__ obj 'x)`. Dispatch is type-based: lists get list methods (see [LISTS.md](LISTS.md)), vectors get vector methods (see [VECTORS.md](VECTORS.md)), strings get string methods (see [STRINGS.md](STRINGS.md)), dicts get dict methods (see [DICTS.md](DICTS.md)), and all other types (interfaces, constructors, records) are called directly.
 
 Under the hood, `interface(...)` becomes:
 
@@ -801,48 +801,180 @@ Use `record` for plain data carriers (like a struct). Use `constructor`/`interfa
 
 ## Dictionaries
 
-`dict` creates a mutable hash-table-backed dictionary with `->` access:
+`dict` creates a mutable hash-table-backed dictionary with `->` access and bracket indexing:
 
 ```
 define d = dict(name: "Alice", age: 30, city: "NYC");
 d->name;         // => "Alice"
+d["name"];       // => "Alice" (bracket indexing)
 d->age;          // => 30
 ```
 
-The `dict(key: value, ...)` syntax uses the same `key: value` entries as `interface`. Keys are symbols internally.
+The `dict(key: value, ...)` syntax uses the same `key: value` entries as `interface`. Keys are symbols internally; string keys are auto-converted.
+
+### Properties (no parentheses)
+
+```
+d->length;                // => 3
+d->size;                  // => 3 (alias)
+d->empty?;                // => false
+d->keys;                  // => (name age city)
+d->values;                // => ("Alice" 30 "NYC")
+d->entries;               // => ((name . "Alice") (age . 30) (city . "NYC"))
+```
 
 ### Methods
 
 ```
 d->get("name");           // dynamic get by string key => "Alice"
-d->get("missing");        // => #f (not found)
+d->get("missing");        // => false (not found)
+d->get("missing", "?");   // => "?" (with default)
 d->set("email", "a@b");   // add or overwrite a key
 d->delete("city");        // remove a key
-d->has?("name");          // => #t
-d->has?("city");          // => #f (after delete)
-d->keys();                // => list of keys
-d->values();              // => list of values
-d->size();                // => number of entries
+d->has?("name");          // => true
 d->to_list();             // => association list ((key . value) ...)
+```
+
+### Iteration and transformation
+
+```
+define nums = dict(a: 1, b: 2, c: 3);
+nums->map(function(k, v) v * 10);              // => dict(a: 10, b: 20, c: 30)
+nums->filter(function(k, v) v > 1);            // => dict(b: 2, c: 3)
+nums->fold(function(k, v, acc) acc + v, 0);    // => 6
+nums->any(function(k, v) v > 2);               // => true
+nums->every(function(k, v) v > 0);             // => true
+nums->find(function(k, v) v == 2);             // => (b . 2)
+nums->count(function(k, v) v > 1);             // => 2
+nums->merge(dict(d: 4));                        // => dict(a: 1, b: 2, c: 3, d: 4)
+nums->copy();                                   // => independent copy
 ```
 
 ### Predicate
 
 ```
-dict?(d);        // => #t
-dict?(42);       // => #f
+dict?(d);        // => true
+dict?(42);       // => false
 ```
 
-### Empty dict
+See [DICTS.md](DICTS.md) for the complete method reference.
+
+## Comprehensions
+
+List comprehensions provide concise syntax for transforming and filtering collections:
 
 ```
-define empty = dict();
-empty->size();   // => 0
+[x * 2 for x in [1, 2, 3]];              // => [2, 4, 6]
+[x for x in [1, 2, 3, 4] if x > 2];     // => [3, 4]
+[x + y for x in [1, 2] for y in [10, 20]]; // => [11, 21, 12, 22]
 ```
 
-### Field access vs method access
+Vector comprehensions use `#[...]`:
 
-Direct field access (`d->name`) returns the value if the key exists, or `#f` if not. The `get`, `set`, `delete`, `keys`, `values`, `has?`, `size`, and `to_list` names are reserved as methods and cannot be used as field names.
+```
+#[x * 2 for x in [1, 2, 3]];             // => #[2, 4, 6]
+```
+
+Dict comprehensions build dictionaries from key:value expressions:
+
+```
+dict(x: x * 2 for x in [1, 2, 3]);       // => {1: 2, 2: 4, 3: 6}
+dict(x: x * x for x in [1, 2, 3] if x > 1); // => {2: 4, 3: 9}
+```
+
+Or from pair-producing expressions:
+
+```
+dict(cons(x, x * 10) for x in [1, 2, 3]); // => {1: 10, 2: 20, 3: 30}
+```
+
+All comprehension types accept generators as their source (see Generators below):
+
+```
+define count = generator(n) { for(let i = 0, i < n, i++) yield i; };
+[x * 2 for x in count(5)];               // => [0, 2, 4, 6, 8]
+#[x * x for x in count(4)];              // => #[0, 1, 4, 9]
+dict(x: x * x for x in count(3));        // dict with 0:0, 1:1, 2:4
+```
+
+## Generators
+
+Generators are lazy sequences built on continuations. Use the `generator` keyword to define a generator function, and `yield` to produce values:
+
+```
+define count = generator(n) {
+    for(let i = 0, i < n, i++)
+        yield i;
+};
+define g = count(3);
+g();              // => 0
+g();              // => 1
+g();              // => 2
+eof?(g());        // => true
+```
+
+`collect()` materializes a generator into a list:
+
+```
+collect(count(5));  // => [0, 1, 2, 3, 4]
+```
+
+`return` in a generator terminates it early:
+
+```
+define take_pos = generator(xs) {
+    for(let x in xs) {
+        if(x < 0) return nil;
+        yield x;
+    };
+};
+collect(take_pos([1, 2, -1, 3]));  // => [1, 2]
+```
+
+Generators can be infinite — only values that are consumed get computed:
+
+```
+define naturals = generator() {
+    define i = 0;
+    while(true) { yield i; i++; };
+};
+define ng = naturals();
+ng();  // => 0
+ng();  // => 1
+```
+
+### Generator Comprehensions
+
+Parenthesized comprehensions produce lazy generators (brackets `[...]` produce lists):
+
+```
+(x * 2 for x in [1, 2, 3]);           // lazy generator
+collect((x * 2 for x in [1, 2, 3]));  // => [2, 4, 6]
+```
+
+With filter:
+
+```
+collect((x for x in [1, 2, 3, 4, 5] if x > 2));  // => [3, 4, 5]
+```
+
+Generators can chain — feeding one generator into another creates a lazy pipeline where no intermediate lists are created:
+
+```
+define g1 = (x * 2 for x in [1, 2, 3, 4, 5]);
+define g2 = (x + 100 for x in g1);
+collect(g2);  // => [102, 104, 106, 108, 110]
+```
+
+Generators work as sources for all comprehension types:
+
+```
+[x * 2 for x in count(5)];              // list from generator
+#[x * x for x in count(4)];             // vector from generator
+dict(x: x * x for x in count(3));       // dict from generator
+```
+
+See [GENERATORS.md](GENERATORS.md) for the complete guide including infinite generators, lazy pipelines, and compilation details.
 
 ## String Methods
 
@@ -1919,10 +2051,12 @@ See [NETWORKING.md](NETWORKING.md) for the full networking guide including low-l
 
 ## Further reading
 
+- [GENERATORS.md](GENERATORS.md) — Generators, yield, generator comprehensions, lazy pipelines
 - [INDEXING.md](INDEXING.md) — Bracket indexing vs arrow properties: `xs[0]` vs `xs->first`, when to use which
 - [STRINGS.md](STRINGS.md) — String methods: upper, lower, trim, split, replace, contains, and more
 - [LISTS.md](LISTS.md) — List methods: map, filter, sort, fold, join, take, drop, and more
 - [VECTORS.md](VECTORS.md) — Vector methods: map, filter, sort, fold, set, to_list, and more
+- [DICTS.md](DICTS.md) — Dict methods: get, set, map, filter, fold, merge, and more
 - [NETWORKING.md](NETWORKING.md) — TCP sockets, HTTP client/server, OO wrappers, non-blocking I/O
 - [FILESYS.md](FILESYS.md) — File I/O, directory operations, metadata, path utilities
 - [ASYNC.md](ASYNC.md) — Async/await, thread pools, channels, pipelines

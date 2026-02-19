@@ -1,0 +1,60 @@
+test_begin("Comprehensions");
+
+// Basic list comprehension
+test("basic map", [2, 4, 6], [x * 2 for x in [1, 2, 3]]);
+test("identity", [1, 2, 3], [x for x in [1, 2, 3]]);
+test("transform", ["1", "2", "3"], [`number->string`(x) for x in [1, 2, 3]]);
+
+// With filter
+test("filter", [4, 6], [x * 2 for x in [1, 2, 3] if x > 1]);
+test("filter all", [], [x for x in [1, 2, 3] if x > 10]);
+test("filter none", [1, 2, 3], [x for x in [1, 2, 3] if x > 0]);
+
+// False values preserved (not dropped like filter-map would)
+test("false preserved", [true, false], [x == 1 for x in [1, 2] if x < 3]);
+
+// Nested (cross-product)
+test("nested", [3, 4, 4, 5], [x + y for x in [1, 2] for y in [2, 3]]);
+
+// Nested with filters
+test("nested filter", [5, 6], [x + y for x in [1, 2, 3] if x > 1 for y in [2, 3] if y > 2]);
+
+// Vector comprehension
+test("vec basic", #[2, 4, 6], #[x * 2 for x in [1, 2, 3]]);
+test("vec filter", #[4, 6], #[x * 2 for x in [1, 2, 3] if x > 1]);
+
+// With variables
+define xs = [10, 20, 30];
+test("with var", [20, 40, 60], [x * 2 for x in xs]);
+test("with var filter", [40, 60], [x * 2 for x in xs if x > 10]);
+
+// Empty source
+test("empty", [], [x * 2 for x in []]);
+
+// Complex body
+test("complex body", [1, 4, 9], [x * x for x in [1, 2, 3]]);
+test("block body", [11, 22, 33], [{ define y = x * 10; y + x; } for x in [1, 2, 3]]);
+
+// Chaining with OO methods
+test("chain", 12, [x * 2 for x in [1, 2, 3]]->fold(+, 0));
+
+// Dict comprehension (key:value form)
+test("dict basic", 2, dict(x: x * 2 for x in [1, 2, 3])[1]);
+test("dict basic 2", 4, dict(x: x * 2 for x in [1, 2, 3])[2]);
+test("dict basic 3", 6, dict(x: x * 2 for x in [1, 2, 3])[3]);
+test("dict filter", false, dict(x: x * x for x in [1, 2, 3, 4] if x > 2)[1]);
+test("dict filter hit", 9, dict(x: x * x for x in [1, 2, 3, 4] if x > 2)[3]);
+test("dict is dict", true, dict?(dict(x: x for x in [1, 2, 3])));
+test("dict empty", true, dict?(dict(x: x for x in [])));
+test("dict keys", 3, dict(x: x * 10 for x in [1, 2, 3])->length);
+test("dict nested", 6, dict(x * 10 + y: x + y for x in [1, 2] for y in [3, 4])[24]);
+
+// Dict comprehension (single-expression form)
+test("dict pair", 20, dict(cons(x, x * 10) for x in [1, 2, 3])[2]);
+test("dict pair filter", false, dict(cons(x, x * 10) for x in [1, 2, 3] if x > 1)[1]);
+
+// Dict literal still works
+test("dict literal", "Alice", dict(name: "Alice", age: 30)->name);
+test("dict literal 2", 30, dict(name: "Alice", age: 30)->age);
+
+test_end();

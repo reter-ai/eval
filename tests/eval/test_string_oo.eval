@@ -63,6 +63,19 @@ test("count spaces", 2, "a b c"->count(function(ch) `string`(ch) == " "));
 test_assert("find digit", `char?`("ab3cd"->find(function(ch) `char-numeric?`(ch))));
 test("copy", "hello", "hello"->copy());
 
+// find_right
+test("find_right alpha", "o"->char_at(0), "hello"->find_right(`char-alphabetic?`));
+test("find_right no match", false, "12345"->find_right(`char-alphabetic?`));
+test("find_right single", "x"->char_at(0), "x"->find_right(`char-alphabetic?`));
+
+// skip
+test("skip whitespace", "h"->char_at(0), "  hello"->skip(`char-whitespace?`));
+test("skip no match", "h"->char_at(0), "hello"->skip(`char-whitespace?`));
+test("skip all match", false, "   "->skip(`char-whitespace?`));
+
+// fold_right
+test("fold_right", "cba", "abc"->fold_right(function(ch, acc) `string-append`(acc, `string`(ch)), ""));
+
 // Chaining
 test("method chain", "HELLO WORLD", "  Hello World  "->trim()->upper());
 

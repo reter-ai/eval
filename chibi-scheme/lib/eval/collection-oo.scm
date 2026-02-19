@@ -1,4 +1,4 @@
-;; eval/collection-oo.scm -- OO methods for lists and vectors via __send__
+;; eval/collection-oo.scm -- OO methods for lists, vectors, and dicts via __send__
 ;; Loaded after string-oo.scm. Chains onto previous __send__ dispatch.
 
 ;; Helper: join list of strings with separator
@@ -58,6 +58,25 @@
     ((eq? msg 'join)       (lambda (sep) (__list-join__ obj sep)))
     ((eq? msg 'to_vector)  (lambda () (list->vector obj)))
     ((eq? msg 'copy)       (lambda () (list-copy obj)))
+    ((eq? msg 'take_right) (lambda (n) (take-right obj n)))
+    ((eq? msg 'drop_right) (lambda (n) (drop-right obj n)))
+    ((eq? msg 'split_at)   (lambda (n)
+                             (let-values (((left right) (split-at obj n)))
+                               (list left right))))
+    ((eq? msg 'span)       (lambda (pred)
+                             (let-values (((head tail) (span pred obj)))
+                               (list head tail))))
+    ((eq? msg 'filter_map) (lambda (fn) (filter-map fn obj)))
+    ((eq? msg 'reduce)     (lambda (fn)
+                             (if (null? obj)
+                                 (error "reduce on empty list")
+                                 (fold fn (car obj) (cdr obj)))))
+    ((eq? msg 'reduce_right) (lambda (fn)
+                               (if (null? obj)
+                                   (error "reduce_right on empty list")
+                                   (fold-right fn (last obj)
+                                     (reverse (cdr (reverse obj)))))))
+    ((eq? msg 'delete)     (lambda (x) (delete x obj)))
     (else (error "unknown list method" msg))))
 
 ;; Vector dispatch
@@ -94,11 +113,104 @@
     ((eq? msg 'set)        (lambda (i val) (vector-set! obj i val)))
     (else (error "unknown vector method" msg))))
 
+;; Dict (hash-table) dispatch
+(define (__dict-send__ obj msg)
+  (cond
+    ;; Properties
+    ((eq? msg 'length)     (hash-table-size obj))
+    ((eq? msg 'size)       (hash-table-size obj))
+    ((eq? msg 'empty?)     (= (hash-table-size obj) 0))
+    ((eq? msg 'keys)       (hash-table-keys obj))
+    ((eq? msg 'values)     (hash-table-values obj))
+    ((eq? msg 'entries)    (hash-table->alist obj))
+    ;; Methods
+    ((eq? msg 'get)        (lambda (k . rest)
+                             (hash-table-ref/default obj
+                               (if (string? k) (string->symbol k) k)
+                               (if (null? rest) #f (car rest)))))
+    ((eq? msg 'set)        (lambda (k v)
+                             (hash-table-set! obj
+                               (if (string? k) (string->symbol k) k) v)))
+    ((eq? msg 'delete)     (lambda (k)
+                             (hash-table-delete! obj
+                               (if (string? k) (string->symbol k) k))))
+    ((eq? msg 'has?)       (lambda (k)
+                             (hash-table-exists? obj
+                               (if (string? k) (string->symbol k) k))))
+    ((eq? msg 'to_list)    (lambda () (hash-table->alist obj)))
+    ((eq? msg 'map)        (lambda (fn)
+                             (__make_eval_dict__
+                               (map (lambda (p) (cons (car p) (fn (car p) (cdr p))))
+                                    (hash-table->alist obj)))))
+    ((eq? msg 'filter)     (lambda (fn)
+                             (__make_eval_dict__
+                               (filter (lambda (p) (fn (car p) (cdr p)))
+                                       (hash-table->alist obj)))))
+    ((eq? msg 'reject)     (lambda (fn)
+                             (__make_eval_dict__
+                               (remove (lambda (p) (fn (car p) (cdr p)))
+                                       (hash-table->alist obj)))))
+    ((eq? msg 'for_each)   (lambda (fn)
+                             (hash-table-walk obj fn)))
+    ((eq? msg 'fold)       (lambda (fn init)
+                             (hash-table-fold obj fn init)))
+    ((eq? msg 'any)        (lambda (fn)
+                             (let ((al (hash-table->alist obj)))
+                               (let loop ((rest al))
+                                 (if (null? rest) #f
+                                     (if (fn (caar rest) (cdar rest)) #t
+                                         (loop (cdr rest))))))))
+    ((eq? msg 'every)      (lambda (fn)
+                             (let ((al (hash-table->alist obj)))
+                               (let loop ((rest al))
+                                 (if (null? rest) #t
+                                     (if (fn (caar rest) (cdar rest))
+                                         (loop (cdr rest))
+                                         #f))))))
+    ((eq? msg 'find)       (lambda (fn)
+                             (let ((al (hash-table->alist obj)))
+                               (let loop ((rest al))
+                                 (if (null? rest) #f
+                                     (if (fn (caar rest) (cdar rest))
+                                         (car rest)
+                                         (loop (cdr rest))))))))
+    ((eq? msg 'count)      (lambda (fn)
+                             (let ((al (hash-table->alist obj)))
+                               (let loop ((rest al) (n 0))
+                                 (if (null? rest) n
+                                     (loop (cdr rest)
+                                           (if (fn (caar rest) (cdar rest))
+                                               (+ n 1) n)))))))
+    ((eq? msg 'merge)      (lambda (other)
+                             (let ((ht (__make_eval_dict__ (hash-table->alist obj))))
+                               (for-each (lambda (p)
+                                           (hash-table-set! ht (car p) (cdr p)))
+                                         (hash-table->alist other))
+                               ht)))
+    ((eq? msg 'copy)       (lambda ()
+                             (__make_eval_dict__ (hash-table->alist obj))))
+    ((eq? msg 'update)     (lambda (k fn)
+                             (let ((sk (if (string? k) (string->symbol k) k)))
+                               (hash-table-set! obj sk
+                                 (fn (hash-table-ref/default obj sk #f))))))
+    ((eq? msg 'merge!)     (lambda (other)
+                             (for-each (lambda (p)
+                                         (hash-table-set! obj (car p) (cdr p)))
+                                       (hash-table->alist other))))
+    ((eq? msg 'clear)      (lambda ()
+                             (for-each (lambda (k) (hash-table-delete! obj k))
+                                       (hash-table-keys obj))))
+    ;; Field access fallback: d->name → hash-table lookup
+    ((hash-table-exists? obj msg)
+     (hash-table-ref obj msg))
+    (else #f)))
+
 ;; Chain onto previous __send__
 (let ((__prev-send__ __send__))
   (set! __send__
     (lambda (obj msg)
       (cond
-        ((pair? obj)   (__list-send__ obj msg))
-        ((vector? obj) (__vector-send__ obj msg))
+        ((pair? obj)       (__list-send__ obj msg))
+        ((vector? obj)     (__vector-send__ obj msg))
+        ((hash-table? obj) (__dict-send__ obj msg))
         (else (__prev-send__ obj msg))))))

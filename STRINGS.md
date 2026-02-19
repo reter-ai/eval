@@ -146,12 +146,27 @@ These methods take a function or predicate and operate over the characters:
 |--------|---------|-------------|
 | `->map(fn)` | string | Transform each character with `fn` |
 | `->fold(fn, init)` | any | Reduce over characters: `fn(char, acc)` |
+| `->fold_right(fn, init)` | any | Right fold over characters: `fn(char, acc)` |
 | `->any(pred)` | boolean | True if any character satisfies `pred` |
 | `->every(pred)` | boolean | True if all characters satisfy `pred` |
 | `->count(pred)` | integer | Count characters satisfying `pred` |
 | `->find(pred)` | char/false | First character satisfying `pred`, or `false` |
+| `->find_right(pred)` | char/false | Last character satisfying `pred`, or `false` |
+| `->skip(pred)` | char/false | First character NOT satisfying `pred`, or `false` |
 | `->for_each(fn)` | void | Call `fn` on each character |
 | `->copy()` | string | Copy the string |
+
+```
+// fold_right: fold from the right
+"abc"->fold_right(function(ch, acc)
+    `string-append`(acc, `string`(ch)), "");   // => "cba"
+
+// find_right: last matching character
+"hello"->find_right(`char-alphabetic?`);       // => #\o
+
+// skip: first character that doesn't match
+"  hello"->skip(`char-whitespace?`);           // => #\h
+```
 
 ### Conversion
 
@@ -256,9 +271,12 @@ See [LISTS.md](LISTS.md) and [VECTORS.md](VECTORS.md) for the collection method 
 | `->to_symbol()` | symbol | Convert to symbol |
 | `->map(fn)` | string | Transform each character |
 | `->fold(fn, init)` | any | Reduce over characters |
+| `->fold_right(fn, init)` | any | Right fold over characters |
 | `->any(pred)` | boolean | Any character matches? |
 | `->every(pred)` | boolean | All characters match? |
 | `->count(pred)` | integer | Count matching characters |
 | `->find(pred)` | char/false | First matching character |
+| `->find_right(pred)` | char/false | Last matching character |
+| `->skip(pred)` | char/false | First non-matching character |
 | `->for_each(fn)` | void | Iterate over characters |
 | `->copy()` | string | Copy the string |

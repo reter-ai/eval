@@ -13,12 +13,12 @@ test("int field", 30, person->age);
 
 // Empty dict
 define empty = dict();
-test("empty size", 0, empty->size());
+test("empty size", 0, empty->size);
 
 // Single entry
 define single = dict(only: 42);
 test("single field", 42, single->only);
-test("single size", 1, single->size());
+test("single size", 1, single->size);
 
 // === Predicate ===
 test("dict? true", true, dict?(d));
@@ -28,66 +28,165 @@ test("dict? string", false, dict?("hello"));
 test("dict? list", false, dict?([1, 2, 3]));
 test("dict? false", false, dict?(false));
 
+// === Bracket indexing ===
+test("bracket string key", 10, d["x"]);
+test("bracket string key 2", 20, d["y"]);
+test("bracket missing key", false, d["missing"]);
+test("bracket on person", "Alice", person["name"]);
+test("bracket empty dict", false, empty["anything"]);
+
 // === Dynamic get ===
 test("get existing", 10, d->get("x"));
 test("get existing str", "Alice", person->get("name"));
 test("get missing", false, d->get("missing"));
 test("get from empty", false, empty->get("foo"));
 
+// Get with default
+test("get with default hit", 10, d->get("x", 999));
+test("get with default miss", 999, d->get("missing", 999));
+
 // === Set (add new key) ===
 define m = dict(a: 1);
 m->set("b", 2);
 test("set new key", 2, m->b);
-test("set size grows", 2, m->size());
+test("set size grows", 2, m->size);
 
 // Set overwrite existing
 m->set("a", 99);
 test("set overwrite", 99, m->a);
-test("set overwrite size", 2, m->size());
+test("set overwrite size", 2, m->size);
 
 // === Delete ===
 define del = dict(a: 1, b: 2, c: 3);
 del->delete("b");
 test("delete removes key", false, del->has?("b"));
-test("delete size shrinks", 2, del->size());
+test("delete size shrinks", 2, del->size);
 test("delete keeps others a", 1, del->a);
 test("delete keeps others c", 3, del->c);
 test("deleted field returns #f", false, del->b);
 
 // Delete non-existent (no error)
 del->delete("zzz");
-test("delete non-existent size", 2, del->size());
+test("delete non-existent size", 2, del->size);
 
 // === has? ===
 define h = dict(present: 1);
 test("has? true", true, h->has?("present"));
 test("has? false", false, h->has?("absent"));
 
-// === keys ===
-define k = dict(a: 1, b: 2, c: 3);
-test("keys is list", true, `list?`(k->keys()));
-test("keys length", 3, `length`(k->keys()));
-// Each key should be present
-test("keys has a", true, `memq`('a, k->keys()) != false);
-test("keys has b", true, `memq`('b, k->keys()) != false);
-test("keys has c", true, `memq`('c, k->keys()) != false);
+// === Properties (no parens) ===
+define props = dict(a: 1, b: 2, c: 3);
+test("length", 3, props->length);
+test("size", 3, props->size);
+test("empty? false", false, props->empty?);
+test("empty? true", true, dict()->empty?);
 
-// === values ===
-define v = dict(x: 10, y: 20);
-test("values is list", true, `list?`(v->values()));
-test("values length", 2, `length`(v->values()));
+// keys
+test("keys is list", true, `list?`(props->keys));
+test("keys length", 3, `length`(props->keys));
+test("keys has a", true, `memq`('a, props->keys) != false);
+test("keys has b", true, `memq`('b, props->keys) != false);
+test("keys has c", true, `memq`('c, props->keys) != false);
 
-// === size ===
-test("size 0", 0, dict()->size());
-test("size 1", 1, dict(a: 1)->size());
-test("size 3", 3, dict(a: 1, b: 2, c: 3)->size());
+// values
+test("values is list", true, `list?`(props->values));
+test("values length", 3, `length`(props->values));
 
-// === to_list (alist) ===
+// entries
+define ents = props->entries;
+test("entries is list", true, `list?`(ents));
+test("entries length", 3, `length`(ents));
+test("entries are pairs", true, `pair?`(`car`(ents)));
+
+// === to_list ===
 define al = dict(x: 10);
 define alist = al->to_list();
 test("to_list is list", true, `list?`(alist));
 test("to_list length", 1, `length`(alist));
 test("to_list entry is pair", true, `pair?`(`car`(alist)));
+
+// === map ===
+define nums = dict(a: 1, b: 2, c: 3);
+define doubled = nums->map(function(k, v) v * 2);
+test("map is dict", true, dict?(doubled));
+test("map a", 2, doubled->a);
+test("map b", 4, doubled->b);
+test("map c", 6, doubled->c);
+test("map size", 3, doubled->size);
+
+// === filter ===
+define filtered = nums->filter(function(k, v) v > 1);
+test("filter is dict", true, dict?(filtered));
+test("filter size", 2, filtered->size);
+test("filter has b", true, filtered->has?("b"));
+test("filter has c", true, filtered->has?("c"));
+test("filter no a", false, filtered->has?("a"));
+
+// === reject ===
+define rejected = nums->reject(function(k, v) v > 1);
+test("reject is dict", true, dict?(rejected));
+test("reject size", 1, rejected->size);
+test("reject has a", true, rejected->has?("a"));
+
+// === for_each ===
+define sum = 0;
+nums->for_each(function(k, v) { sum = sum + v; });
+test("for_each side effect", 6, sum);
+
+// === fold ===
+define total = nums->fold(function(k, v, acc) acc + v, 0);
+test("fold sum", 6, total);
+
+// === any ===
+test("any true", true, nums->any(function(k, v) v > 2));
+test("any false", false, nums->any(function(k, v) v > 10));
+test("any empty", false, dict()->any(function(k, v) true));
+
+// === every ===
+test("every true", true, nums->every(function(k, v) v > 0));
+test("every false", false, nums->every(function(k, v) v > 2));
+test("every empty", true, dict()->every(function(k, v) false));
+
+// === find ===
+define found = nums->find(function(k, v) v == 2);
+test("find returns pair", true, `pair?`(found));
+test("find key", 'b, `car`(found));
+test("find value", 2, `cdr`(found));
+test("find missing", false, nums->find(function(k, v) v > 10));
+
+// === count ===
+test("count all", 3, nums->count(function(k, v) v > 0));
+test("count some", 2, nums->count(function(k, v) v > 1));
+test("count none", 0, nums->count(function(k, v) v > 10));
+
+// === merge ===
+define d1 = dict(a: 1, b: 2);
+define d2 = dict(b: 99, c: 3);
+define merged = d1->merge(d2);
+test("merge is dict", true, dict?(merged));
+test("merge a", 1, merged->a);
+test("merge b overridden", 99, merged->b);
+test("merge c", 3, merged->c);
+test("merge size", 3, merged->size);
+// originals unchanged
+test("merge d1 unchanged", 2, d1->b);
+
+// === copy ===
+define original = dict(x: 10, y: 20);
+define copied = original->copy();
+test("copy is dict", true, dict?(copied));
+test("copy x", 10, copied->x);
+test("copy y", 20, copied->y);
+// mutation doesn't affect original
+copied->set("x", 999);
+test("copy independent", 10, original->x);
+
+// === update ===
+define upd = dict(score: 5);
+upd->update("score", function(v) v + 1);
+test("update value", 6, upd->score);
+upd->update("score", function(v) v * 10);
+test("update again", 60, upd->score);
 
 // === Mixed value types ===
 define mixed = dict(
@@ -103,12 +202,15 @@ test("mixed bool", true, mixed->bool_val);
 test("mixed list", [1, 2, 3], mixed->lst);
 test("nested dict access", 99, mixed->nested->inner);
 
+// === Bracket on nested ===
+test("nested bracket", 99, mixed["nested"]["inner"]);
+
 // === Mutation workflow ===
-define counter = dict(count: 0);
-counter->set("count", counter->get("count") + 1);
-counter->set("count", counter->get("count") + 1);
-counter->set("count", counter->get("count") + 1);
-test("mutation workflow", 3, counter->count);
+define counter = dict(n: 0);
+counter->set("n", counter->get("n") + 1);
+counter->set("n", counter->get("n") + 1);
+counter->set("n", counter->get("n") + 1);
+test("mutation workflow", 3, counter->n);
 
 // === Dict as function argument ===
 define get_name = function(d) d->name;
@@ -138,7 +240,7 @@ define acc = dict();
 acc->set("a", 1);
 acc->set("b", 2);
 acc->set("c", 3);
-test("accumulate size", 3, acc->size());
+test("accumulate size", 3, acc->size);
 test("accumulate a", 1, acc->a);
 test("accumulate b", 2, acc->b);
 test("accumulate c", 3, acc->c);
@@ -147,8 +249,26 @@ test("accumulate c", 3, acc->c);
 define sym = dict(foo: 42);
 test("arrow access", 42, sym->foo);
 test("get string access", 42, sym->get("foo"));
+test("bracket string access", 42, sym["foo"]);
 
-// === __type__ (via arrow, not get) ===
-test("dict type tag", '__dict__, d->__type__);
+// === merge! (mutating) ===
+define m1 = dict(a: 1, b: 2);
+define m2 = dict(b: 99, c: 3);
+m1->merge!(m2);
+test("merge! a", 1, m1->a);
+test("merge! b overridden", 99, m1->b);
+test("merge! c added", 3, m1->c);
+test("merge! size", 3, m1->size);
+
+// === clear ===
+define cl = dict(a: 1, b: 2, c: 3);
+test("pre-clear size", 3, cl->size);
+cl->clear();
+test("clear size", 0, cl->size);
+test("clear empty?", true, cl->empty?);
+
+// === Missing field returns false ===
+test("missing field", false, d->nonexistent);
+test("missing bracket", false, d["nonexistent"]);
 
 test_end();

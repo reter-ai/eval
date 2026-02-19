@@ -90,6 +90,45 @@ define sum = 0;
 test("list for_each side effect", 6, sum);
 
 // ============================================================
+// LIST METHODS - take_right, drop_right, split_at, span
+// ============================================================
+test("list take_right", [4, 5], [1, 2, 3, 4, 5]->take_right(2));
+test("list take_right 0", [], [1, 2, 3]->take_right(0));
+test("list take_right all", [1, 2, 3], [1, 2, 3]->take_right(3));
+test("list drop_right", [1, 2, 3], [1, 2, 3, 4, 5]->drop_right(2));
+test("list drop_right 0", [1, 2, 3], [1, 2, 3]->drop_right(0));
+test("list drop_right all", [], [1, 2, 3]->drop_right(3));
+
+define sp = [1, 2, 3, 4, 5]->split_at(3);
+test("list split_at left", [1, 2, 3], sp[0]);
+test("list split_at right", [4, 5], sp[1]);
+define sp0 = [1, 2, 3]->split_at(0);
+test("list split_at 0 left", [], sp0[0]);
+test("list split_at 0 right", [1, 2, 3], sp0[1]);
+
+define sn = [1, 2, 3, 4, 5]->span(function(x) x < 3);
+test("list span head", [1, 2], sn[0]);
+test("list span tail", [3, 4, 5], sn[1]);
+define sn2 = [5, 4, 3, 2, 1]->span(function(x) x < 3);
+test("list span none match head", [], sn2[0]);
+test("list span none match tail", [5, 4, 3, 2, 1], sn2[1]);
+
+// ============================================================
+// LIST METHODS - filter_map, reduce, delete
+// ============================================================
+test("list filter_map", [30, 40], [1, 2, 3, 4]->filter_map(function(x) if(x > 2) x * 10 else false));
+test("list filter_map none", [], [1, 2, 3]->filter_map(function(x) false));
+test("list filter_map all", [2, 4, 6], [1, 2, 3]->filter_map(function(x) x * 2));
+test("list reduce +", 15, [1, 2, 3, 4, 5]->reduce(+));
+test("list reduce *", 120, [1, 2, 3, 4, 5]->reduce(*));
+test("list reduce single", 42, [42]->reduce(+));
+test("list reduce_right +", 15, [1, 2, 3, 4, 5]->reduce_right(+));
+test("list reduce_right single", 42, [42]->reduce_right(+));
+test("list delete", [1, 2, 4, 5], [1, 2, 3, 4, 3, 5]->delete(3));
+test("list delete not found", [1, 2, 3], [1, 2, 3]->delete(99));
+test("list delete all", [], [3, 3, 3]->delete(3));
+
+// ============================================================
 // LIST CHAINING
 // ============================================================
 test("filter then map", [4, 8], [1, 2, 3, 4]->filter(function(x) x % 2 == 0)->map(function(x) x * 2));
