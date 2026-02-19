@@ -715,3 +715,10 @@ Other options are available via backtick: `` `socket-opt/keepalive` ``, `` `sock
 | [`examples/http_client.eval`](examples/http_client.eval) | HTTP client helpers: `tcp_connect`, `tcp_send`, `tcp_recv`, `http_get`, `http_post`, plus `HttpClient` OO wrapper |
 | [`tests/eval/test_http.eval`](tests/eval/test_http.eval) | Server/client integration test: GET, POST, 404, JSON, pool worker |
 | [`tests/eval/test_nb.eval`](tests/eval/test_nb.eval) | Non-blocking socket test |
+
+## See also
+
+- [BINARY.md](BINARY.md) — Cap'n Proto binary serialization for sending structured data over TCP
+- [THREADS.md](THREADS.md) — Green threads and concurrency
+- [ASYNC.md](ASYNC.md) — Async/await, thread pools, channels
+- [MULTITHREADING.md](MULTITHREADING.md) — Synchronization primitives for concurrent network code

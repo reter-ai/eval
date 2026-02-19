@@ -1,0 +1,186 @@
+// ============================================================
+// Cap'n Proto Binary Serialization Test Suite
+// ============================================================
+
+test_begin("Cap'n Proto");
+
+// ============================================================
+// Section 1: Schema creation
+// ============================================================
+
+define s = Schema("""
+  @0xdbb9ad1f14bf0b36;
+  struct Person {
+    name   @0 :Text;
+    age    @1 :UInt32;
+    active @2 :Bool;
+  }
+""");
+test_assert("schema creation", s != false);
+
+// ============================================================
+// Section 2: Build + Read round-trip
+// ============================================================
+
+define msg = s->Person->build("name", "Alice", "age", 30, "active", true);
+test_assert("build returns bytevector", bytevector?(msg));
+
+define r = s->Person->read(msg);
+test("text field", "Alice", r->name);
+test("uint32 field", 30, r->age);
+test("bool field", true, r->active);
+
+// ============================================================
+// Section 3: Float types
+// ============================================================
+
+define s2 = Schema("""
+  @0xa1b2c3d4e5f60718;
+  struct Point {
+    x @0 :Float64;
+    y @1 :Float64;
+  }
+""");
+define p = s2->Point->build("x", 3.14, "y", 2.72);
+define pr = s2->Point->read(p);
+test("float64 x", 3.14, pr->x);
+test("float64 y", 2.72, pr->y);
+
+// ============================================================
+// Section 4: Integer types
+// ============================================================
+
+define s3 = Schema("""
+  @0xb2c3d4e5f6071829;
+  struct Numbers {
+    small  @0 :Int8;
+    medium @1 :Int32;
+    big    @2 :Int64;
+    usmall @3 :UInt8;
+    ubig   @4 :UInt64;
+  }
+""");
+define nm = s3->Numbers->build("small", -42, "medium", 100000, "big", 999999999, "usmall", 255, "ubig", 12345678);
+define nr = s3->Numbers->read(nm);
+test("int8", -42, nr->small);
+test("int32", 100000, nr->medium);
+test("int64", 999999999, nr->big);
+test("uint8", 255, nr->usmall);
+test("uint64", 12345678, nr->ubig);
+
+// ============================================================
+// Section 5: Bool edge cases
+// ============================================================
+
+define s4 = Schema("""
+  @0xc3d4e5f60718293a;
+  struct Flags {
+    a @0 :Bool;
+    b @1 :Bool;
+  }
+""");
+define fm = s4->Flags->build("a", true, "b", false);
+define fr = s4->Flags->read(fm);
+test("bool true", true, fr->a);
+test("bool false", false, fr->b);
+
+// ============================================================
+// Section 6: Multiple schemas
+// ============================================================
+
+define s5 = Schema("""
+  @0xd4e5f60718293a4b;
+  struct Color {
+    r @0 :UInt8;
+    g @1 :UInt8;
+    b @2 :UInt8;
+  }
+  struct Pixel {
+    x @0 :UInt32;
+    y @1 :UInt32;
+  }
+""");
+define cm = s5->Color->build("r", 255, "g", 128, "b", 0);
+define cr = s5->Color->read(cm);
+test("color r", 255, cr->r);
+test("color g", 128, cr->g);
+test("color b", 0, cr->b);
+
+define pm = s5->Pixel->build("x", 100, "y", 200);
+define pxr = s5->Pixel->read(pm);
+test("pixel x", 100, pxr->x);
+test("pixel y", 200, pxr->y);
+
+// ============================================================
+// Section 7: List fields
+// ============================================================
+
+define s6 = Schema("""
+  @0xe5f60718293a4b5c;
+  struct Scores {
+    name   @0 :Text;
+    values @1 :List(Int32);
+  }
+""");
+define sm = s6->Scores->build("name", "test", "values", [10, 20, 30]);
+define sr = s6->Scores->read(sm);
+test("list field name", "test", sr->name);
+test("list field values", list(10, 20, 30), sr->values);
+
+// ============================================================
+// Section 8: Empty / minimal messages
+// ============================================================
+
+define s7 = Schema("""
+  @0xf60718293a4b5c6d;
+  struct Empty {
+    x @0 :UInt32;
+  }
+""");
+// Build with no fields set (defaults)
+define em = s7->Empty->build();
+define er = s7->Empty->read(em);
+test("default uint32", 0, er->x);
+
+// ============================================================
+// Section 9: Large integers (bignum)
+// ============================================================
+
+define s8 = Schema("""
+  @0xaabb112233445566;
+  struct BigInt {
+    signed   @0 :Int64;
+    unsigned @1 :UInt64;
+  }
+""");
+// 3 billion exceeds 32-bit signed int range
+define bm = s8->BigInt->build("signed", 3000000000, "unsigned", 4000000000);
+define br = s8->BigInt->read(bm);
+test("large int64", 3000000000, br->signed);
+test("large uint64", 4000000000, br->unsigned);
+
+// Negative large value
+define bm2 = s8->BigInt->build("signed", -3000000000, "unsigned", 0);
+define br2 = s8->BigInt->read(bm2);
+test("negative large int64", -3000000000, br2->signed);
+
+// ============================================================
+// Section 10: Rational -> Float conversion
+// ============================================================
+
+define s9 = Schema("""
+  @0xaabb112233445568;
+  struct Ratio {
+    val @0 :Float64;
+  }
+""");
+define rm = s9->Ratio->build("val", 1/3);
+define rr = s9->Ratio->read(rm);
+test_assert("rational to float64", rr->val > 0.333 && rr->val < 0.334);
+
+// Integer coerced to float
+define rm2 = s9->Ratio->build("val", 42);
+define rr2 = s9->Ratio->read(rm2);
+test("int to float64", 42.0, rr2->val);
+
+test_end();

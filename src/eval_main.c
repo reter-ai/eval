@@ -272,6 +272,14 @@ static sexp init_context(const char *extra_module_dir) {
         register_grammar_type(ctx);
         register_parser_type(ctx);
     }
+#ifdef EVAL_HAVE_CAPNP
+    {
+        extern void register_capnp_schema_type(sexp ctx);
+        extern void register_capnp_reader_type(sexp ctx);
+        register_capnp_schema_type(ctx);
+        register_capnp_reader_type(ctx);
+    }
+#endif
 
     /* Register C bridge functions */
     register_bridge_functions_c(ctx, env);
@@ -279,6 +287,12 @@ static sexp init_context(const char *extra_module_dir) {
         extern void register_grammar_bridge_functions(sexp ctx, sexp env);
         register_grammar_bridge_functions(ctx, env);
     }
+#ifdef EVAL_HAVE_CAPNP
+    {
+        extern void register_capnp_bridge_functions(sexp ctx, sexp env);
+        register_capnp_bridge_functions(ctx, env);
+    }
+#endif
 
     /* Load scheme extras, test framework */
     sexp_load_module_file(ctx, "scheme/extras.scm", env);

@@ -1204,6 +1204,12 @@ static void eval_standard_aliases(sexp ctx, sexp env) {
     sexp_load_module_file(ctx, "eval/grammar-rt.scm", env);
     env = sexp_context_env(ctx);
 
+    /* Cap'n Proto OO wrappers */
+#ifdef EVAL_HAVE_CAPNP
+    sexp_load_module_file(ctx, "eval/capnp-rt.scm", env);
+    env = sexp_context_env(ctx);
+#endif
+
     /* Abstract class support: global flag checked by abstract constructors */
     sexp_eval_string(ctx, "(define __abstract_ok__ #f)", -1, env);
 
@@ -1314,6 +1320,14 @@ static EVAL_THREAD_FUNC worker_main(void *arg) {
         register_grammar_type(ctx);
         register_parser_type(ctx);
     }
+#ifdef EVAL_HAVE_CAPNP
+    {
+        extern void register_capnp_schema_type(sexp ctx);
+        extern void register_capnp_reader_type(sexp ctx);
+        register_capnp_schema_type(ctx);
+        register_capnp_reader_type(ctx);
+    }
+#endif
 
     /* 4. Register C-only bridge functions */
     register_bridge_functions_c(ctx, env);
@@ -1321,6 +1335,12 @@ static EVAL_THREAD_FUNC worker_main(void *arg) {
         extern void register_grammar_bridge_functions(sexp ctx, sexp env);
         register_grammar_bridge_functions(ctx, env);
     }
+#ifdef EVAL_HAVE_CAPNP
+    {
+        extern void register_capnp_bridge_functions(sexp ctx, sexp env);
+        register_capnp_bridge_functions(ctx, env);
+    }
+#endif
 
     /* 5. Load scheme extras, test framework */
     sexp_load_module_file(ctx, "scheme/extras.scm", env);

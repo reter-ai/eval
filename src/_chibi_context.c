@@ -216,6 +216,16 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
         register_parser_type(self->ctx);
     }
 
+    /* Register capnp types (must be same order as workers for tag consistency) */
+#ifdef EVAL_HAVE_CAPNP
+    {
+        extern void register_capnp_schema_type(sexp ctx);
+        extern void register_capnp_reader_type(sexp ctx);
+        register_capnp_schema_type(self->ctx);
+        register_capnp_reader_type(self->ctx);
+    }
+#endif
+
     /* Register bridge functions */
     register_bridge_functions(self->ctx, self->env);
 
@@ -227,6 +237,14 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
         extern void register_grammar_bridge_functions(sexp ctx, sexp env);
         register_grammar_bridge_functions(self->ctx, self->env);
     }
+
+    /* Register capnp bridge functions */
+#ifdef EVAL_HAVE_CAPNP
+    {
+        extern void register_capnp_bridge_functions(sexp ctx, sexp env);
+        register_capnp_bridge_functions(self->ctx, self->env);
+    }
+#endif
 
     /* Import (scheme base) via the meta-environment — this adds:
      * error-object?, error-object-message, square, boolean=?, symbol=?,
@@ -375,6 +393,12 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
     /* Grammar/Parser OO wrappers: Grammar("lark EBNF") constructor */
     sexp_load_module_file(self->ctx, "eval/grammar-rt.scm", self->env);
     self->env = sexp_context_env(self->ctx);
+
+    /* Cap'n Proto OO wrappers: Schema("capnp text") constructor */
+#ifdef EVAL_HAVE_CAPNP
+    sexp_load_module_file(self->ctx, "eval/capnp-rt.scm", self->env);
+    self->env = sexp_context_env(self->ctx);
+#endif
 
     /* Abstract class support: global flag checked by abstract constructors */
     sexp_eval_string(self->ctx, "(define __abstract_ok__ #f)", -1, self->env);

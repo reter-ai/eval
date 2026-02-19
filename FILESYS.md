@@ -497,3 +497,4 @@ See [`examples/file_processor.eval`](examples/file_processor.eval) for a full re
 ## See also
 
 - [NETWORKING.md](NETWORKING.md) — TCP sockets and HTTP with OO wrappers (`TcpSocket`, `TcpServer`, `HttpClient`), RAII, and reactive signals
+- [BINARY.md](BINARY.md) — Cap'n Proto binary serialization for efficient file-based data storage

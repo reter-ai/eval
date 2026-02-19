@@ -584,3 +584,4 @@ define process_batch = function(items) {
 - [MULTITHREADING.md](MULTITHREADING.md) — OO synchronization: Mutex, Monitor, ReadWriteLock, Semaphore with RAII
 - [NETWORKING.md](NETWORKING.md) — TCP sockets and HTTP with OO wrappers (`TcpSocket`, `TcpServer`, `HttpClient`) that integrate with green threads
 - [ASYNC.md](ASYNC.md) — Async/await, thread pools, channels, pipelines
+- [BINARY.md](BINARY.md) — Cap'n Proto binary serialization for efficient data exchange between threads

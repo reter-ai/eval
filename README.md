@@ -39,6 +39,7 @@ e.eval("""
 - **Standalone CLI** — single binary, all scheme files embedded, runs anywhere with no dependencies
 - **Python interop** — call Python from Eval, call Eval from Python, share data bidirectionally
 - **Full numeric tower** — integers, floats, bignums, rationals
+- **Binary serialization** — Cap'n Proto zero-copy serialization with runtime schema parsing, wire-compatible with any language
 - **Scheme power** — access any chibi-scheme primitive via backtick identifiers
 
 ## Installation
@@ -813,7 +814,61 @@ Block until the worker finishes, then return the result. Raises `EvalError` on f
 
 Send or receive values through a channel. `recv()` blocks until a value is available. `try_recv()` returns `(ok, value)` without blocking — `ok` is `True` if a value was received.
 
-See [ASYNC.md](ASYNC.md) for the full async programming guide, [THREADS.md](THREADS.md) for the complete threads and continuations guide, [MULTITHREADING.md](MULTITHREADING.md) for OO synchronization wrappers, [GENERATORS.md](GENERATORS.md) for generators and lazy sequences, [NETWORKING.md](NETWORKING.md) for TCP/HTTP networking, [FILESYS.md](FILESYS.md) for filesystem operations, [LISTS.md](LISTS.md)/[VECTORS.md](VECTORS.md) for collection methods, and [TESTS.md](TESTS.md) for the built-in test framework.
+See [ASYNC.md](ASYNC.md) for the full async programming guide, [THREADS.md](THREADS.md) for the complete threads and continuations guide, [MULTITHREADING.md](MULTITHREADING.md) for OO synchronization wrappers, [GENERATORS.md](GENERATORS.md) for generators and lazy sequences, [NETWORKING.md](NETWORKING.md) for TCP/HTTP networking, [FILESYS.md](FILESYS.md) for filesystem operations, [LISTS.md](LISTS.md)/[VECTORS.md](VECTORS.md) for collection methods, [BINARY.md](BINARY.md) for Cap'n Proto binary serialization, [GRAMMARS.md](GRAMMARS.md) for runtime parser generation, and [TESTS.md](TESTS.md) for the built-in test framework.
+
+## Binary serialization
+
+Efficient binary serialization using [Cap'n Proto](https://capnproto.org/)'s dynamic API — write a schema string, build and read messages with zero-copy performance:
+
+```javascript
+define s = Schema("""
+  @0xdbb9ad1f14bf0b36;
+  struct Person {
+    name   @0 :Text;
+    age    @1 :UInt32;
+    active @2 :Bool;
+  }
+""");
+
+// Serialize to binary bytevector
+define msg = s->Person->build("name", "Alice", "age", 30, "active", true);
+
+// Deserialize (zero-copy)
+define r = s->Person->read(msg);
+r->name;      // "Alice"
+r->age;       // 30
+r->active;    // true
+
+// Save to file and memory-map for instant zero-copy access
+s->Person->save(msg, "person.bin");
+define result = with(r = s->Person->mmap("person.bin")) {
+    r->name    // reads directly from mmap'd memory — no deserialization
+};
+// r is automatically closed here, file is unmapped
+```
+
+Full Cap'n Proto schema syntax supported — all integer widths, floats, booleans, text, data, lists, enums, multiple structs per schema. Messages are wire-compatible with any Cap'n Proto implementation (C++, Rust, Go, Java, Python, etc.). Memory-mapped files give instant access to large datasets with zero parsing overhead.
+
+See [BINARY.md](BINARY.md) for the full guide including all supported types, memory-mapped files, RAII cleanup, and wire compatibility details.
+
+## Grammar JIT
+
+Runtime parser generation — write a grammar in Lark EBNF, compile it to a native parser via LLVM JIT:
+
+```javascript
+define calc = Grammar("""
+    start: expr
+    ?expr: expr "+" term -> add | term
+    ?term: NUMBER
+    NUMBER: /[0-9]+/
+    %ignore /\s+/
+""");
+define p = calc->compile();
+p->parse("1 + 2 + 3");
+// ("add" ("add" ("NUMBER" "1") ...) ...)
+```
+
+See [GRAMMARS.md](GRAMMARS.md) for the full guide including the compilation pipeline, grammar format, and examples.
 
 ## Scheme-to-Eval transpiler
 
@@ -927,3 +982,4 @@ Third-party components are included under their own licenses. See [THIRD-PARTY-N
 - **Lemon parser generator** — Public Domain
 - **re2c** — Public Domain
 - **LLVM/Clang** (optional) — Apache 2.0 with LLVM Exceptions
+- **Cap'n Proto** (optional) — MIT License

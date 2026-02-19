@@ -417,3 +417,10 @@ The OO wrappers (`Pool`, `->submit`, `->channel`) are built on top of these func
 | `channel_try_recv(ch)` | Non-blocking: `[value]` or `false` |
 | `channel_close(ch)` | Close a channel |
 | `pool_shutdown(pool)` | Shut down all workers |
+
+## See also
+
+- [THREADS.md](THREADS.md) — Green threads, mutexes, condition variables, continuations
+- [MULTITHREADING.md](MULTITHREADING.md) — OO synchronization: Mutex, Monitor, ReadWriteLock, Semaphore
+- [BINARY.md](BINARY.md) — Cap'n Proto binary serialization for efficient data exchange between workers
+- [NETWORKING.md](NETWORKING.md) — TCP sockets, HTTP with OO wrappers and green thread integration

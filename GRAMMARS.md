@@ -339,3 +339,8 @@ The parser is LALR(1), which means it cannot handle all context-free
 grammars. Ambiguous or non-LALR grammars will produce conflict errors
 during compilation. If you get shift/reduce or reduce/reduce conflicts,
 restructure your grammar to be unambiguous.
+
+## See also
+
+- [BINARY.md](BINARY.md) — Cap'n Proto binary serialization: another runtime compilation feature for efficient data exchange
+- [INTRO.md](INTRO.md) — Complete language reference

@@ -2095,3 +2095,5 @@ See [NETWORKING.md](NETWORKING.md) for the full networking guide including low-l
 - [MULTITHREADING.md](MULTITHREADING.md) — OO synchronization: Mutex, Monitor, ReadWriteLock, Semaphore
 - [REACTIVE.md](REACTIVE.md) — Signals, computed values, effects, scopes, resources
 - [TESTS.md](TESTS.md) — Built-in test framework: test, test_assert, test_error, test_group
+- [BINARY.md](BINARY.md) — Cap'n Proto binary serialization: Schema, build, read, save, mmap, RAII cleanup
+- [GRAMMARS.md](GRAMMARS.md) — Grammar JIT: runtime parser generation from Lark EBNF

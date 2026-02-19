@@ -1,0 +1,186 @@
+// ============================================================
+// Cap'n Proto Memory-Mapped File Test Suite
+//
+// Tests: save, mmap, close, with (RAII), multiple readers,
+//        different field types, error handling.
+// ============================================================
+
+test_begin("Cap'n Proto mmap");
+
+// ============================================================
+// Section 1: Schema + save + basic mmap round-trip
+// ============================================================
+
+define s = Schema("""
+  @0xaabb112233445570;
+  struct Employee {
+    name   @0 :Text;
+    age    @1 :UInt32;
+    salary @2 :Float64;
+    active @3 :Bool;
+  }
+""");
+
+define tmpfile = "__test_capnp_mmap.bin";
+define msg = s->Employee->build("name", "Alice", "age", 30, "salary", 85000.25, "active", true);
+s->Employee->save(msg, tmpfile);
+
+define r = s->Employee->mmap(tmpfile);
+test("text field", "Alice", r->name);
+test("uint32 field", 30, r->age);
+test("float64 field", 85000.25, r->salary);
+test("bool field", true, r->active);
+
+// ============================================================
+// Section 2: Multiple simultaneous mmaps on same file
+// ============================================================
+
+define r2 = s->Employee->mmap(tmpfile);
+test("second reader name", "Alice", r2->name);
+test("second reader age", 30, r2->age);
+
+// Both readers still work
+test("first reader still works", "Alice", r->name);
+
+// ============================================================
+// Section 3: Explicit close
+// ============================================================
+
+define r3 = s->Employee->mmap(tmpfile);
+test("read before close", "Alice", r3->name);
+r3->close();
+// close is idempotent — second close is a no-op
+r3->close();
+test("double close ok", true, true);
+
+// ============================================================
+// Section 4: with (RAII) — mmap auto-closed on scope exit
+// ============================================================
+
+define w1 = with(r = s->Employee->mmap(tmpfile)) {
+    r->name
+};
+test("with returns body value", "Alice", w1);
+
+// File is unmapped after with — can re-mmap
+define r4 = s->Employee->mmap(tmpfile);
+test("re-mmap after with", 30, r4->age);
+r4->close();
+
+// ============================================================
+// Section 5: with + multiple fields
+// ============================================================
+
+define w2 = with(r = s->Employee->mmap(tmpfile)) {
+    list(r->name, r->age, r->salary, r->active)
+};
+test("with all fields", list("Alice", 30, 85000.25, true), w2);
+
+// ============================================================
+// Section 6: with closes on error (dynamic-wind cleanup)
+// ============================================================
+
+define w3 = try {
+    with(r = s->Employee->mmap(tmpfile)) {
+        r->name;
+        error("boom");
+    };
+} catch(e) "caught";
+test("with closes on error", "caught", w3);
+
+// After error, file should be unmapped — can re-mmap
+define r5 = s->Employee->mmap(tmpfile);
+test("re-mmap after error", "Alice", r5->name);
+r5->close();
+
+// ============================================================
+// Section 7: with on heap-backed reader (read, not mmap)
+// ============================================================
+
+define w4 = with(r = s->Employee->read(msg)) {
+    r->salary
+};
+test("with read (heap)", 85000.25, w4);
+
+// ============================================================
+// Section 8: Different schema / field types
+// ============================================================
+
+define s2 = Schema("""
+  @0xccdd112233445571;
+  struct Config {
+    host    @0 :Text;
+    port    @1 :UInt16;
+    debug   @2 :Bool;
+    timeout @3 :Float32;
+    retries @4 :Int8;
+  }
+""");
+
+define tmpfile2 = "__test_capnp_mmap2.bin";
+define cfg = s2->Config->build(
+    "host", "localhost", "port", 8080,
+    "debug", false, "timeout", 30.5, "retries", 3
+);
+s2->Config->save(cfg, tmpfile2);
+
+define w5 = with(r = s2->Config->mmap(tmpfile2)) {
+    list(r->host, r->port, r->debug, r->retries)
+};
+test("config host", "localhost", first(w5));
+test("config port", 8080, second(w5));
+test("config debug", false, third(w5));
+test("config retries", 3, fourth(w5));
+
+// ============================================================
+// Section 9: Overwrite file, re-mmap sees new data
+// ============================================================
+
+// Close all open readers before overwriting (Windows requires this)
+r->close();
+r2->close();
+
+define msg2 = s->Employee->build("name", "Bob", "age", 42, "salary", 75000.50, "active", false);
+s->Employee->save(msg2, tmpfile);
+
+define w6 = with(r = s->Employee->mmap(tmpfile)) {
+    list(r->name, r->age, r->active)
+};
+test("overwrite name", "Bob", first(w6));
+test("overwrite age", 42, second(w6));
+test("overwrite active", false, third(w6));
+
+// ============================================================
+// Section 10: Nested with — two different mmaps
+// ============================================================
+
+define w7 = with(a = s->Employee->mmap(tmpfile)) {
+    with(b = s2->Config->mmap(tmpfile2)) {
+        a->name ++ "@" ++ b->host
+    }
+};
+test("nested with", "Bob@localhost", w7);
+
+// ============================================================
+// Section 11: save + mmap round-trip with lists
+// ============================================================
+
+define s3 = Schema("""
+  @0xeeff112233445572;
+  struct Scores {
+    name   @0 :Text;
+    values @1 :List(Int32);
+  }
+""");
+
+define tmpfile3 = "__test_capnp_mmap3.bin";
+define scores = s3->Scores->build("name", "test", "values", [10, 20, 30]);
+s3->Scores->save(scores, tmpfile3);
+
+define w8 = with(r = s3->Scores->mmap(tmpfile3)) {
+    list(r->name, r->values)
+};
+test("list mmap name", "test", first(w8));
+test("list mmap values", list(10, 20, 30), second(w8));
+
+test_end();

@@ -502,3 +502,4 @@ The key primitive for `Monitor->wait()` is `mutex_unlock(m, cv)` — SRFI-18's `
 - [ASYNC.md](ASYNC.md) — Async/await, thread pools, channels, pipelines
 - [NETWORKING.md](NETWORKING.md) — TCP sockets, HTTP, OO wrappers with green threads
 - [GREEN_THREADS.md](GREEN_THREADS.md) — Deep dive into chibi-scheme green thread internals
+- [BINARY.md](BINARY.md) — Cap'n Proto binary serialization for efficient cross-thread data exchange

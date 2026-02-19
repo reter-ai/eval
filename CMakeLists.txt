@@ -299,6 +299,20 @@ if(NOT BUILD_GRAMMAR_JIT)
     set(GRAMMAR_JIT_LIBS "")
 endif()
 
+# ---------- Cap'n Proto serialization ----------
+find_package(CapnProto CONFIG QUIET)
+if(CapnProto_FOUND)
+    message(STATUS "Found Cap'n Proto — binary serialization enabled")
+    set(CAPNP_SOURCES src/_capnp_bridge.cpp)
+    set(CAPNP_DEFS EVAL_HAVE_CAPNP=1)
+    set(CAPNP_LIBS CapnProto::capnp CapnProto::capnpc CapnProto::kj)
+else()
+    message(STATUS "Cap'n Proto not found — serialization disabled")
+    set(CAPNP_SOURCES "")
+    set(CAPNP_DEFS "")
+    set(CAPNP_LIBS "")
+endif()
+
 # ============================================================
 # Python C extension module
 # ============================================================
@@ -325,7 +339,7 @@ if(BUILD_PYTHON_MODULE)
         list(APPEND EXT_SOURCES src/_eval_stub_libs.c)
     endif()
 
-    python_add_library(_chibi MODULE ${CHIBI_SOURCES} ${CHIBI_LIB_SOURCES} ${EXT_SOURCES} ${GRAMMAR_SOURCES})
+    python_add_library(_chibi MODULE ${CHIBI_SOURCES} ${CHIBI_LIB_SOURCES} ${EXT_SOURCES} ${GRAMMAR_SOURCES} ${CAPNP_SOURCES})
 
     target_include_directories(_chibi PRIVATE ${CHIBI_INCLUDE_DIRS} ${CMAKE_BINARY_DIR} ${GRAMMAR_JIT_INCLUDES})
     target_link_libraries(_chibi PRIVATE re2c_core)
@@ -336,24 +350,29 @@ if(BUILD_PYTHON_MODULE)
         )
     endif()
 
-    target_compile_definitions(_chibi PRIVATE ${CHIBI_COMPILE_DEFS} ${GRAMMAR_JIT_DEFS})
+    target_compile_definitions(_chibi PRIVATE ${CHIBI_COMPILE_DEFS} ${GRAMMAR_JIT_DEFS} ${CAPNP_DEFS})
 
     if(HAVE_STUB_LIBS)
         target_compile_definitions(_chibi PRIVATE EVAL_HAVE_STUB_LIBS=1)
     endif()
 
     if(WIN32)
-        target_link_libraries(_chibi PRIVATE ws2_32 ${GRAMMAR_JIT_LIBS})
+        target_link_libraries(_chibi PRIVATE ws2_32 ${GRAMMAR_JIT_LIBS} ${CAPNP_LIBS})
         target_compile_definitions(_chibi PRIVATE
             _CRT_SECURE_NO_WARNINGS
             SEXP_USE_STRING_STREAMS=0
         )
     elseif(UNIX)
-        target_link_libraries(_chibi PRIVATE re2c_core m ${GRAMMAR_JIT_LIBS})
+        target_link_libraries(_chibi PRIVATE re2c_core m ${GRAMMAR_JIT_LIBS} ${CAPNP_LIBS})
     endif()
 
     if(BUILD_GRAMMAR_JIT)
         set_source_files_properties(src/_eval_jit.cpp PROPERTIES
+            COMPILE_FLAGS "$<IF:$<CXX_COMPILER_ID:MSVC>,/std:c++17,-std=c++17>")
+    endif()
+
+    if(CapnProto_FOUND)
+        set_source_files_properties(src/_capnp_bridge.cpp PROPERTIES
             COMPILE_FLAGS "$<IF:$<CXX_COMPILER_ID:MSVC>,/std:c++17,-std=c++17>")
     endif()
 
@@ -393,6 +412,7 @@ if(BUILD_EVAL_STANDALONE)
         ${CHIBI_LIB_SOURCES}
         ${STANDALONE_SOURCES}
         ${GRAMMAR_SOURCES}
+        ${CAPNP_SOURCES}
     )
 
     set_target_properties(eval_standalone PROPERTIES OUTPUT_NAME eval)
@@ -408,6 +428,7 @@ if(BUILD_EVAL_STANDALONE)
     target_compile_definitions(eval_standalone PRIVATE
         ${CHIBI_COMPILE_DEFS}
         ${GRAMMAR_JIT_DEFS}
+        ${CAPNP_DEFS}
         EVAL_STANDALONE=1
     )
 
@@ -416,17 +437,22 @@ if(BUILD_EVAL_STANDALONE)
     endif()
 
     if(WIN32)
-        target_link_libraries(eval_standalone PRIVATE re2c_core ws2_32 ${GRAMMAR_JIT_LIBS})
+        target_link_libraries(eval_standalone PRIVATE re2c_core ws2_32 ${GRAMMAR_JIT_LIBS} ${CAPNP_LIBS})
         target_compile_definitions(eval_standalone PRIVATE
             _CRT_SECURE_NO_WARNINGS
             SEXP_USE_STRING_STREAMS=0
         )
     elseif(UNIX)
-        target_link_libraries(eval_standalone PRIVATE re2c_core m pthread ${GRAMMAR_JIT_LIBS})
+        target_link_libraries(eval_standalone PRIVATE re2c_core m pthread ${GRAMMAR_JIT_LIBS} ${CAPNP_LIBS})
     endif()
 
     if(BUILD_GRAMMAR_JIT)
         set_source_files_properties(src/_eval_jit.cpp PROPERTIES
+            COMPILE_FLAGS "$<IF:$<CXX_COMPILER_ID:MSVC>,/std:c++17,-std=c++17>")
+    endif()
+
+    if(CapnProto_FOUND)
+        set_source_files_properties(src/_capnp_bridge.cpp PROPERTIES
             COMPILE_FLAGS "$<IF:$<CXX_COMPILER_ID:MSVC>,/std:c++17,-std=c++17>")
     endif()
 
