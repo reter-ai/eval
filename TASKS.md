@@ -329,6 +329,7 @@ with(ap = AsyncPool(4)) {
 
 ## See also
 
+- [CONCURRENT.md](CONCURRENT.md) — Thread-safe containers: ConcurrentDict, ConcurrentQueue, ConcurrentStack, ConcurrentList
 - [ASYNC.md](ASYNC.md) — Async/await, basic thread pools, channels, pipelines
 - [THREADS.md](THREADS.md) — Green threads, mutexes, condition variables
 - [MULTITHREADING.md](MULTITHREADING.md) — OO synchronization: Mutex, Monitor, ReadWriteLock, Semaphore

@@ -1256,6 +1256,10 @@ void eval_standard_aliases(sexp ctx, sexp env) {
     sexp_load_module_file(ctx, "eval/generator.scm", env);
     env = sexp_context_env(ctx);
 
+    /* Logic programming runtime */
+    sexp_load_module_file(ctx, "eval/logic.scm", env);
+    env = sexp_context_env(ctx);
+
     /* OO string methods: "hello"->upper(), etc. */
     sexp_load_module_file(ctx, "eval/string-oo.scm", env);
     env = sexp_context_env(ctx);
@@ -1407,6 +1411,10 @@ static EVAL_THREAD_FUNC worker_main(void *arg) {
         register_capnp_reader_type(ctx);
     }
 #endif
+    {
+        extern void register_concurrent_types(sexp ctx);
+        register_concurrent_types(ctx);
+    }
 
     /* 4. Register C-only bridge functions */
     register_bridge_functions_c(ctx, env);
@@ -1420,6 +1428,10 @@ static EVAL_THREAD_FUNC worker_main(void *arg) {
         register_capnp_bridge_functions(ctx, env);
     }
 #endif
+    {
+        extern void register_concurrent_bridge_functions(sexp ctx, sexp env);
+        register_concurrent_bridge_functions(ctx, env);
+    }
 
     /* 5. Load scheme extras, test framework */
     sexp_load_module_file(ctx, "scheme/extras.scm", env);
@@ -1438,7 +1450,42 @@ static EVAL_THREAD_FUNC worker_main(void *arg) {
     eval_standard_aliases(ctx, env);
     env = sexp_context_env(ctx);
 
-    /* 7b. Green-thread-aware channel-recv wrapper (needs thread-yield! from aliases) */
+    /* 7b. Concurrent containers (loaded as eval code from embedded data) */
+    {
+        extern void eval_load_eval_file(sexp ctx, sexp env, const char *path);
+        eval_load_eval_file(ctx, env, "eval/concurrent.eval");
+        env = sexp_context_env(ctx);
+
+        /* Variadic constructor wrappers */
+        sexp_eval_string(ctx,
+            "(define __ConcurrentDict_1 ConcurrentDict)", -1, env);
+        sexp_eval_string(ctx,
+            "(define (ConcurrentDict . args)"
+            "  (__ConcurrentDict_1 (if (pair? args) (car args) #f)))", -1, env);
+
+        sexp_eval_string(ctx,
+            "(define __ConcurrentQueue_2 ConcurrentQueue)", -1, env);
+        sexp_eval_string(ctx,
+            "(define (ConcurrentQueue . args)"
+            "  (let ((name (if (and (pair? args) (string? (car args))) (car args) #f))"
+            "        (rest (if (and (pair? args) (string? (car args))) (cdr args) args)))"
+            "    (__ConcurrentQueue_2 name (if (pair? rest) (car rest) 0))))", -1, env);
+
+        sexp_eval_string(ctx,
+            "(define __ConcurrentStack_1 ConcurrentStack)", -1, env);
+        sexp_eval_string(ctx,
+            "(define (ConcurrentStack . args)"
+            "  (__ConcurrentStack_1 (if (pair? args) (car args) #f)))", -1, env);
+
+        sexp_eval_string(ctx,
+            "(define __ConcurrentList_1 ConcurrentList)", -1, env);
+        sexp_eval_string(ctx,
+            "(define (ConcurrentList . args)"
+            "  (__ConcurrentList_1 (if (pair? args) (car args) #f)))", -1, env);
+        env = sexp_context_env(ctx);
+    }
+
+    /* 7c. Green-thread-aware channel-recv wrapper (needs thread-yield! from aliases) */
     sexp_eval_string(ctx,
         "(define (channel-recv ch)"
         "  (let ((r (%channel-recv ch)))"

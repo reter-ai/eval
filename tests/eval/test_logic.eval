@@ -1,0 +1,114 @@
+test_begin("Logic Programming");
+
+// === microKanren Core ===
+
+// Basic unification
+test("basic unify", [5], run(1, ?q) { ?q === 5 });
+test("unify string", ["hello"], run(1, ?q) { ?q === "hello" });
+test("unify bool", [true], run(1, ?q) { ?q === true });
+
+// Fresh variables
+test("fresh pair", [[5, 6]], run(1, ?q) {
+    fresh(?x, ?y) {
+        ?x === 5,
+        ?y === 6,
+        ?q === [?x, ?y]
+    }
+});
+
+test("fresh nested", [[1, [2, 3]]], run(1, ?q) {
+    fresh(?a, ?b, ?c) {
+        ?a === 1, ?b === 2, ?c === 3,
+        ?q === [?a, [?b, ?c]]
+    }
+});
+
+// Multiple results with conde
+test("conde basic", [1, 2, 3], run(*, ?q) conde {
+    { ?q === 1 },
+    { ?q === 2 },
+    { ?q === 3 }
+});
+
+// Limited results
+test("run limited", [1, 2], run(2, ?q) conde {
+    { ?q === 1 },
+    { ?q === 2 },
+    { ?q === 3 }
+});
+
+// Unification with lists
+test("list unify", [[1, 2, 3]], run(1, ?q) { ?q === [1, 2, 3] });
+
+// Unification propagation
+test("transitive unify", [42], run(1, ?q) {
+    fresh(?x) {
+        ?x === 42,
+        ?q === ?x
+    }
+});
+
+// Multiple fresh vars in conde
+test("conde fresh", [10, 20], run(*, ?q) conde {
+    { fresh(?a) { ?a === 10, ?q === ?a } },
+    { fresh(?b) { ?b === 20, ?q === ?b } }
+});
+
+// === Prolog-style Facts ===
+
+fact parent("tom", "bob");
+fact parent("bob", "ann");
+fact parent("bob", "pat");
+fact parent("tom", "liz");
+
+// Query facts using run
+test("fact query", ["tom"], run(*, ?q) { parent(?q, "bob") });
+test("fact query children", ["ann", "pat"], run(*, ?q) { parent("bob", ?q) });
+
+// Query with multiple fresh vars
+test("fact all pairs", true, length(run(*, ?q) {
+    fresh(?x, ?y) {
+        parent(?x, ?y),
+        ?q === [?x, ?y]
+    }
+}) == 4);
+
+// === Prolog-style Rules ===
+
+rule ancestor(?x, ?y) :- parent(?x, ?y);
+rule ancestor(?x, ?y) :- fresh(?z) { parent(?x, ?z), ancestor(?z, ?y) };
+
+define anc_ann = run(*, ?q) { ancestor(?q, "ann") };
+test("rule direct", true, not(not(member("bob", anc_ann))));
+test("rule transitive", true, not(not(member("tom", anc_ann))));
+
+// All ancestors of ann
+test("ancestors of ann", 2, length(run(*, ?q) { ancestor(?q, "ann") }));
+
+// All descendants of tom
+define desc_tom = run(*, ?q) { ancestor("tom", ?q) };
+test("descendants of tom", true, length(desc_tom) >= 3);
+
+// === Combined Logic ===
+
+// Conde with fresh and facts
+test("conde + facts", true, length(run(*, ?q) conde {
+    { parent("tom", ?q) },
+    { parent("bob", ?q) }
+}) >= 3);
+
+// Nested fresh in run
+test("deep fresh", [[[1, 2], [3, 4]]], run(1, ?q) {
+    fresh(?a, ?b, ?c, ?d) {
+        ?a === 1, ?b === 2, ?c === 3, ?d === 4,
+        ?q === [[?a, ?b], [?c, ?d]]
+    }
+});
+
+// === Sibling relation ===
+rule sibling(?x, ?y) :- fresh(?p) { parent(?p, ?x), parent(?p, ?y) };
+
+// ann and pat are siblings (shared parent bob)
+test("siblings", true, not(not(member("pat", run(*, ?q) { sibling("ann", ?q) }))));
+
+test_end();

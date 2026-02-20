@@ -166,6 +166,16 @@ sexp ps_fstr_build(sexp ctx, const char *s_start, int s_len,
                    const char *e_start, int e_len);
 sexp ps_fstr_mid(sexp ctx, sexp list, const char *m_start, int m_len, sexp expr);
 
+/* Logic programming helpers */
+sexp ps_make_fresh(sexp ctx, sexp vars, sexp goals);
+sexp ps_make_run(sexp ctx, sexp n, const char *qname, int qlen, sexp goals);
+sexp ps_make_conde(sexp ctx, sexp clauses);
+sexp ps_make_fact(sexp ctx, const char *name, int nlen, sexp args);
+sexp ps_make_rule(sexp ctx, const char *name, int nlen, sexp params, sexp goals);
+sexp ps_make_query(sexp ctx, const char *name, int nlen, sexp args);
+sexp ps_make_findall(sexp ctx, const char *vname, int vlen,
+                     const char *rname, int rlen, sexp args);
+
 /* Parse Eval source code into a chibi sexp.
    Returns the parsed sexp, or SEXP_VOID on error.
    On error, sets *error_msg (caller must free), *error_line, *error_col. */

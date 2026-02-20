@@ -564,6 +564,7 @@ The OO wrappers (`Pool`, `->submit`, `->channel`) are built on top of these func
 
 ## See also
 
+- [CONCURRENT.md](CONCURRENT.md) — Thread-safe containers: ConcurrentDict, ConcurrentQueue, ConcurrentStack, ConcurrentList
 - [TASKS.md](TASKS.md) — TaskPool: scalable task execution with OS threads + green threads
 - [THREADS.md](THREADS.md) — Green threads, mutexes, condition variables, continuations
 - [MULTITHREADING.md](MULTITHREADING.md) — OO synchronization: Mutex, Monitor, ReadWriteLock, Semaphore

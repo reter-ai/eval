@@ -1,0 +1,134 @@
+// concurrent.eval -- OO wrappers for concurrent containers
+//
+// ConcurrentDict, ConcurrentQueue, ConcurrentStack, ConcurrentList
+// All use interface() pattern with green-thread-aware blocking.
+
+// ================================================================
+// ConcurrentDict
+// ================================================================
+
+define __make_cdict_iface = function(raw) {
+    interface(
+        set: function(key, val) `%cdict-set!`(raw, key, val),
+        get: function(key) {
+            define r = `%cdict-ref`(raw, key);
+            if(r) cdr(r) else false;
+        },
+        delete: function(key) `%cdict-delete!`(raw, key),
+        has?: function(key) `%cdict-has?`(raw, key),
+        size: function() `%cdict-size`(raw),
+        empty?: function() `%cdict-size`(raw) == 0,
+        keys: function() `%cdict-keys`(raw),
+        vals: function() `%cdict-values`(raw),
+        entries: function() `%cdict-entries`(raw),
+        clear: function() `%cdict-clear!`(raw),
+        close: function() `%cdict-close`(raw),
+        __type__: '__concurrent_dict__
+    );
+};
+
+// Fixed-arity constructor (name is string or false)
+define ConcurrentDict = function(name) {
+    __make_cdict_iface(`%make-cdict`(name));
+};
+
+// ================================================================
+// ConcurrentQueue
+// ================================================================
+
+define __make_cqueue_iface = function(raw) {
+    // Green-thread-aware blocking pop
+    define do_pop = function() {
+        define r = `%cqueue-pop`(raw);
+        if(`eof-object?`(r)) error("pop on closed queue")
+        else if(r) cdr(r)
+        else { `thread-yield!`(); do_pop(); };
+    };
+
+    // Green-thread-aware blocking push (for bounded queues)
+    define do_push = function(item) {
+        define ok = `%cqueue-push!`(raw, item);
+        if(ok) true
+        else { `thread-yield!`(); do_push(item); };
+    };
+
+    interface(
+        push: do_push,
+        pop: do_pop,
+        try_push: function(item) `%cqueue-try-push`(raw, item),
+        try_pop: function() {
+            define r = `%cqueue-try-pop`(raw);
+            if(r) cdr(r) else false;
+        },
+        size: function() `%cqueue-size`(raw),
+        empty?: function() `%cqueue-size`(raw) == 0,
+        close: function() `%cqueue-close`(raw),
+        __type__: '__concurrent_queue__
+    );
+};
+
+// Fixed-arity constructor (name-or-false, capacity)
+define ConcurrentQueue = function(name, capacity) {
+    __make_cqueue_iface(`%make-cqueue`(name, capacity));
+};
+
+// ================================================================
+// ConcurrentStack
+// ================================================================
+
+define __make_cstack_iface = function(raw) {
+    // Green-thread-aware blocking pop
+    define do_pop = function() {
+        define r = `%cstack-pop`(raw);
+        if(`eof-object?`(r)) error("pop on closed stack")
+        else if(r) cdr(r)
+        else { `thread-yield!`(); do_pop(); };
+    };
+
+    interface(
+        push: function(val) `%cstack-push!`(raw, val),
+        pop: do_pop,
+        try_pop: function() {
+            define r = `%cstack-try-pop`(raw);
+            if(r) cdr(r) else false;
+        },
+        peek: function() {
+            define r = `%cstack-peek`(raw);
+            if(r) cdr(r) else false;
+        },
+        size: function() `%cstack-size`(raw),
+        empty?: function() `%cstack-size`(raw) == 0,
+        close: function() `%cstack-close`(raw),
+        __type__: '__concurrent_stack__
+    );
+};
+
+// Fixed-arity constructor (name is string or false)
+define ConcurrentStack = function(name) {
+    __make_cstack_iface(`%make-cstack`(name));
+};
+
+// ================================================================
+// ConcurrentList
+// ================================================================
+
+define __make_clist_iface = function(raw) {
+    interface(
+        append: function(val) `%clist-append!`(raw, val),
+        prepend: function(val) `%clist-prepend!`(raw, val),
+        ref: function(idx) `%clist-ref`(raw, idx),
+        set: function(idx, val) `%clist-set!`(raw, idx, val),
+        remove: function(idx) `%clist-remove!`(raw, idx),
+        size: function() `%clist-size`(raw),
+        empty?: function() `%clist-size`(raw) == 0,
+        to_list: function() `%clist-to-list`(raw),
+        clear: function() `%clist-clear!`(raw),
+        close: function() `%clist-close`(raw),
+        __type__: '__concurrent_list__
+    );
+};
+
+// Fixed-arity constructor (name is string or false)
+define ConcurrentList = function(name) {
+    __make_clist_iface(`%make-clist`(name));
+};

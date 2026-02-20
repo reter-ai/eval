@@ -1473,6 +1473,215 @@ sexp ps_make_slice(sexp ctx, sexp obj, sexp start, sexp end) {
                        sexp_cons(ctx, end, SEXP_NULL))));
 }
 
+/* ===== Logic programming helpers ===== */
+
+/* Helper: build (conj g1 (conj g2 (conj g3 ...))) from list */
+static sexp ps_logic_conj_chain(sexp ctx, sexp goals) {
+    if (!sexp_pairp(goals)) return goals;
+    if (!sexp_pairp(sexp_cdr(goals))) return sexp_car(goals);
+    return sexp_list3(ctx, ps_intern(ctx, "conj"),
+                      sexp_car(goals),
+                      ps_logic_conj_chain(ctx, sexp_cdr(goals)));
+}
+
+/* fresh(?x, ?y) { g1, g2 }
+   -> (call-fresh (lambda (x) (call-fresh (lambda (y) (conj g1 g2))))) */
+sexp ps_make_fresh(sexp ctx, sexp vars, sexp goals) {
+    sexp body = ps_logic_conj_chain(ctx, goals);
+    /* Reverse vars to wrap inside-out */
+    sexp rev = SEXP_NULL;
+    for (sexp p = vars; sexp_pairp(p); p = sexp_cdr(p))
+        rev = sexp_cons(ctx, sexp_car(p), rev);
+    sexp result = body;
+    for (sexp p = rev; sexp_pairp(p); p = sexp_cdr(p)) {
+        sexp lam = sexp_list3(ctx, ps_intern(ctx, "lambda"),
+                              sexp_list1(ctx, sexp_car(p)), result);
+        result = sexp_list2(ctx, ps_intern(ctx, "call-fresh"), lam);
+    }
+    return result;
+}
+
+/* run(n, ?q) { g1, g2 }
+   -> (logic_run n (lambda (q) (conj g1 g2)))
+   n = SEXP_FALSE means all; also handle * symbol (from OPVAL) as "all" */
+sexp ps_make_run(sexp ctx, sexp n, const char *qname, int qlen, sexp goals) {
+    /* run(*, ?q) -- * in value position becomes the symbol '*' via OPVAL */
+    if (sexp_symbolp(n)) {
+        const char *s = sexp_string_data(sexp_symbol_to_string(ctx, n));
+        if (s && s[0] == '*' && s[1] == '\0')
+            n = SEXP_FALSE;
+    }
+    sexp q = ps_make_ident(ctx, qname, qlen);
+    sexp body = ps_logic_conj_chain(ctx, goals);
+    sexp lam = sexp_list3(ctx, ps_intern(ctx, "lambda"),
+                          sexp_list1(ctx, q), body);
+    return sexp_list3(ctx, ps_intern(ctx, "logic_run"), n, lam);
+}
+
+/* conde { {g1,g2}, {g3,g4} }
+   -> (logic_conde (list g1 g2) (list g3 g4)) */
+sexp ps_make_conde(sexp ctx, sexp clauses) {
+    sexp result = SEXP_NULL;
+    for (sexp p = clauses; sexp_pairp(p); p = sexp_cdr(p)) {
+        sexp clause = sexp_car(p);
+        sexp wrapped = sexp_cons(ctx, ps_intern(ctx, "list"), clause);
+        result = sexp_pairp(result) ? ps_append(ctx, result, wrapped)
+                                    : sexp_list1(ctx, wrapped);
+    }
+    return sexp_cons(ctx, ps_intern(ctx, "logic_conde"), result);
+}
+
+/* fact parent("tom", "bob");
+   -> (begin (logic_assert_fact 'parent "tom" "bob")
+             (define parent (lambda __args__ (logic_query_rel 'parent __args__)))) */
+sexp ps_make_fact(sexp ctx, const char *name, int nlen, sexp args) {
+    sexp sym = sexp_list2(ctx, ps_intern(ctx, "quote"),
+                          ps_make_ident(ctx, name, nlen));
+    sexp assert_call = sexp_cons(ctx, ps_intern(ctx, "logic_assert_fact"),
+                                 sexp_cons(ctx, sym, args));
+    sexp ident = ps_make_ident(ctx, name, nlen);
+    sexp args_sym = ps_intern(ctx, "__args__");
+    sexp rel_call = sexp_list3(ctx, ps_intern(ctx, "logic_query_rel"),
+                               sym, args_sym);
+    sexp lam = sexp_list3(ctx, ps_intern(ctx, "lambda"), args_sym, rel_call);
+    sexp def = sexp_list3(ctx, ps_intern(ctx, "define"), ident, lam);
+    return sexp_list3(ctx, ps_intern(ctx, "begin"), assert_call, def);
+}
+
+
+/* rule ancestor(?x, ?y) :- parent(?x, ?y);
+   -> (begin (logic_assert_rule 'ancestor 2 (lambda (x y) (parent x y)))
+             (define ancestor (lambda __args__ (logic_query_rel 'ancestor __args__))))
+   For extra vars not in head, use fresh() in body:
+     rule ancestor(?x, ?y) :- fresh(?z) { parent(?x, ?z), ancestor(?z, ?y) }; */
+sexp ps_make_rule(sexp ctx, const char *name, int nlen, sexp params, sexp goals) {
+    sexp sym = sexp_list2(ctx, ps_intern(ctx, "quote"),
+                          ps_make_ident(ctx, name, nlen));
+    int arity = 0;
+    for (sexp p = params; sexp_pairp(p); p = sexp_cdr(p)) arity++;
+
+    sexp body = ps_logic_conj_chain(ctx, goals);
+    sexp lam = sexp_list3(ctx, ps_intern(ctx, "lambda"), params, body);
+    sexp assert_call = sexp_cons(ctx, ps_intern(ctx, "logic_assert_rule"),
+             sexp_cons(ctx, sym,
+               sexp_cons(ctx, sexp_make_fixnum(arity),
+                 sexp_cons(ctx, lam, SEXP_NULL))));
+    sexp ident = ps_make_ident(ctx, name, nlen);
+    sexp args_sym = ps_intern(ctx, "__args__");
+    sexp rel_call = sexp_list3(ctx, ps_intern(ctx, "logic_query_rel"),
+                               sym, args_sym);
+    sexp def_lam = sexp_list3(ctx, ps_intern(ctx, "lambda"), args_sym, rel_call);
+    sexp def = sexp_list3(ctx, ps_intern(ctx, "define"), ident, def_lam);
+    return sexp_list3(ctx, ps_intern(ctx, "begin"), assert_call, def);
+}
+
+/* Helper: check if sexp is (quote sym) form */
+static int is_quoted_sym(sexp x) {
+    return sexp_pairp(x) && sexp_symbolp(sexp_car(x)) &&
+           sexp_pairp(sexp_cdr(x)) && sexp_symbolp(sexp_cadr(x)) &&
+           !sexp_pairp(sexp_cddr(x));
+}
+
+/* query parent(?x, "bob")
+   Compiles to: run(*, ?__q__) { fresh(?x) { parent(?x, "bob"), ?__q__ === ?x } }
+   Or with multiple free vars:
+   query parent(?x, ?y) → run(*, ?__q__) { fresh(?x, ?y) { parent(?x, ?y), ?__q__ === [?x, ?y] } } */
+sexp ps_make_query(sexp ctx, const char *name, int nlen, sexp args) {
+    /* Collect free vars (quoted symbols) and build call args */
+    sexp free_vars = SEXP_NULL;
+    sexp call_args = SEXP_NULL;
+    for (sexp p = args; sexp_pairp(p); p = sexp_cdr(p)) {
+        sexp a = sexp_car(p);
+        if (is_quoted_sym(a)) {
+            sexp var_sym = sexp_cadr(a);
+            free_vars = ps_append(ctx, sexp_pairp(free_vars) ? free_vars : SEXP_NULL, var_sym);
+            call_args = ps_append(ctx, sexp_pairp(call_args) ? call_args : SEXP_NULL, var_sym);
+        } else {
+            call_args = ps_append(ctx, sexp_pairp(call_args) ? call_args : SEXP_NULL, a);
+        }
+    }
+    if (!sexp_pairp(free_vars)) free_vars = SEXP_NULL;
+    if (!sexp_pairp(call_args)) call_args = SEXP_NULL;
+
+    sexp rel_name = ps_make_ident(ctx, name, nlen);
+    /* Build: (rel_name arg1 arg2 ...) — function call as goal */
+    sexp rel_call = sexp_cons(ctx, rel_name, call_args);
+
+    sexp q = ps_intern(ctx, "__q__");
+    /* Build result: if one free var, q === var; if multiple, q === [vars] */
+    sexp result_expr;
+    if (sexp_pairp(free_vars) && !sexp_pairp(sexp_cdr(free_vars))) {
+        result_expr = sexp_car(free_vars);
+    } else {
+        result_expr = sexp_cons(ctx, ps_intern(ctx, "list"), free_vars);
+    }
+    sexp eq_goal = sexp_list3(ctx, ps_intern(ctx, "logic_eq"), q, result_expr);
+    sexp body = sexp_list3(ctx, ps_intern(ctx, "conj"), rel_call, eq_goal);
+
+    /* Wrap in fresh for free vars */
+    if (sexp_pairp(free_vars)) {
+        body = ps_make_fresh(ctx, free_vars, sexp_list1(ctx, body));
+    }
+
+    /* Wrap in logic_run */
+    sexp lam = sexp_list3(ctx, ps_intern(ctx, "lambda"), sexp_list1(ctx, q), body);
+    return sexp_list3(ctx, ps_intern(ctx, "logic_run"), SEXP_FALSE, lam);
+}
+
+/* findall(?x, parent(?x, "bob"))
+   Compiles to: run(*, ?x) { parent(?x, "bob") }
+   The target var ?x must appear in the relation args */
+sexp ps_make_findall(sexp ctx, const char *vname, int vlen,
+                     const char *rname, int rlen, sexp args) {
+    sexp target = ps_make_ident(ctx, vname, vlen);
+
+    /* Collect all free vars from args */
+    sexp free_vars = SEXP_NULL;
+    sexp call_args = SEXP_NULL;
+    for (sexp p = args; sexp_pairp(p); p = sexp_cdr(p)) {
+        sexp a = sexp_car(p);
+        if (is_quoted_sym(a)) {
+            sexp var_sym = sexp_cadr(a);
+            free_vars = ps_append(ctx, sexp_pairp(free_vars) ? free_vars : SEXP_NULL, var_sym);
+            call_args = ps_append(ctx, sexp_pairp(call_args) ? call_args : SEXP_NULL, var_sym);
+        } else {
+            call_args = ps_append(ctx, sexp_pairp(call_args) ? call_args : SEXP_NULL, a);
+        }
+    }
+    if (!sexp_pairp(free_vars)) free_vars = SEXP_NULL;
+    if (!sexp_pairp(call_args)) call_args = SEXP_NULL;
+
+    sexp rel_name = ps_make_ident(ctx, rname, rlen);
+    sexp rel_call = sexp_cons(ctx, rel_name, call_args);
+
+    /* result = target var, so q === target_var */
+    sexp q = ps_intern(ctx, "__q__");
+    sexp eq_goal = sexp_list3(ctx, ps_intern(ctx, "logic_eq"), q, target);
+    sexp body = sexp_list3(ctx, ps_intern(ctx, "conj"), rel_call, eq_goal);
+
+    /* Remove target from free_vars for fresh (target is q) */
+    sexp other_vars = SEXP_NULL;
+    for (sexp p = free_vars; sexp_pairp(p); p = sexp_cdr(p)) {
+        if (sexp_car(p) != target)
+            other_vars = ps_append(ctx, sexp_pairp(other_vars) ? other_vars : SEXP_NULL, sexp_car(p));
+    }
+
+    /* Wrap in fresh for non-target free vars */
+    if (sexp_pairp(other_vars)) {
+        body = ps_make_fresh(ctx, other_vars, sexp_list1(ctx, body));
+    }
+
+    /* For findall, target IS q */
+    sexp lam = sexp_list3(ctx, ps_intern(ctx, "lambda"), sexp_list1(ctx, target), body);
+    return sexp_list3(ctx, ps_intern(ctx, "logic_run"), SEXP_FALSE, lam);
+}
+
+/* guard(expr) -> (logic_guard (lambda () expr)) */
+sexp ps_make_logic_guard(sexp ctx, sexp expr) {
+    sexp thunk = sexp_list3(ctx, ps_intern(ctx, "lambda"), SEXP_NULL, expr);
+    return sexp_list2(ctx, ps_intern(ctx, "logic_guard"), thunk);
+}
+
 /* ===== Lemon parser wrapper ===== */
 
 sexp eval_parse(sexp ctx, sexp env, const char *source,

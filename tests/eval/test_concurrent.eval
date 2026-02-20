@@ -1,0 +1,191 @@
+test_begin("Concurrent Containers");
+
+// ================================================================
+// ConcurrentDict basic
+// ================================================================
+
+define d = ConcurrentDict();
+d->set("a", 1);
+d->set("b", 2);
+d->set("c", 3);
+test("dict get a", 1, d->get("a"));
+test("dict get b", 2, d->get("b"));
+test("dict size 3", 3, d->size());
+test_assert("dict has a", d->has?("a"));
+test_assert("dict not has z", !d->has?("z"));
+d->delete("b");
+test("dict size after delete", 2, d->size());
+test_assert("dict deleted b", !d->has?("b"));
+
+// Keys
+define ks = d->keys();
+test("dict keys length", 2, length(ks));
+
+// Values
+define vs = d->vals();
+test("dict values length", 2, length(vs));
+
+// Entries
+define es = d->entries();
+test("dict entries length", 2, length(es));
+
+// Clear
+d->clear();
+test("dict cleared", 0, d->size());
+test_assert("dict empty after clear", d->empty?());
+
+// ================================================================
+// ConcurrentDict defaults
+// ================================================================
+
+define d2 = ConcurrentDict();
+test("dict get missing returns false", false, d2->get("missing"));
+d2->set("key", 42);
+test("dict get existing", 42, d2->get("key"));
+
+// ================================================================
+// ConcurrentDict string values
+// ================================================================
+
+define d3 = ConcurrentDict();
+d3->set("name", "hello");
+test("dict string value", "hello", d3->get("name"));
+d3->set("list", [1, 2, 3]);
+test("dict list value", [1, 2, 3], d3->get("list"));
+
+// ================================================================
+// ConcurrentDict named sharing
+// ================================================================
+
+define da = ConcurrentDict("shared1");
+da->set("x", 100);
+define db = ConcurrentDict("shared1");
+test("named dict shares data", 100, db->get("x"));
+db->set("y", 200);
+test("named dict bidirectional", 200, da->get("y"));
+
+// ================================================================
+// ConcurrentQueue basic FIFO
+// ================================================================
+
+define q = ConcurrentQueue();
+q->push(1);
+q->push(2);
+q->push(3);
+test("queue size 3", 3, q->size());
+test("queue FIFO 1", 1, q->pop());
+test("queue FIFO 2", 2, q->pop());
+test("queue FIFO 3", 3, q->pop());
+test("queue empty", 0, q->size());
+
+// ================================================================
+// ConcurrentQueue try_pop
+// ================================================================
+
+define q2 = ConcurrentQueue();
+test("try_pop empty returns false", false, q2->try_pop());
+q2->push(42);
+test("try_pop returns value", 42, q2->try_pop());
+test("try_pop empty again", false, q2->try_pop());
+
+// ================================================================
+// ConcurrentQueue bounded
+// ================================================================
+
+define q3 = ConcurrentQueue(2);
+test_assert("bounded push 1", q3->try_push(1));
+test_assert("bounded push 2", q3->try_push(2));
+test_assert("bounded push 3 fails", !q3->try_push(3));
+test("bounded pop 1", 1, q3->pop());
+test_assert("bounded push 3 succeeds", q3->try_push(3));
+
+// ================================================================
+// ConcurrentStack LIFO
+// ================================================================
+
+define s = ConcurrentStack();
+s->push(1);
+s->push(2);
+s->push(3);
+test("stack size 3", 3, s->size());
+test("stack LIFO 3", 3, s->pop());
+test("stack LIFO 2", 2, s->pop());
+test("stack LIFO 1", 1, s->pop());
+
+// ================================================================
+// ConcurrentStack peek
+// ================================================================
+
+define s2 = ConcurrentStack();
+test("peek empty returns false", false, s2->peek());
+s2->push(99);
+test("peek returns top", 99, s2->peek());
+test("peek does not remove", 1, s2->size());
+test("pop after peek", 99, s2->pop());
+
+// ================================================================
+// ConcurrentList basic
+// ================================================================
+
+define l = ConcurrentList();
+l->append(10);
+l->append(20);
+l->append(30);
+test("list size 3", 3, l->size());
+test("list ref 0", 10, l->ref(0));
+test("list ref 1", 20, l->ref(1));
+test("list ref 2", 30, l->ref(2));
+l->set(1, 99);
+test("list set 1", 99, l->ref(1));
+
+// to_list snapshot
+define snap = l->to_list();
+test("list to_list length", 3, length(snap));
+test("list to_list first", 10, car(snap));
+
+// ================================================================
+// ConcurrentList negative indexing
+// ================================================================
+
+define l2 = ConcurrentList();
+l2->append(1);
+l2->append(2);
+l2->append(3);
+test("list ref -1", 3, l2->ref(-1));
+test("list ref -2", 2, l2->ref(-2));
+
+// ================================================================
+// ConcurrentList prepend and remove
+// ================================================================
+
+define l3 = ConcurrentList();
+l3->append(2);
+l3->append(3);
+l3->prepend(1);
+test("list prepend", 1, l3->ref(0));
+test("list size after prepend", 3, l3->size());
+l3->remove(1);
+test("list size after remove", 2, l3->size());
+test("list shifted after remove", 3, l3->ref(1));
+
+// ================================================================
+// ConcurrentList clear
+// ================================================================
+
+define l4 = ConcurrentList();
+l4->append(1);
+l4->append(2);
+l4->clear();
+test("list cleared", 0, l4->size());
+test_assert("list empty after clear", l4->empty?());
+
+// ================================================================
+// RAII with close (ConcurrentDict)
+// ================================================================
+
+with(cd = ConcurrentDict()) {
+    cd->set("inside", true);
+    test("RAII dict works inside", true, cd->get("inside"));
+};
+
+test_end();

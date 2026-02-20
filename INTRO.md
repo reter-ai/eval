@@ -2056,6 +2056,53 @@ define r = resource(src, fetcher, default_value);
 
 Stale fetches are automatically ignored — if the source changes while a fetch is in progress, only the latest result is used.
 
+## Logic Programming
+
+Eval includes built-in logic programming combining miniKanren and Prolog styles. Logic variables use `?` prefix, `===` performs unification.
+
+### run, fresh, conde
+
+```
+// Search for values satisfying constraints
+run(1, ?q) { ?q === 42 };                      // => [42]
+
+// Fresh variables
+run(1, ?q) {
+    fresh(?x, ?y) {
+        ?x === "hello", ?y === "world",
+        ?q === [?x, ?y]
+    }
+};
+// => [["hello", "world"]]
+
+// Disjunction — multiple alternatives
+run(*, ?q) conde {
+    { ?q === 1 },
+    { ?q === 2 },
+    { ?q === 3 }
+};
+// => [1, 2, 3]
+```
+
+### Facts and Rules
+
+```
+// Declare facts
+fact parent("tom", "bob");
+fact parent("bob", "ann");
+
+// Recursive rules (use fresh for body-only variables)
+rule ancestor(?x, ?y) :- parent(?x, ?y);
+rule ancestor(?x, ?y) :- fresh(?z) { parent(?x, ?z), ancestor(?z, ?y) };
+
+// Query
+run(*, ?q) { ancestor(?q, "ann") };    // => ["bob", "tom"]
+```
+
+`run(n, ?q)` finds `n` solutions (`*` for all). Goals separated by commas are conjunctive (all must hold). `conde` clauses are disjunctive (any may hold). The search uses fair interleaving.
+
+See [PROLOG.md](PROLOG.md) for the full guide.
+
 ## Continuation Serialization
 
 Continuations can be serialized to bytes and restored later:
@@ -2174,3 +2221,4 @@ See [NETWORKING.md](NETWORKING.md) for the full networking guide including low-l
 - [TESTS.md](TESTS.md) — Built-in test framework: test, test_assert, test_error, test_group
 - [BINARY.md](BINARY.md) — Cap'n Proto binary serialization: Schema, build, read, save, mmap, RAII cleanup
 - [GRAMMARS.md](GRAMMARS.md) — Grammar JIT: runtime parser generation from Lark EBNF
+- [PROLOG.md](PROLOG.md) — Logic programming: facts, rules, unification, run, fresh, conde

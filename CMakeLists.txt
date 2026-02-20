@@ -330,6 +330,7 @@ if(BUILD_PYTHON_MODULE)
         src/_eval_parser_helpers.c
         src/_chibi_serialize.c
         src/_eval_pool.c
+        src/_eval_concurrent.c
         src/_eval_lib_init.c
         src/eval_embedded_extract.c
         ${EMBEDDED_SCM_C}
@@ -399,6 +400,7 @@ if(BUILD_EVAL_STANDALONE)
         src/_eval_parser_helpers.c
         src/_chibi_serialize.c
         src/_eval_pool.c
+        src/_eval_concurrent.c
         src/_eval_lib_init.c
     )
 

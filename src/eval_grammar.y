@@ -42,7 +42,7 @@
 %left AND.
 %left BITOR.
 %left BITAND.
-%left EQEQ EQQ BANGEQ.
+%left EQEQ EQQ BANGEQ UNIFY.
 %left LT GT LTE GTE.
 %left SHL SHR.
 %left PLUS MINUS CONCAT.
@@ -54,6 +54,7 @@
 /* Additional keyword tokens recognized by the lexer.
    Declaring them here makes lemon generate their TOK_ defines. */
 %token LIBRARY EXPORT INCLUDE MACRO SYNTAX_RULES OPVAL TEST_GROUP DEFINE IN DICT WITH ASYNC AWAIT STATIC ABSTRACT YIELD GENERATOR RAW_STRING PARALLEL FSTR_START FSTR_MID FSTR_END.
+%token LOGICVAR COLONMINUS FRESH CONDE RUN FACT RULE QUERY FINDALL.
 
 /* Non-terminal types - all are sexp */
 %type program { sexp }
@@ -82,6 +83,10 @@
 %type dict_entries { sexp }
 %type member_name { EvalToken }
 %type fstr_body { sexp }
+%type logic_goals { sexp }
+%type logic_var_list { sexp }
+%type conde_clauses { sexp }
+%type rule_body { sexp }
 
 /* ===== PROGRAM ===== */
 
@@ -111,6 +116,15 @@ expr(A) ::= IDENT(N) ASSIGN expr(E). {
 }
 /* define x = 10;  →  (define x 10) */
 expr(A) ::= DEFINE IDENT(N) ASSIGN expr(E). {
+    A = sexp_list3(ctx, ps_intern(ctx, "define"),
+        ps_make_ident(ctx, N.start, N.length), E);
+}
+/* define <keyword> = expr;  →  allow logic keywords as variable names in define */
+expr(A) ::= DEFINE RUN(N) ASSIGN expr(E). {
+    A = sexp_list3(ctx, ps_intern(ctx, "define"),
+        ps_make_ident(ctx, N.start, N.length), E);
+}
+expr(A) ::= DEFINE FRESH(N) ASSIGN expr(E). {
     A = sexp_list3(ctx, ps_intern(ctx, "define"),
         ps_make_ident(ctx, N.start, N.length), E);
 }
@@ -246,6 +260,11 @@ member_name(A) ::= ABSTRACT(T). { A = T; }
 member_name(A) ::= YIELD(T). { A = T; }
 member_name(A) ::= GENERATOR(T). { A = T; }
 member_name(A) ::= PARALLEL(T). { A = T; }
+member_name(A) ::= FRESH(T).   { A = T; }
+member_name(A) ::= CONDE(T).   { A = T; }
+member_name(A) ::= RUN(T).     { A = T; }
+member_name(A) ::= FACT(T).    { A = T; }
+member_name(A) ::= RULE(T).    { A = T; }
 
 /* --- Postfix: indexing expr[i] --- */
 expr(A) ::= expr(E) LBRACKET expr(I) RBRACKET. {
@@ -688,6 +707,82 @@ expr(A) ::= TEST_GROUP LPAREN expr(N) RPAREN expr(B). [ARGLIST_PREC] {
                    sexp_list3(ctx, ps_intern(ctx, "lambda"), SEXP_NULL, B));
 }
 
+/* ===== LOGIC PROGRAMMING ===== */
+
+/* --- Logic variable as expression --- */
+expr(A) ::= LOGICVAR(V). {
+    A = ps_make_ident(ctx, V.start + 1, V.length - 1);
+}
+
+/* --- Unification operator --- */
+expr(A) ::= expr(L) UNIFY expr(R). {
+    A = sexp_list3(ctx, ps_intern(ctx, "logic_eq"), L, R);
+}
+
+/* --- fresh(?x, ?y) { goal, goal, ... } --- */
+expr(A) ::= FRESH LPAREN logic_var_list(V) RPAREN LBRACE logic_goals(G) RBRACE. {
+    A = ps_make_fresh(ctx, V, G);
+}
+
+/* --- run(n, ?q) { goals } --- */
+expr(A) ::= RUN LPAREN expr(N) COMMA LOGICVAR(Q) RPAREN LBRACE logic_goals(G) RBRACE. {
+    A = ps_make_run(ctx, N, Q.start + 1, Q.length - 1, G);
+}
+/* run(n, ?q) single_expr */
+expr(A) ::= RUN LPAREN expr(N) COMMA LOGICVAR(Q) RPAREN expr(B). [ARGLIST_PREC] {
+    A = ps_make_run(ctx, N, Q.start + 1, Q.length - 1, sexp_list1(ctx, B));
+}
+
+
+
+/* --- conde { {g1, g2}, {g3, g4}, ... } (standalone) --- */
+expr(A) ::= CONDE LBRACE conde_clauses(C) RBRACE. {
+    A = ps_make_conde(ctx, C);
+}
+
+/* --- fact name(arg1, arg2, ...); --- */
+stmt(A) ::= FACT IDENT(N) LPAREN arglist(L) RPAREN SEMICOLON. {
+    A = ps_make_fact(ctx, N.start, N.length, L);
+}
+
+/* --- rule name(?x, ?y) :- goal1, goal2; --- */
+stmt(A) ::= RULE IDENT(N) LPAREN arglist(P) RPAREN COLONMINUS rule_body(G) SEMICOLON. {
+    A = ps_make_rule(ctx, N.start, N.length, P, G);
+}
+
+
+
+/* --- Helper non-terminals --- */
+
+/* Comma-separated goals inside { } */
+logic_goals(A) ::= expr(E). [ARGLIST_PREC] { A = sexp_list1(ctx, E); }
+logic_goals(A) ::= logic_goals(L) COMMA expr(E). [ARGLIST_PREC] {
+    A = ps_append(ctx, L, E);
+}
+
+/* Logic variable list: ?x, ?y, ?z */
+logic_var_list(A) ::= LOGICVAR(V). {
+    A = sexp_list1(ctx, ps_make_ident(ctx, V.start + 1, V.length - 1));
+}
+logic_var_list(A) ::= logic_var_list(L) COMMA LOGICVAR(V). {
+    A = ps_append(ctx, L, ps_make_ident(ctx, V.start + 1, V.length - 1));
+}
+
+/* Conde clauses: { goals }, { goals }, ... */
+conde_clauses(A) ::= LBRACE logic_goals(G) RBRACE. {
+    A = sexp_list1(ctx, G);
+}
+conde_clauses(A) ::= conde_clauses(L) COMMA LBRACE logic_goals(G) RBRACE. {
+    A = ps_append(ctx, L, G);
+}
+
+/* Rule body: comma-separated goals after :- */
+rule_body(A) ::= expr(E). [ARGLIST_PREC] { A = sexp_list1(ctx, E); }
+rule_body(A) ::= rule_body(L) COMMA expr(E). [ARGLIST_PREC] {
+    A = ps_append(ctx, L, E);
+}
+
+
 /* ===== HELPER RULES ===== */
 
 /* Argument list (possibly empty) */
@@ -748,6 +843,21 @@ iface_entries(A) ::= iface_entries(L) COMMA iface_entry(E). {
     A = ps_append(ctx, L, E);
 }
 iface_entry(A) ::= IDENT(N) COLON expr(E). {
+    A = sexp_cons(ctx, ps_make_ident(ctx, N.start, N.length), E);
+}
+iface_entry(A) ::= RUN(N) COLON expr(E). {
+    A = sexp_cons(ctx, ps_make_ident(ctx, N.start, N.length), E);
+}
+iface_entry(A) ::= FRESH(N) COLON expr(E). {
+    A = sexp_cons(ctx, ps_make_ident(ctx, N.start, N.length), E);
+}
+iface_entry(A) ::= CONDE(N) COLON expr(E). {
+    A = sexp_cons(ctx, ps_make_ident(ctx, N.start, N.length), E);
+}
+iface_entry(A) ::= FACT(N) COLON expr(E). {
+    A = sexp_cons(ctx, ps_make_ident(ctx, N.start, N.length), E);
+}
+iface_entry(A) ::= RULE(N) COLON expr(E). {
     A = sexp_cons(ctx, ps_make_ident(ctx, N.start, N.length), E);
 }
 iface_entry(A) ::= IDENT(N) COLON ABSTRACT. {

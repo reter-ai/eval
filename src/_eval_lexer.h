@@ -12,7 +12,8 @@
 #define TOK_EOF 0
 
 /* TOK_COUNT: one past the highest token value (for debug name arrays etc.) */
-#define TOK_COUNT (TOK_FSTR_END + 1)
+/* Must be > highest token value. TOK_RECEIVE is currently the highest. */
+#define TOK_COUNT (TOK_RECEIVE + 1)
 
 /* Token structure */
 typedef struct {

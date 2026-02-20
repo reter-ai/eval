@@ -141,6 +141,11 @@ static const Keyword keywords[] = {
     {"yield",       TOK_YIELD},
     {"generator",   TOK_GENERATOR},
     {"parallel",    TOK_PARALLEL},
+    {"fresh",       TOK_FRESH},
+    {"conde",       TOK_CONDE},
+    {"run",         TOK_RUN},
+    {"fact",        TOK_FACT},
+    {"rule",        TOK_RULE},
     {"true",        TOK_TRUE},
     {"false",       TOK_FALSE},
     {"nil",         TOK_NIL},
@@ -369,6 +374,7 @@ static void lexer_post_process(EvalLexer *lexer, EvalToken *token) {
     case TOK_PLUSPLUS: case TOK_MINUSMINUS:
     case TOK_OPVAL:
     case TOK_FSTR_END:
+    case TOK_LOGICVAR:
         lexer->prev_ends_expr = 1;
         break;
     default:
@@ -587,11 +593,21 @@ int eval_lexer_next(EvalLexer *lexer, EvalToken *token) {
         break;
 
     case ':':
-        token->type = TOK_COLON;
+        if (peek(lexer) == '-') {
+            advance(lexer);
+            token->type = TOK_COLONMINUS;
+            token->length = 2;
+        } else {
+            token->type = TOK_COLON;
+        }
         break;
 
     case '=':
-        if (peek(lexer) == '=') {
+        if (peek(lexer) == '=' && peek_next(lexer) == '=') {
+            advance(lexer); advance(lexer);
+            token->type = TOK_UNIFY;
+            token->length = 3;
+        } else if (peek(lexer) == '=') {
             advance(lexer);
             token->type = TOK_EQEQ;
             token->length = 2;
@@ -734,6 +750,20 @@ int eval_lexer_next(EvalLexer *lexer, EvalToken *token) {
         }
         break;
 
+    case '?':
+        if (is_ident_start(peek(lexer))) {
+            /* Logic variable: ?x, ?name */
+            const char *lv_start = lexer->current - 1; /* include the ? */
+            while (is_ident_char(peek(lexer))) advance(lexer);
+            token->start = lv_start;
+            token->length = (int)(lexer->current - lv_start);
+            token->type = TOK_LOGICVAR;
+        } else {
+            lexer_error(lexer, "expected identifier after '?'");
+            return -1;
+        }
+        break;
+
     default:
         lexer_error(lexer, "unexpected character");
         return -1;
@@ -840,6 +870,16 @@ const char *eval_token_name(int type) {
     case TOK_FSTR_START:    return "FSTR_START";
     case TOK_FSTR_MID:      return "FSTR_MID";
     case TOK_FSTR_END:      return "FSTR_END";
+    case TOK_LOGICVAR:      return "?var";
+    case TOK_UNIFY:         return "===";
+    case TOK_COLONMINUS:    return ":-";
+    case TOK_FRESH:         return "fresh";
+    case TOK_CONDE:         return "conde";
+    case TOK_RUN:           return "run";
+    case TOK_FACT:          return "fact";
+    case TOK_RULE:          return "rule";
+    case TOK_QUERY:         return "query";
+    case TOK_FINDALL:       return "findall";
     default:                return "UNKNOWN";
     }
 }

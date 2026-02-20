@@ -226,6 +226,12 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
     }
 #endif
 
+    /* Register concurrent container types (must be same order as workers) */
+    {
+        extern void register_concurrent_types(sexp ctx);
+        register_concurrent_types(self->ctx);
+    }
+
     /* Register bridge functions */
     register_bridge_functions(self->ctx, self->env);
 
@@ -245,6 +251,12 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
         register_capnp_bridge_functions(self->ctx, self->env);
     }
 #endif
+
+    /* Register concurrent container bridge functions */
+    {
+        extern void register_concurrent_bridge_functions(sexp ctx, sexp env);
+        register_concurrent_bridge_functions(self->ctx, self->env);
+    }
 
     /* Import (scheme base) via the meta-environment — this adds:
      * error-object?, error-object-message, square, boolean=?, symbol=?,
@@ -326,6 +338,10 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
     sexp_load_module_file(self->ctx, "eval/generator.scm", self->env);
     self->env = sexp_context_env(self->ctx);
 
+    /* Logic programming runtime */
+    sexp_load_module_file(self->ctx, "eval/logic.scm", self->env);
+    self->env = sexp_context_env(self->ctx);
+
     /* Green-thread-aware channel-recv: retries with thread-yield! like
      * mutex-lock!.  Must come after threads.scm which defines thread-yield!.
      * Overrides the C opcode binding so user code gets the cooperative version. */
@@ -395,6 +411,38 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
 
         /* TaskPool: hybrid OS thread pool + green threads */
         eval_load_eval_file(self->ctx, self->env, "eval/taskpool.eval");
+        self->env = sexp_context_env(self->ctx);
+
+        /* Concurrent containers: ConcurrentDict, ConcurrentQueue, etc. */
+        eval_load_eval_file(self->ctx, self->env, "eval/concurrent.eval");
+        self->env = sexp_context_env(self->ctx);
+
+        /* Variadic constructor wrappers for concurrent containers */
+        sexp_eval_string(self->ctx,
+            "(define __ConcurrentDict_1 ConcurrentDict)", -1, self->env);
+        sexp_eval_string(self->ctx,
+            "(define (ConcurrentDict . args)"
+            "  (__ConcurrentDict_1 (if (pair? args) (car args) #f)))", -1, self->env);
+
+        sexp_eval_string(self->ctx,
+            "(define __ConcurrentQueue_2 ConcurrentQueue)", -1, self->env);
+        sexp_eval_string(self->ctx,
+            "(define (ConcurrentQueue . args)"
+            "  (let ((name (if (and (pair? args) (string? (car args))) (car args) #f))"
+            "        (rest (if (and (pair? args) (string? (car args))) (cdr args) args)))"
+            "    (__ConcurrentQueue_2 name (if (pair? rest) (car rest) 0))))", -1, self->env);
+
+        sexp_eval_string(self->ctx,
+            "(define __ConcurrentStack_1 ConcurrentStack)", -1, self->env);
+        sexp_eval_string(self->ctx,
+            "(define (ConcurrentStack . args)"
+            "  (__ConcurrentStack_1 (if (pair? args) (car args) #f)))", -1, self->env);
+
+        sexp_eval_string(self->ctx,
+            "(define __ConcurrentList_1 ConcurrentList)", -1, self->env);
+        sexp_eval_string(self->ctx,
+            "(define (ConcurrentList . args)"
+            "  (__ConcurrentList_1 (if (pair? args) (car args) #f)))", -1, self->env);
         self->env = sexp_context_env(self->ctx);
     }
 

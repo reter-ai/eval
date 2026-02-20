@@ -32,6 +32,7 @@ e.eval("""
 - **Continuations** — `callcc`, serializable to bytes for checkpointing and migration
 - **Green threads** — cooperative multitasking with fuel-based VM scheduling
 - **Synchronization** — OO wrappers: Mutex, Monitor, ReadWriteLock, Semaphore with RAII lock management
+- **Concurrent containers** — thread-safe ConcurrentDict, ConcurrentQueue, ConcurrentStack, ConcurrentList with cross-worker sharing
 - **Thread pool** — true OS-level parallelism with worker threads, futures, and channels
 - **Task pool** — scalable task execution: OS thread pool + green threads, submit closures, promises
 - **Hybrid async** — `async` for green threads, `parallel async` for OS threads — mix both in the same scope
@@ -42,6 +43,7 @@ e.eval("""
 - **Standalone CLI** — single binary, all scheme files embedded, runs anywhere with no dependencies
 - **Python interop** — call Python from Eval, call Eval from Python, share data bidirectionally
 - **Full numeric tower** — integers, floats, bignums, rationals
+- **Logic programming** — miniKanren + Prolog-style: `fact`, `rule`, `run`, `fresh`, `conde`, `===` unification, interleaving search
 - **Binary serialization** — Cap'n Proto zero-copy serialization with runtime schema parsing, wire-compatible with any language
 - **Scheme power** — access any chibi-scheme primitive via backtick identifiers
 
@@ -644,7 +646,46 @@ with(guard = m2->lock()) {
 };
 ```
 
-See [`examples/green_threads/`](examples/green_threads/) for complete demos, [THREADS.md](THREADS.md) for the full green threads and continuations guide, [MULTITHREADING.md](MULTITHREADING.md) for OO synchronization wrappers, [ASYNC.md](ASYNC.md) for the async programming guide, [TASKS.md](TASKS.md) for the TaskPool guide, [NETWORKING.md](NETWORKING.md) for the networking guide, and [LISTS.md](LISTS.md)/[VECTORS.md](VECTORS.md) for collection methods.
+See [`examples/green_threads/`](examples/green_threads/) for complete demos, [THREADS.md](THREADS.md) for the full green threads and continuations guide, [MULTITHREADING.md](MULTITHREADING.md) for OO synchronization wrappers, [CONCURRENT.md](CONCURRENT.md) for thread-safe containers, [ASYNC.md](ASYNC.md) for the async programming guide, [TASKS.md](TASKS.md) for the TaskPool guide, [NETWORKING.md](NETWORKING.md) for the networking guide, and [LISTS.md](LISTS.md)/[VECTORS.md](VECTORS.md) for collection methods.
+
+## Concurrent containers
+
+Thread-safe data structures that work across green threads and OS thread pool workers:
+
+```
+// Dict — thread-safe key-value store
+define d = ConcurrentDict();
+d->set("x", 42);
+d->get("x");              // => 42
+
+// Queue — FIFO with blocking pop
+define q = ConcurrentQueue();
+q->push(1); q->push(2);
+q->pop();                  // => 1
+
+// Stack — LIFO with blocking pop
+define s = ConcurrentStack();
+s->push(1); s->push(2);
+s->pop();                  // => 2
+
+// List — concurrent dynamic array
+define l = ConcurrentList();
+l->append(10); l->append(20);
+l->ref(0);                 // => 10
+
+// Named containers share across pool workers
+with(pool = TaskPool(4)) {
+    define d = ConcurrentDict("shared");
+    d->set("total", 0);
+    pool->map([1, 2, 3, 4], function(x) {
+        define d = ConcurrentDict("shared");
+        d->set(`number->string`(x), x * x);
+    });
+    d->size();             // => 5
+};
+```
+
+All containers support RAII via `with`, non-blocking variants (`try_pop`, `try_push`), and green-thread-aware blocking. See [CONCURRENT.md](CONCURRENT.md) for the full guide.
 
 ## Reactive programming
 
@@ -856,7 +897,7 @@ with(pool = TaskPool(4)) {
 
 Each worker runs green threads, so multiple tasks on the same worker execute concurrently. See [TASKS.md](TASKS.md) for the full guide.
 
-See [ASYNC.md](ASYNC.md) for the full async programming guide, [TASKS.md](TASKS.md) for the TaskPool guide, [THREADS.md](THREADS.md) for the complete threads and continuations guide, [MULTITHREADING.md](MULTITHREADING.md) for OO synchronization wrappers, [GENERATORS.md](GENERATORS.md) for generators and lazy sequences, [FSTRINGS.md](FSTRINGS.md) for interpolated strings, [NETWORKING.md](NETWORKING.md) for TCP/HTTP networking, [FILESYS.md](FILESYS.md) for filesystem operations, [LISTS.md](LISTS.md)/[VECTORS.md](VECTORS.md) for collection methods, [BINARY.md](BINARY.md) for Cap'n Proto binary serialization, [GRAMMARS.md](GRAMMARS.md) for runtime parser generation, and [TESTS.md](TESTS.md) for the built-in test framework.
+See [ASYNC.md](ASYNC.md) for the full async programming guide, [TASKS.md](TASKS.md) for the TaskPool guide, [THREADS.md](THREADS.md) for the complete threads and continuations guide, [MULTITHREADING.md](MULTITHREADING.md) for OO synchronization wrappers, [CONCURRENT.md](CONCURRENT.md) for thread-safe containers, [GENERATORS.md](GENERATORS.md) for generators and lazy sequences, [FSTRINGS.md](FSTRINGS.md) for interpolated strings, [NETWORKING.md](NETWORKING.md) for TCP/HTTP networking, [FILESYS.md](FILESYS.md) for filesystem operations, [LISTS.md](LISTS.md)/[VECTORS.md](VECTORS.md) for collection methods, [BINARY.md](BINARY.md) for Cap'n Proto binary serialization, [GRAMMARS.md](GRAMMARS.md) for runtime parser generation, [PROLOG.md](PROLOG.md) for logic programming, and [TESTS.md](TESTS.md) for the built-in test framework.
 
 ## Binary serialization
 
@@ -912,6 +953,47 @@ p->parse("1 + 2 + 3");
 
 See [GRAMMARS.md](GRAMMARS.md) for the full guide including the compilation pipeline, grammar format, and examples.
 
+## Logic programming
+
+Built-in miniKanren + Prolog-style logic programming with unification, facts, rules, and interleaving search:
+
+```
+// Declare facts
+fact parent("tom", "bob");
+fact parent("bob", "ann");
+fact parent("bob", "pat");
+
+// Define recursive rules
+rule ancestor(?x, ?y) :- parent(?x, ?y);
+rule ancestor(?x, ?y) :- fresh(?z) { parent(?x, ?z), ancestor(?z, ?y) };
+
+// Search for solutions
+run(*, ?q) { ancestor(?q, "ann") };
+// => ["bob", "tom"]
+
+// Disjunction with conde
+run(*, ?q) conde {
+    { ?q === 1 },
+    { ?q === 2 },
+    { ?q === 3 }
+};
+// => [1, 2, 3]
+
+// Fresh variables and structural unification
+run(1, ?q) {
+    fresh(?x, ?y) {
+        ?x === "hello",
+        ?y === "world",
+        ?q === [?x, ?y]
+    }
+};
+// => [["hello", "world"]]
+```
+
+Logic variables use `?` prefix (`?x`, `?name`). `===` is the unification operator (distinct from `==` equality). `run(n, ?q)` finds up to `n` solutions (or `*` for all). `fresh` introduces new logic variables. `conde` tries multiple alternatives with fair interleaving.
+
+See [PROLOG.md](PROLOG.md) for the full guide including facts, rules, recursive relations, and the runtime API.
+
 ## Scheme-to-Eval transpiler
 
 The included `scm2eval` tool converts Scheme source files to Eval syntax:
@@ -951,6 +1033,7 @@ eval tests/eval/test_functions.eval
 eval tests/eval/test_green_threads.eval
 eval tests/eval/test_pool.eval
 eval tests/eval/test_taskpool.eval
+eval tests/eval/test_logic.eval
 ```
 
 ## Testing
@@ -1014,7 +1097,7 @@ Eval source  ──→  Lexer  ──→  Lemon LALR parser  ──→  S-expres
 3. **chibi-scheme** compiles S-expressions to bytecode and executes on its VM
 4. The **bridge layer** connects Scheme I/O and functions to the host (Python or standalone CLI)
 
-The entire chibi-scheme runtime is statically linked. The standalone binary embeds all 480 scheme library files — no external dependencies at runtime.
+The entire chibi-scheme runtime is statically linked. The standalone binary embeds all 498 scheme library files — no external dependencies at runtime.
 
 ## License
 

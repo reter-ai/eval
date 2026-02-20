@@ -280,6 +280,10 @@ static sexp init_context(const char *extra_module_dir) {
         register_capnp_reader_type(ctx);
     }
 #endif
+    {
+        extern void register_concurrent_types(sexp ctx);
+        register_concurrent_types(ctx);
+    }
 
     /* Register C bridge functions */
     register_bridge_functions_c(ctx, env);
@@ -293,6 +297,10 @@ static sexp init_context(const char *extra_module_dir) {
         register_capnp_bridge_functions(ctx, env);
     }
 #endif
+    {
+        extern void register_concurrent_bridge_functions(sexp ctx, sexp env);
+        register_concurrent_bridge_functions(ctx, env);
+    }
 
     /* Load scheme extras, test framework */
     sexp_load_module_file(ctx, "scheme/extras.scm", env);
@@ -331,11 +339,48 @@ static sexp init_context(const char *extra_module_dir) {
         eval_load_eval_file(ctx, sexp_context_env(ctx), "eval/taskpool.eval");
     }
 
+    /* Concurrent containers: ConcurrentDict, ConcurrentQueue, etc. */
+    {
+        extern void eval_load_eval_file(sexp ctx, sexp env, const char *path);
+        eval_load_eval_file(ctx, sexp_context_env(ctx), "eval/concurrent.eval");
+        env = sexp_context_env(ctx);
+
+        /* Variadic constructor wrappers */
+        sexp_eval_string(ctx,
+            "(define __ConcurrentDict_1 ConcurrentDict)", -1, env);
+        sexp_eval_string(ctx,
+            "(define (ConcurrentDict . args)"
+            "  (__ConcurrentDict_1 (if (pair? args) (car args) #f)))", -1, env);
+
+        sexp_eval_string(ctx,
+            "(define __ConcurrentQueue_2 ConcurrentQueue)", -1, env);
+        sexp_eval_string(ctx,
+            "(define (ConcurrentQueue . args)"
+            "  (let ((name (if (and (pair? args) (string? (car args))) (car args) #f))"
+            "        (rest (if (and (pair? args) (string? (car args))) (cdr args) args)))"
+            "    (__ConcurrentQueue_2 name (if (pair? rest) (car rest) 0))))", -1, env);
+
+        sexp_eval_string(ctx,
+            "(define __ConcurrentStack_1 ConcurrentStack)", -1, env);
+        sexp_eval_string(ctx,
+            "(define (ConcurrentStack . args)"
+            "  (__ConcurrentStack_1 (if (pair? args) (car args) #f)))", -1, env);
+
+        sexp_eval_string(ctx,
+            "(define __ConcurrentList_1 ConcurrentList)", -1, env);
+        sexp_eval_string(ctx,
+            "(define (ConcurrentList . args)"
+            "  (__ConcurrentList_1 (if (pair? args) (car args) #f)))", -1, env);
+    }
+
     /* OO string methods: "hello"->upper(), etc. */
     sexp_load_module_file(ctx, "eval/string-oo.scm", sexp_context_env(ctx));
 
     /* OO list/vector methods: [1,2,3]->map(...), #[1,2]->length, etc. */
     sexp_load_module_file(ctx, "eval/collection-oo.scm", sexp_context_env(ctx));
+
+    /* Logic programming runtime */
+    sexp_load_module_file(ctx, "eval/logic.scm", sexp_context_env(ctx));
 
     return ctx;
 }

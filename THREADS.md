@@ -619,6 +619,7 @@ define process_batch = function(items) {
 
 ## See also
 
+- [CONCURRENT.md](CONCURRENT.md) — Thread-safe containers: ConcurrentDict, ConcurrentQueue, ConcurrentStack, ConcurrentList
 - [TASKS.md](TASKS.md) — TaskPool: scalable task execution with OS threads + green threads
 - [MULTITHREADING.md](MULTITHREADING.md) — OO synchronization: Mutex, Monitor, ReadWriteLock, Semaphore with RAII
 - [NETWORKING.md](NETWORKING.md) — TCP sockets and HTTP with OO wrappers (`TcpSocket`, `TcpServer`, `HttpClient`) that integrate with green threads
