@@ -510,6 +510,10 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
     self->env = sexp_context_env(self->ctx);
 #endif
 
+    /* Category theory: Maybe, Either, Validation, Writer, Reader, State, Monoid, Lenses */
+    sexp_load_module_file(self->ctx, "eval/monad.scm", self->env);
+    self->env = sexp_context_env(self->ctx);
+
     /* Abstract class support: global flag checked by abstract constructors */
     sexp_eval_string(self->ctx, "(define __abstract_ok__ #f)", -1, self->env);
 

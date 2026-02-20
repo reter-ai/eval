@@ -1294,6 +1294,10 @@ void eval_standard_aliases(sexp ctx, sexp env) {
     env = sexp_context_env(ctx);
 #endif
 
+    /* Category theory: Maybe, Either, Validation, Writer, Reader, State, Monoid, Lenses */
+    sexp_load_module_file(ctx, "eval/monad.scm", env);
+    env = sexp_context_env(ctx);
+
     /* Abstract class support: global flag checked by abstract constructors */
     sexp_eval_string(ctx, "(define __abstract_ok__ #f)", -1, env);
 

@@ -342,3 +342,6 @@ v->a;                                   // => 1
 | `->reduce(fn)` | any | Left fold (no init, error if empty) |
 | `->reduce_right(fn)` | any | Right fold (no init, error if empty) |
 | `->delete(x)` | list | Remove all occurrences of x |
+| `->bind(fn)` | list | Monadic bind (same as flat_map) |
+| `->pure(v)` | list | Wrap value in list: `[v]` |
+| `->mappend(other)` | list | Monoidal append (same as append) |

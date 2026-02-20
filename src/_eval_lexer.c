@@ -148,6 +148,7 @@ static const Keyword keywords[] = {
     {"fact",        TOK_FACT},
     {"rule",        TOK_RULE},
     {"whenever",    TOK_WHENEVER},
+    {"mdo",         TOK_MDO},
     {"true",        TOK_TRUE},
     {"false",       TOK_FALSE},
     {"nil",         TOK_NIL},
@@ -339,6 +340,7 @@ static void lexer_post_process(EvalLexer *lexer, EvalToken *token) {
         case TOK_SHL:
         case TOK_SHR:
         case TOK_CONCAT:
+        case TOK_MAPPEND:
             token->value.int_val = token->type;
             token->type = TOK_OPVAL;
             break;
@@ -683,6 +685,14 @@ int eval_lexer_next(EvalLexer *lexer, EvalToken *token) {
             advance(lexer);
             token->type = TOK_SHL;
             token->length = 2;
+        } else if (peek(lexer) == '~') {
+            advance(lexer);
+            token->type = TOK_BIND_ARROW;
+            token->length = 2;
+        } else if (peek(lexer) == '>') {
+            advance(lexer);
+            token->type = TOK_MAPPEND;
+            token->length = 2;
         } else {
             token->type = TOK_LT;
         }
@@ -695,8 +705,14 @@ int eval_lexer_next(EvalLexer *lexer, EvalToken *token) {
             token->length = 2;
         } else if (peek(lexer) == '>') {
             advance(lexer);
-            token->type = TOK_SHR;
-            token->length = 2;
+            if (peek(lexer) == '=') {
+                advance(lexer);
+                token->type = TOK_BIND;
+                token->length = 3;
+            } else {
+                token->type = TOK_SHR;
+                token->length = 2;
+            }
         } else {
             token->type = TOK_GT;
         }
@@ -713,7 +729,11 @@ int eval_lexer_next(EvalLexer *lexer, EvalToken *token) {
         break;
 
     case '|':
-        if (peek(lexer) == '|') {
+        if (peek(lexer) == '>') {
+            advance(lexer);
+            token->type = TOK_PIPE;
+            token->length = 2;
+        } else if (peek(lexer) == '|') {
             advance(lexer);
             token->type = TOK_OR;
             token->length = 2;
@@ -884,6 +904,11 @@ const char *eval_token_name(int type) {
     case TOK_RULE:          return "rule";
     case TOK_QUERY:         return "query";
     case TOK_FINDALL:       return "findall";
+    case TOK_PIPE:          return "|>";
+    case TOK_BIND:          return ">>=";
+    case TOK_BIND_ARROW:    return "<~";
+    case TOK_MDO:           return "mdo";
+    case TOK_MAPPEND:       return "<>";
     default:                return "UNKNOWN";
     }
 }

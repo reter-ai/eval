@@ -92,6 +92,9 @@ Interpolated expressions are automatically converted to strings using `__tostr__
 | symbol | `f"{'hello}"` | `hello` |
 | character | `f"{'A'}"` | `A` |
 | list | `f"{[1,2,3]}"` | `(1 2 3)` |
+| DateTime | `f"{DateTime->now()}"` | `2026-02-20T10:30:00Z` |
+| Date | `f"{Date->today()}"` | `2026-02-20` |
+| Decimal | `f"{Decimal("1.23")}"` | `1.23` |
 | other | `f"{obj}"` | write representation |
 
 String values pass through without conversion — no redundant quoting.

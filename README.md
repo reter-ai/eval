@@ -42,10 +42,13 @@ e.eval("""
 - **Networking** — TCP sockets, HTTP client/server with OO wrappers, RAII, and reactive signals
 - **Standalone CLI** — single binary, all scheme files embedded, runs anywhere with no dependencies
 - **Python interop** — call Python from Eval, call Eval from Python, share data bidirectionally
+- **Decimal & Money** — arbitrary-precision `Decimal("0.1")->add(Decimal("0.2"))` is exactly `0.3`, `Money("19.99", "USD")` with currency-safe arithmetic
+- **DateTime & Date** — `DateTime->now()`, `DateTime->parse("2026-02-20T10:30:00Z")`, timezone conversion, `Date->today()`, `TimeDelta` arithmetic
 - **Full numeric tower** — integers, floats, bignums, rationals
 - **Nondeterministic choice** — `amb` operator with backtracking search, `require` constraints, `amb_collect` for all solutions
 - **Logic programming** — miniKanren + Prolog-style: `fact`, `rule`, `run`, `fresh`, `conde`, `===` unification, interleaving search
 - **Forward-chaining rules** — Rete algorithm: `whenever` rules fire automatically when matching facts are asserted, with multi-condition joins and chaining
+- **Category theory** — Maybe/Either/Validation types, Writer/Reader/State monads, `|>` pipe, `>>=` bind, `<>` mappend, `mdo` do-notation, Traversable, lenses, Kleisli composition
 - **Binary serialization** — Cap'n Proto zero-copy serialization with runtime schema parsing, wire-compatible with any language
 - **Scheme power** — access any chibi-scheme primitive via backtick identifiers
 
@@ -174,6 +177,7 @@ x--;                  // decrement
 | Comparison | `==`  `!=`  `<`  `>`  `<=`  `>=`  |
 | Logical    | `&&`  `\|\|`  `!`                  |
 | Bitwise    | `&`  `\|`  `~`  `<<`  `>>`        |
+| Monadic    | `\|>` (pipe)  `>>=` (bind)  `<>` (mappend) |
 | Indexing   | `expr[i]`  `expr[s:e]` (slicing)   |
 
 Operators are first-class values — pass them to higher-order functions:
@@ -689,6 +693,32 @@ with(pool = TaskPool(4)) {
 
 All containers support RAII via `with`, non-blocking variants (`try_pop`, `try_push`), and green-thread-aware blocking. See [CONCURRENT.md](CONCURRENT.md) for the full guide.
 
+## Decimals, dates, and money
+
+Exact decimal arithmetic, date/time handling, and currency-safe money type:
+
+```
+// Decimal: arbitrary precision, no floating-point errors
+Decimal("0.1")->add(Decimal("0.2"))->to_string();   // "0.3" (exact!)
+Decimal("10")->div(Decimal("3"), 6)->to_string();    // "3.333333"
+
+// DateTime: timestamps with timezone support
+define now = DateTime->now();
+define dt = DateTime->parse("2026-02-20T10:30:00Z");
+dt->format("%Y-%m-%d");                               // "2026-02-20"
+dt->add(TimeDelta(3600))->iso();                       // +1 hour
+
+// Date: calendar dates
+Date(2026, 2, 20)->add_days(7)->format("%B %d, %Y");  // "February 27, 2026"
+
+// Money: Decimal + currency with mismatch protection
+define m = Money("19.99", "USD");
+m->mul(3)->format();                                   // "59.97"
+m->add(Money("10", "EUR"));                           // ERROR: different currencies
+```
+
+All types integrate with f-strings: `f"total: {Decimal("1.23")}"`. See [DECIMALSANDDATES.md](DECIMALSANDDATES.md) for the full guide.
+
 ## Reactive programming
 
 Fine-grained reactivity with automatic dependency tracking — signals hold state, computed values derive from signals, and effects run side effects when dependencies change:
@@ -899,7 +929,79 @@ with(pool = TaskPool(4)) {
 
 Each worker runs green threads, so multiple tasks on the same worker execute concurrently. See [TASKS.md](TASKS.md) for the full guide.
 
-See [ASYNC.md](ASYNC.md) for the full async programming guide, [TASKS.md](TASKS.md) for the TaskPool guide, [THREADS.md](THREADS.md) for the complete threads and continuations guide, [MULTITHREADING.md](MULTITHREADING.md) for OO synchronization wrappers, [CONCURRENT.md](CONCURRENT.md) for thread-safe containers, [GENERATORS.md](GENERATORS.md) for generators and lazy sequences, [FSTRINGS.md](FSTRINGS.md) for interpolated strings, [NETWORKING.md](NETWORKING.md) for TCP/HTTP networking, [FILESYS.md](FILESYS.md) for filesystem operations, [LISTS.md](LISTS.md)/[VECTORS.md](VECTORS.md) for collection methods, [BINARY.md](BINARY.md) for Cap'n Proto binary serialization, [GRAMMARS.md](GRAMMARS.md) for runtime parser generation, [AMB.md](AMB.md) for nondeterministic choice, [PROLOG.md](PROLOG.md) for logic programming, [RETE.md](RETE.md) for forward-chaining rules, and [TESTS.md](TESTS.md) for the built-in test framework.
+See [ASYNC.md](ASYNC.md) for the full async programming guide, [TASKS.md](TASKS.md) for the TaskPool guide, [THREADS.md](THREADS.md) for the complete threads and continuations guide, [MULTITHREADING.md](MULTITHREADING.md) for OO synchronization wrappers, [CONCURRENT.md](CONCURRENT.md) for thread-safe containers, [GENERATORS.md](GENERATORS.md) for generators and lazy sequences, [FSTRINGS.md](FSTRINGS.md) for interpolated strings, [DECIMALSANDDATES.md](DECIMALSANDDATES.md) for decimals/dates/money, [NETWORKING.md](NETWORKING.md) for TCP/HTTP networking, [FILESYS.md](FILESYS.md) for filesystem operations, [LISTS.md](LISTS.md)/[VECTORS.md](VECTORS.md) for collection methods, [CATEGORY.md](CATEGORY.md) for category theory (Maybe, Either, monads, lenses), [BINARY.md](BINARY.md) for Cap'n Proto binary serialization, [GRAMMARS.md](GRAMMARS.md) for runtime parser generation, [AMB.md](AMB.md) for nondeterministic choice, [PROLOG.md](PROLOG.md) for logic programming, [RETE.md](RETE.md) for forward-chaining rules, and [TESTS.md](TESTS.md) for the built-in test framework.
+
+## Category theory
+
+Maybe, Either, Validation, Writer, Reader, State monads — with pipe, bind, mappend operators and do-notation:
+
+```
+// Pipe: left-to-right composition
+5 |> Some;                                   // Some(5)
+[3,1,2] |> function(xs) xs->sort(<);        // [1, 2, 3]
+
+// Maybe: safe optional values
+Some(5)->map(function(x) x * 2)->unwrap;    // 10
+None->unwrap_or(0);                          // 0
+
+// Bind: chain computations that may fail
+Some(5) >>= function(x) Some(x + 1);        // Some(6)
+None >>= function(x) Some(x + 1);           // None
+
+// List monad: nondeterministic computation
+[1,2,3] >>= function(x) [x, x*10];         // [1, 10, 2, 20, 3, 30]
+
+// Mappend: monoidal combine
+"hello" <> " " <> "world";                  // "hello world"
+[1, 2] <> [3, 4];                            // [1, 2, 3, 4]
+Some(3) <> Some(4);                          // Some(7)
+
+// Do-notation with mdo
+mdo {
+  x <~ Some(5);
+  y <~ Some(3);
+  Some(x + y);
+};
+// => Some(8)
+
+// Writer monad: computation with logging
+define w = mdo {
+  x <~ Writer(5, []);
+  tell("computed x");
+  y <~ Writer(x + 1, []);
+  tell("computed y");
+  Writer(x + y, []);
+};
+w->value;  // 11
+w->log;    // ["computed x", "computed y"]
+
+// State monad: stateful computation without mutation
+define counter = mdo {
+  modify_state(function(s) s + 1);
+  modify_state(function(s) s + 1);
+  x <~ get_state();
+  State(function(s) [x, s]);
+};
+run_state(counter, 0);  // [2, 2]
+
+// Validation: accumulate all errors
+lift_v2(function(a, b) a,
+  Invalid(["too short"]),
+  Invalid(["missing @"])
+)->errors;
+// => ["too short", "missing @"]
+
+// Traversable: flip layers
+sequence([Some(1), Some(2), Some(3)])->unwrap;   // [1, 2, 3]
+sequence([Some(1), None, Some(3)])->is_none;      // true
+
+// Lenses: composable getters/setters
+define second = index_lens(1);
+second->get([10, 20, 30]);       // 20
+second->set([10, 20, 30], 99);  // [10, 99, 30]
+```
+
+See [CATEGORY.md](CATEGORY.md) for the full guide including Reader monad, natural transformations, Kleisli composition, and lens composition.
 
 ## Binary serialization
 

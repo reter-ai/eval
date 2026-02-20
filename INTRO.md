@@ -209,6 +209,25 @@ x ++ y;                 // (string-append x y)
 i++;                    // (set! i (+ i 1))
 ```
 
+### Functional
+
+| Syntax | Meaning | Scheme |
+|--------|---------|--------|
+| `x \|> f` | pipe (apply f to x) | `(f x)` |
+| `m >>= f` | monadic bind | `(monad-bind m f)` |
+| `a <> b` | monoidal append | `(mappend a b)` |
+
+The pipe operator lets you write left-to-right pipelines instead of nested calls. Bind chains monadic computations (Maybe, Either, List, etc.). Mappend combines monoidal values (strings, lists, numbers, Maybe).
+
+```
+5 |> Some;                           // Some(5)
+Some(5) >>= function(x) Some(x+1);  // Some(6)
+"hello" <> " world";                 // "hello world"
+[1,2] <> [3,4];                      // [1,2,3,4]
+```
+
+See [CATEGORY.md](CATEGORY.md) for the full guide.
+
 ### Operators as values
 
 Operators can be used as first-class values when they appear in value position (after `(`, `,`, etc.):
@@ -218,6 +237,7 @@ fold(+, 0, [1, 2, 3])           // => 6
 map(-, [1, 2, 3])               // => [-1, -2, -3]
 sort([3, 1, 2], <)              // => [1, 2, 3]
 fold(++, "", ["a", "b", "c"])   // => "abc"
+fold(<>, 0, [1, 2, 3, 4, 5])   // => 15
 ```
 
 The string-based alternative `op("+")` also works.
@@ -226,6 +246,8 @@ The string-based alternative `op("+")` also works.
 
 ```
 =  +=  -=              (right)
+|>                     (left)
+>>=                    (right)
 ||                     (left)
 &&                     (left)
 |                      (left)
@@ -233,7 +255,7 @@ The string-based alternative `op("+")` also works.
 ==  =?  !=             (left)
 <  >  <=  >=           (left)
 <<  >>                 (left)
-+  -  ++               (left)
++  -  ++  <>           (left)
 *  /  %                (left)
 **                     (right)
 -  !  ~  '             (right, unary)
@@ -1292,6 +1314,19 @@ current_clock_second()   // seconds since epoch (float)
 current_second()         // alias
 ```
 
+### DateTime, Date, Decimal, Money
+
+Eval has built-in types for timestamps, calendar dates, exact decimals, and currency. All use `->` method dispatch:
+
+```
+DateTime->now()->format("%Y-%m-%d");        // "2026-02-20"
+Date->today()->add_days(7);                 // Date (one week from now)
+Decimal("0.1")->add(Decimal("0.2"));        // Decimal("0.3") — exact
+Money("19.99", "USD")->mul(3)->format();    // "59.97"
+```
+
+See [DECIMALSANDDATES.md](DECIMALSANDDATES.md) for the complete reference.
+
 ### Environment variables
 
 ```
@@ -2256,6 +2291,105 @@ with(client = HttpClient("example.com", 80)) {
 
 See [NETWORKING.md](NETWORKING.md) for the full networking guide including low-level socket functions, DNS resolution, socket options, and constants.
 
+## Category Theory
+
+Eval includes Maybe, Either, Validation, Writer, Reader, and State monads with dedicated operators.
+
+### Pipe `|>`, Bind `>>=`, Mappend `<>`
+
+```
+// Pipe: left-to-right function application
+5 |> Some;                                    // Some(5)
+[3,1,2] |> function(xs) xs->sort(<);         // [1, 2, 3]
+
+// Bind: monadic chaining
+Some(5) >>= function(x) Some(x + 1);         // Some(6)
+None >>= function(x) Some(x + 1);            // None
+[1,2,3] >>= function(x) [x, x*10];          // [1, 10, 2, 20, 3, 30]
+
+// Mappend: monoidal combine
+"hello" <> " world";                          // "hello world"
+[1,2] <> [3,4];                               // [1, 2, 3, 4]
+Some(3) <> Some(4);                           // Some(7)
+```
+
+### Maybe: `Some` / `None`
+
+```
+Some(5)->map(function(x) x * 2)->unwrap;     // 10
+None->unwrap_or(0);                           // 0
+Some(5)->filter(function(x) x > 3)->unwrap;  // 5
+Some(1)->filter(function(x) x > 3)->is_none; // true
+```
+
+### Either: `Ok` / `Err`
+
+```
+Ok(10)->map(function(v) v + 1)->unwrap;       // 11
+Err("bad")->map(function(v) v + 1)->is_err;  // true
+from_try(function() 1 / 0)->is_err;          // true
+```
+
+### Do-notation: `mdo`
+
+Haskell-style do-notation for sequencing monadic computations:
+
+```
+// Maybe: short-circuits on None
+mdo {
+  x <~ Some(5);
+  y <~ Some(3);
+  Some(x + y);
+};
+// => Some(8)
+
+// List: nondeterministic computation
+mdo {
+  x <~ [1, 2, 3];
+  y <~ [10, 20];
+  [x + y];
+};
+// => [11, 21, 12, 22, 13, 23]
+
+// Writer: computation with logging
+define w = mdo {
+  x <~ Writer(5, []);
+  tell("step 1");
+  Writer(x * 2, []);
+};
+w->value;  // 10
+w->log;    // ["step 1"]
+
+// State: stateful without mutation
+run_state(mdo {
+  modify_state(function(s) s + 1);
+  modify_state(function(s) s + 1);
+  x <~ get_state();
+  State(function(s) [x, s]);
+}, 0);
+// => [2, 2]
+```
+
+### Validation (error accumulation)
+
+```
+lift_v2(function(a, b) a,
+  Invalid(["err1"]),
+  Invalid(["err2"])
+)->errors;
+// => ["err1", "err2"]
+```
+
+### Lenses
+
+```
+define second = index_lens(1);
+second->get([10, 20, 30]);       // 20
+second->set([10, 20, 30], 99);  // [10, 99, 30]
+```
+
+See [CATEGORY.md](CATEGORY.md) for the full guide including Reader monad, Traversable, natural transformations, Kleisli composition, and lens composition.
+
 ## Further reading
 
 - [GENERATORS.md](GENERATORS.md) — Generators, yield, generator comprehensions, lazy pipelines
@@ -2265,6 +2399,7 @@ See [NETWORKING.md](NETWORKING.md) for the full networking guide including low-l
 - [LISTS.md](LISTS.md) — List methods: map, filter, sort, fold, join, take, drop, and more
 - [VECTORS.md](VECTORS.md) — Vector methods: map, filter, sort, fold, set, to_list, and more
 - [DICTS.md](DICTS.md) — Dict methods: get, set, map, filter, fold, merge, and more
+- [DECIMALSANDDATES.md](DECIMALSANDDATES.md) — Decimal, DateTime, Date, TimeDelta, Money types
 - [NETWORKING.md](NETWORKING.md) — TCP sockets, HTTP client/server, OO wrappers, non-blocking I/O
 - [FILESYS.md](FILESYS.md) — File I/O, directory operations, metadata, path utilities
 - [ASYNC.md](ASYNC.md) — Async/await, thread pools, channels, pipelines
@@ -2278,3 +2413,4 @@ See [NETWORKING.md](NETWORKING.md) for the full networking guide including low-l
 - [AMB.md](AMB.md) — Nondeterministic choice: amb, require, amb_collect, backtracking search
 - [PROLOG.md](PROLOG.md) — Logic programming: facts, rules, unification, run, fresh, conde
 - [RETE.md](RETE.md) — Forward-chaining rules: whenever, Rete algorithm, joins, chaining
+- [CATEGORY.md](CATEGORY.md) — Category theory: Maybe, Either, Validation, Writer, Reader, State, monoids, lenses, do-notation

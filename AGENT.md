@@ -246,7 +246,7 @@ define naturals = generator() {
 
 ## Arrow Methods
 
-Method dispatch via `->` is type-aware. Lists, strings, vectors, and dicts each have their own method set.
+Method dispatch via `->` is type-aware. Lists, strings, vectors, dicts, DateTime, Date, TimeDelta, Decimal, and Money each have their own method set.
 
 ### List Methods
 
@@ -456,6 +456,31 @@ define r = readonly(count);       // read-only view
 define d = derived(count, function(v) v * 3);
 define w = watch(count, function(new_val, old_val) { ... });
 dispose(w);
+```
+
+### DateTime, Decimal & Money
+
+```
+// DateTime: timestamps with timezone
+DateTime->now()->format("%Y-%m-%d %H:%M");  // "2026-02-20 10:30"
+DateTime->parse("2026-02-20T10:30:00Z")->year;  // 2026
+DateTime(2026, 2, 20, 10, 0, 0, 0)->add(TimeDelta(3600))->hour;  // 11
+dt1->sub(dt2)->days;  // difference in days
+
+// Date: calendar dates
+Date->today()->add_days(7)->format("%B %d");  // "February 27"
+
+// TimeDelta: durations
+TimeDelta(3600)->hours;           // 1
+TimeDelta(1, 2, 30, 0)->total_seconds;  // 95400
+
+// Decimal: exact arithmetic
+Decimal("0.1")->add(Decimal("0.2"))->to_string();  // "0.3"
+Decimal("10")->div(Decimal("3"), 4)->to_string();   // "3.3333"
+
+// Money: currency-safe
+Money("19.99", "USD")->mul(3)->format();  // "59.97"
+Money("10", "USD")->add(Money("5", "EUR"));  // ERROR
 ```
 
 ### Logic Programming (miniKanren)

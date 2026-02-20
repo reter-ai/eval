@@ -35,6 +35,8 @@
    RPAREN/COMMA (delimiters) wins over the reduce to arglist_inner. */
 %nonassoc ARGLIST_PREC.
 %right ASSIGN PLUS_ASSIGN MINUS_ASSIGN.
+%left PIPE.
+%right BIND.
 %nonassoc IF_WITHOUT_ELSE.
 %nonassoc ELSE FINALLY.
 %right RETURN_PREC SUPER_PREC.
@@ -45,7 +47,7 @@
 %left EQEQ EQQ BANGEQ UNIFY.
 %left LT GT LTE GTE.
 %left SHL SHR.
-%left PLUS MINUS CONCAT.
+%left PLUS MINUS CONCAT MAPPEND.
 %left STAR SLASH PERCENT.
 %right STARSTAR.
 %right UMINUS BANG BITNOT BANGBANG QUOTE_PREC.
@@ -55,6 +57,7 @@
    Declaring them here makes lemon generate their TOK_ defines. */
 %token LIBRARY EXPORT INCLUDE MACRO SYNTAX_RULES OPVAL TEST_GROUP DEFINE IN DICT WITH ASYNC AWAIT STATIC ABSTRACT YIELD GENERATOR RAW_STRING PARALLEL FSTR_START FSTR_MID FSTR_END.
 %token LOGICVAR COLONMINUS FRESH CONDE RUN FACT RULE QUERY FINDALL WHENEVER.
+%token PIPE BIND BIND_ARROW MDO MAPPEND.
 
 /* Non-terminal types - all are sexp */
 %type program { sexp }
@@ -91,6 +94,7 @@
 %type whenever_pattern { sexp }
 %type whenever_args { sexp }
 %type whenever_arg { sexp }
+%type do_body { sexp }
 
 /* ===== PROGRAM ===== */
 
@@ -224,6 +228,51 @@ expr(A) ::= expr(L) CONCAT expr(R). {
     A = sexp_list3(ctx, ps_intern(ctx, "string-append"), L, R);
 }
 
+/* --- Pipe: x |> f  ->  (f x) --- */
+expr(A) ::= expr(L) PIPE expr(R). {
+    A = sexp_list2(ctx, R, L);
+}
+
+/* --- Monadic bind: m >>= f  ->  (monad-bind m f) --- */
+expr(A) ::= expr(L) BIND expr(R). {
+    A = sexp_list3(ctx, ps_intern(ctx, "monad-bind"), L, R);
+}
+
+/* --- Mappend: a <> b  ->  (mappend a b) --- */
+expr(A) ::= expr(L) MAPPEND expr(R). {
+    A = sexp_list3(ctx, ps_intern(ctx, "mappend"), L, R);
+}
+
+/* --- Monadic do-notation --- */
+expr(A) ::= MDO LBRACE do_body(B) RBRACE. [ARGLIST_PREC] {
+    A = B;
+}
+
+/* do_body: x <~ m; rest  ->  (monad-bind m (lambda (x) rest)) */
+do_body(A) ::= IDENT(N) BIND_ARROW expr(E) SEMICOLON do_body(B). {
+    A = sexp_list3(ctx, ps_intern(ctx, "monad-bind"), E,
+        sexp_list3(ctx, ps_intern(ctx, "lambda"),
+            sexp_list1(ctx, ps_make_ident(ctx, N.start, N.length)),
+            B));
+}
+
+/* do_body: m; rest  ->  (monad-then m rest) */
+do_body(A) ::= expr(E) SEMICOLON do_body(B). {
+    A = sexp_list3(ctx, ps_intern(ctx, "monad-then"), E, B);
+}
+
+/* do_body: define x = v; rest  ->  (let ((x v)) rest) */
+do_body(A) ::= DEFINE IDENT(N) ASSIGN expr(E) SEMICOLON do_body(B). {
+    A = sexp_list3(ctx, ps_intern(ctx, "let"),
+        sexp_list1(ctx, sexp_list2(ctx,
+            ps_make_ident(ctx, N.start, N.length), E)),
+        B);
+}
+
+/* do_body: final expression */
+do_body(A) ::= expr(E). { A = E; }
+do_body(A) ::= expr(E) SEMICOLON. { A = E; }
+
 /* --- Unary --- */
 expr(A) ::= PLUS expr(E). [UMINUS] {
     /* Unary +: identity (just return the expression) */
@@ -286,6 +335,7 @@ member_name(A) ::= RUN(T).     { A = T; }
 member_name(A) ::= FACT(T).    { A = T; }
 member_name(A) ::= RULE(T).    { A = T; }
 member_name(A) ::= WHENEVER(T). { A = T; }
+member_name(A) ::= MDO(T). { A = T; }
 
 /* --- Postfix: indexing expr[i] --- */
 expr(A) ::= expr(E) LBRACKET expr(I) RBRACKET. {
