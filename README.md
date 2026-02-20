@@ -43,6 +43,7 @@ e.eval("""
 - **Standalone CLI** — single binary, all scheme files embedded, runs anywhere with no dependencies
 - **Python interop** — call Python from Eval, call Eval from Python, share data bidirectionally
 - **Full numeric tower** — integers, floats, bignums, rationals
+- **Nondeterministic choice** — `amb` operator with backtracking search, `require` constraints, `amb_collect` for all solutions
 - **Logic programming** — miniKanren + Prolog-style: `fact`, `rule`, `run`, `fresh`, `conde`, `===` unification, interleaving search
 - **Binary serialization** — Cap'n Proto zero-copy serialization with runtime schema parsing, wire-compatible with any language
 - **Scheme power** — access any chibi-scheme primitive via backtick identifiers
@@ -897,7 +898,7 @@ with(pool = TaskPool(4)) {
 
 Each worker runs green threads, so multiple tasks on the same worker execute concurrently. See [TASKS.md](TASKS.md) for the full guide.
 
-See [ASYNC.md](ASYNC.md) for the full async programming guide, [TASKS.md](TASKS.md) for the TaskPool guide, [THREADS.md](THREADS.md) for the complete threads and continuations guide, [MULTITHREADING.md](MULTITHREADING.md) for OO synchronization wrappers, [CONCURRENT.md](CONCURRENT.md) for thread-safe containers, [GENERATORS.md](GENERATORS.md) for generators and lazy sequences, [FSTRINGS.md](FSTRINGS.md) for interpolated strings, [NETWORKING.md](NETWORKING.md) for TCP/HTTP networking, [FILESYS.md](FILESYS.md) for filesystem operations, [LISTS.md](LISTS.md)/[VECTORS.md](VECTORS.md) for collection methods, [BINARY.md](BINARY.md) for Cap'n Proto binary serialization, [GRAMMARS.md](GRAMMARS.md) for runtime parser generation, [PROLOG.md](PROLOG.md) for logic programming, and [TESTS.md](TESTS.md) for the built-in test framework.
+See [ASYNC.md](ASYNC.md) for the full async programming guide, [TASKS.md](TASKS.md) for the TaskPool guide, [THREADS.md](THREADS.md) for the complete threads and continuations guide, [MULTITHREADING.md](MULTITHREADING.md) for OO synchronization wrappers, [CONCURRENT.md](CONCURRENT.md) for thread-safe containers, [GENERATORS.md](GENERATORS.md) for generators and lazy sequences, [FSTRINGS.md](FSTRINGS.md) for interpolated strings, [NETWORKING.md](NETWORKING.md) for TCP/HTTP networking, [FILESYS.md](FILESYS.md) for filesystem operations, [LISTS.md](LISTS.md)/[VECTORS.md](VECTORS.md) for collection methods, [BINARY.md](BINARY.md) for Cap'n Proto binary serialization, [GRAMMARS.md](GRAMMARS.md) for runtime parser generation, [AMB.md](AMB.md) for nondeterministic choice, [PROLOG.md](PROLOG.md) for logic programming, and [TESTS.md](TESTS.md) for the built-in test framework.
 
 ## Binary serialization
 
@@ -952,6 +953,31 @@ p->parse("1 + 2 + 3");
 ```
 
 See [GRAMMARS.md](GRAMMARS.md) for the full guide including the compilation pipeline, grammar format, and examples.
+
+## Nondeterministic choice (amb)
+
+`amb` picks from a set of alternatives and backtracks automatically when a constraint fails. Powered by continuations, with lazy evaluation of alternatives:
+
+```
+// Backtracking search
+define x = amb(1, 2, 3, 4, 5);
+define y = amb(1, 2, 3, 4, 5);
+require(x + y == 7);
+[x, y];    // => [2, 5]
+
+// Collect all solutions
+amb_collect(function() {
+    define x = amb(1, 2, 3);
+    define y = amb(1, 2, 3);
+    require(x + y == 4);
+    [x, y];
+});
+// => [[1, 3], [2, 2], [3, 1]]
+```
+
+`amb` is a macro — alternatives are lazily evaluated (untried branches never execute). `require(pred)` fails if `pred` is false, triggering backtracking. `amb()` with no arguments fails immediately.
+
+See [AMB.md](AMB.md) for the full guide including examples, amb_collect, and comparison with logic programming.
 
 ## Logic programming
 
