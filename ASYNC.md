@@ -350,21 +350,87 @@ await(f);                           // => 42
 pool_shutdown(pool);
 ```
 
+## TaskPool: Scalable Task Execution
+
+`TaskPool` combines the thread pool's OS-level parallelism with green threads for concurrent task execution within each worker. Submit closures directly — no code strings needed — and collect results via promises:
+
+```
+with(pool = TaskPool(4)) {
+    define results = pool->map([1, 2, 3, 4, 5, 6, 7, 8], function(x) x * x);
+    results;    // => [1, 4, 9, 16, 25, 36, 49, 64]
+};
+```
+
+### submit / run / map
+
+```
+{
+    with(pool = TaskPool(2));
+
+    // Submit a closure — returns a promise
+    define p = pool->submit(function() 42);
+    await(p);    // => 42
+
+    // run() = submit + await
+    pool->run(function() 6 * 7);    // => 42
+
+    // Map distributes work round-robin across workers
+    pool->map([1, 2, 3, 4], function(x) x * x);    // => [1, 4, 9, 16]
+};
+```
+
+### Closures with captured variables
+
+```
+{
+    with(pool = TaskPool(2));
+
+    define base = 1000;
+    define add_base = function(x) x + base;
+    pool->run(function() add_base(42));    // => 1042
+
+    define fib = function(n) if(n <= 1) n else fib(n - 1) + fib(n - 2);
+    pool->run(function() fib(15));         // => 610
+};
+```
+
+### Error propagation
+
+```
+{
+    with(pool = TaskPool(2));
+    define p = pool->submit(function() error("boom"));
+
+    try {
+        await(p);
+    } catch(e) {
+        display(e);    // => "boom"
+    };
+};
+```
+
+See [TASKS.md](TASKS.md) for the full TaskPool guide including drain, inter-worker channels, green threads within workers, architecture, and patterns.
+
 ## When to Use What
 
-| | `async` | Thread pool |
-|---|---|---|
-| **Mechanism** | Green thread (cooperative) | OS thread (true parallelism) |
-| **Context** | Shared — can access local variables | Isolated — code runs in separate VM |
-| **Communication** | Shared mutable state | Channels and futures |
-| **Overhead** | Very low (continuation switch) | Higher (serialization, thread creation) |
-| **Best for** | Concurrent I/O, structured concurrency | CPU-bound parallelism |
+| | `async` | `Pool` | `TaskPool` |
+|---|---|---|---|
+| **Mechanism** | Green thread (cooperative) | OS thread (true parallelism) | OS threads + green threads |
+| **Submit** | Expression | Code strings or `pool_apply` | Closures directly |
+| **Results** | Promises | Futures | Promises (unified `await`) |
+| **Context** | Shared — access local variables | Isolated — separate VM | Isolated with serialized closures |
+| **Communication** | Shared mutable state | Channels and futures | Same, plus promise-based results |
+| **Per-worker concurrency** | N/A (single VM) | One task at a time | Green threads — many concurrent tasks |
+| **Overhead** | Very low (continuation switch) | Higher (serialization) | Higher (serialization) |
+| **Best for** | Concurrent I/O, structured concurrency | Long-lived workers, raw control | Many independent tasks to distribute |
 
 **Use `async`** when you need lightweight concurrency with shared state — multiple tasks that cooperatively share the same VM. Works naturally with networking: `TcpClient`, `TcpServer`, and `HttpClient` all yield to the green thread scheduler on blocking operations.
 
-**Use thread pools** when you need true parallelism for CPU-bound work — each worker runs on its own OS thread with its own VM, achieving real speedup on multi-core machines.
+**Use `Pool`** when you need true parallelism with raw control — long-lived worker loops, custom protocols over channels, or when you want to manage the worker lifecycle yourself.
 
-**Mix both** when you need both: use the thread pool for heavy computation, and `async` within each worker or the main thread for lightweight concurrent coordination. For example, a `TcpServer` can dispatch CPU-bound work to a thread pool while handling I/O with green threads.
+**Use `TaskPool`** when you have many independent tasks to distribute across workers — it handles round-robin assignment, green-thread-per-task execution, and promise-based result collection automatically.
+
+**Mix all three** when you need both: use TaskPool for heavy computation, `async` within the main thread for coordination, and Pool for long-lived background workers. For example, a `TcpServer` can dispatch CPU-bound work to a TaskPool while handling I/O with green threads.
 
 **For shared-state synchronization** between green threads, use the OO wrappers: `Mutex`, `Monitor`, `ReadWriteLock`, `Semaphore` — all support RAII via `with`. See [MULTITHREADING.md](MULTITHREADING.md) for the full guide.
 
@@ -420,6 +486,7 @@ The OO wrappers (`Pool`, `->submit`, `->channel`) are built on top of these func
 
 ## See also
 
+- [TASKS.md](TASKS.md) — TaskPool: scalable task execution with OS threads + green threads
 - [THREADS.md](THREADS.md) — Green threads, mutexes, condition variables, continuations
 - [MULTITHREADING.md](MULTITHREADING.md) — OO synchronization: Mutex, Monitor, ReadWriteLock, Semaphore
 - [BINARY.md](BINARY.md) — Cap'n Proto binary serialization for efficient data exchange between workers

@@ -325,6 +325,12 @@ static sexp init_context(const char *extra_module_dir) {
         eval_load_eval_file(ctx, sexp_context_env(ctx), "eval/net-oo.eval");
     }
 
+    /* TaskPool: hybrid OS thread pool + green threads */
+    {
+        extern void eval_load_eval_file(sexp ctx, sexp env, const char *path);
+        eval_load_eval_file(ctx, sexp_context_env(ctx), "eval/taskpool.eval");
+    }
+
     /* OO string methods: "hello"->upper(), etc. */
     sexp_load_module_file(ctx, "eval/string-oo.scm", sexp_context_env(ctx));
 

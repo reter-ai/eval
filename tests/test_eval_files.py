@@ -15,6 +15,7 @@ SLOW_EVAL_FILES = {
     "test_pool.eval",
     "test_pool_continuations.eval",
     "test_pool_green_threads.eval",
+    "test_taskpool.eval",
     "test_async.eval",
     "test_http.eval",
     "test_nb.eval",

@@ -304,7 +304,7 @@ pool_shutdown(pool_chain);
 
 // ===== Parallel Speedup (proves OS threads) =====
 
-define fib_code = "define fib = function(n) if(n <= 1) n else fib(n-1) + fib(n-2); fib(28);";
+define fib_code = "define fib = function(n) if(n <= 1) n else fib(n-1) + fib(n-2); fib(30);";
 
 // Serial: 4 tasks on 1 worker
 define pool_serial = make_pool(1);

@@ -602,15 +602,8 @@ static sexp bridge_channel_send(sexp ctx, sexp self, sexp_sint_t n,
     return SEXP_VOID;
 }
 
-/* channel_recv(ch) -> val (blocks) */
-static sexp bridge_channel_recv(sexp ctx, sexp self, sexp_sint_t n, sexp ch) {
-    EvalChannel *c = unwrap_channel(ch);
-    if (!c) return sexp_user_exception(ctx, self, "channel_recv: not a channel", ch);
-
-    size_t len;
-    char *buf = eval_channel_recv(c, &len);
-    if (!buf) return SEXP_EOF;  /* channel closed */
-
+/* Decode a raw channel buffer into a sexp value */
+static sexp channel_decode_buf(sexp ctx, sexp self, char *buf, size_t len) {
     sexp result;
     if (len >= 4 && memcmp(buf, SER_MAGIC_BYTES, 4) == 0) {
         /* Binary format */
@@ -627,6 +620,41 @@ static sexp bridge_channel_recv(sexp ctx, sexp self, sexp_sint_t n, sexp ch) {
     }
     free(buf);
     return result;
+}
+
+/* %channel-recv(ch) -> val or #f (raw, green-thread aware)
+ *
+ * When green threads exist: non-blocking try_recv.  Returns #f and
+ * sets waitp if nothing available (like %mutex-lock!).
+ * Scheme wrapper retries with thread-yield! in between.
+ * When no green threads: OS-level blocking recv. */
+static sexp bridge_channel_recv(sexp ctx, sexp self, sexp_sint_t n, sexp ch) {
+    EvalChannel *c = unwrap_channel(ch);
+    if (!c) return sexp_user_exception(ctx, self, "channel_recv: not a channel", ch);
+
+#if SEXP_USE_GREEN_THREADS
+    {
+        sexp front  = sexp_global(ctx, SEXP_G_THREADS_FRONT);
+        sexp paused = sexp_global(ctx, SEXP_G_THREADS_PAUSED);
+        if (sexp_pairp(front) || sexp_pairp(paused)) {
+            /* Green threads active: non-blocking try */
+            char *data = NULL;
+            size_t len = 0;
+            if (eval_channel_try_recv(c, &data, &len))
+                return channel_decode_buf(ctx, self, data, len);
+            if (c->closed)
+                return SEXP_EOF;
+            /* Nothing available — return #f so wrapper can yield and retry */
+            return SEXP_FALSE;
+        }
+    }
+#endif
+
+    /* No green threads — use efficient OS-level blocking recv */
+    size_t len;
+    char *buf = eval_channel_recv(c, &len);
+    if (!buf) return SEXP_EOF;  /* channel closed */
+    return channel_decode_buf(ctx, self, buf, len);
 }
 
 /* channel_close(ch) */
@@ -1056,6 +1084,7 @@ static void register_bridge_functions_c(sexp ctx, sexp env) {
     /* Channels */
     sexp_define_foreign(ctx, env, "channel-send", 2, bridge_channel_send);
     sexp_define_foreign(ctx, env, "channel_send", 2, bridge_channel_send);
+    sexp_define_foreign(ctx, env, "%channel-recv", 1, bridge_channel_recv);
     sexp_define_foreign(ctx, env, "channel-recv", 1, bridge_channel_recv);
     sexp_define_foreign(ctx, env, "channel_recv", 1, bridge_channel_recv);
     sexp_define_foreign(ctx, env, "channel-close", 1, bridge_channel_close);
@@ -1148,6 +1177,7 @@ void register_pool_eval_functions(sexp ctx, sexp env) {
     /* Channel operations */
     sexp_define_foreign(ctx, env, "channel-send", 2, bridge_channel_send);
     sexp_define_foreign(ctx, env, "channel_send", 2, bridge_channel_send);
+    sexp_define_foreign(ctx, env, "%channel-recv", 1, bridge_channel_recv);
     sexp_define_foreign(ctx, env, "channel-recv", 1, bridge_channel_recv);
     sexp_define_foreign(ctx, env, "channel_recv", 1, bridge_channel_recv);
     sexp_define_foreign(ctx, env, "channel-close", 1, bridge_channel_close);
@@ -1162,12 +1192,8 @@ void register_pool_eval_functions(sexp ctx, sexp env) {
     sexp_define_foreign(ctx, env, "future_ready?", 1, bridge_future_ready);
 }
 
-/* Standard scheme aliases loaded in both Python and worker contexts */
-#ifdef EVAL_STANDALONE
+/* Standard scheme aliases loaded in Python, standalone, and worker contexts */
 void eval_standard_aliases(sexp ctx, sexp env) {
-#else
-static void eval_standard_aliases(sexp ctx, sexp env) {
-#endif
     /* Base definitions: error-object aliases, byte I/O, string/IO fns, callcc */
     sexp_load_module_file(ctx, "eval/base.scm", env);
     env = sexp_context_env(ctx);
@@ -1212,6 +1238,21 @@ static void eval_standard_aliases(sexp ctx, sexp env) {
 
     /* Abstract class support: global flag checked by abstract constructors */
     sexp_eval_string(ctx, "(define __abstract_ok__ #f)", -1, env);
+
+    /* Green-thread-aware channel-recv: retries with thread-yield! like
+     * mutex-lock!.  Must come after threads.scm which defines thread-yield!.
+     * Overrides the opcode binding so user code (and deserialized thunks)
+     * gets the cooperative version. */
+    sexp_eval_string(ctx,
+        "(define (channel-recv ch)"
+        "  (let ((r (%channel-recv ch)))"
+        "    (cond"
+        "      ((eof-object? r) r)"
+        "      (r r)"
+        "      (else (thread-yield!)"
+        "            (channel-recv ch)))))", -1, env);
+    sexp_eval_string(ctx,
+        "(define channel_recv channel-recv)", -1, env);
 
 }
 
@@ -1357,8 +1398,22 @@ static EVAL_THREAD_FUNC worker_main(void *arg) {
 
     /* 7. Standard aliases (make-parameter, sort wrappers, thread wrappers, etc.) */
     eval_standard_aliases(ctx, env);
+    env = sexp_context_env(ctx);
 
-    /* 7. Store pool pointer as __pool__ in env */
+    /* 7b. Green-thread-aware channel-recv wrapper (needs thread-yield! from aliases) */
+    sexp_eval_string(ctx,
+        "(define (channel-recv ch)"
+        "  (let ((r (%channel-recv ch)))"
+        "    (cond"
+        "      ((eof-object? r) r)"
+        "      (r r)"
+        "      (else (thread-yield!)"
+        "            (channel-recv ch)))))", -1, env);
+    sexp_eval_string(ctx,
+        "(define channel_recv channel-recv)", -1, env);
+    env = sexp_context_env(ctx);
+
+    /* 7c. Store pool pointer as __pool__ in env */
     {
         sexp pool_sexp = sexp_make_cpointer(ctx, SEXP_CPOINTER, pool, SEXP_FALSE, 0);
         sexp_env_define(ctx, env, sexp_intern(ctx, "__pool__", -1), pool_sexp);

@@ -1,0 +1,141 @@
+// taskpool.eval -- Hybrid TaskPool: OS Thread Pool + Green Threads
+// Distributes tasks round-robin across OS workers; each worker runs
+// green threads for concurrent execution within its VM.
+//
+// Prerequisites (loaded before this file):
+//   Pool, Channel_wrap, Future_wrap  (threadpool.eval)
+//   __make-promise__, __await__      (async.scm)
+//   make_thread, thread_start, thread_yield, thread_join (aliases.scm)
+//   make_hash_table, hash_table_ref, hash_table_set, hash_table_delete (aliases.scm)
+
+// Build the Eval code string that a worker will execute as its main loop.
+// The worker polls its per-task channel (non-blocking) and spawns a
+// green thread for each received thunk, sending results back on the
+// shared result channel.
+define __tp_worker_code = function(idx) {
+    define ch_name = "__tp_task_" ++ `number->string`(idx);
+    // The worker code is a string evaluated in the worker context,
+    // where channel variables are injected by inject_channels().
+    //
+    // We redefine channel_recv to poll with try_recv + thread_yield
+    // so green threads on the same worker can cooperate (the C-level
+    // channel_recv blocks the OS thread, starving other green threads).
+    "define __running = true; "
+    ++ "while(__running) { "
+    ++ "  define __msg = channel_try_recv(" ++ ch_name ++ "); "
+    ++ "  if(__msg) { "
+    ++ "    define __item = car(__msg); "
+    ++ "    if(equal?(__item, \"__shutdown__\")) { "
+    ++ "      __running = false; "
+    ++ "    } else { "
+    ++ "      define __tid = car(__item); "
+    ++ "      define __thunk = cdr(__item); "
+    ++ "      thread_start(make_thread(function() { "
+    ++ "        try { "
+    ++ "          define __val = __thunk(); "
+    ++ "          channel_send(__tp_result, list(__tid, true, __val)); "
+    ++ "        } catch(__e) { "
+    ++ "          channel_send(__tp_result, list(__tid, false, "
+    ++ "            if(string?(__e)) __e else `error-object-message`(__e))); "
+    ++ "        }; "
+    ++ "      })); "
+    ++ "    }; "
+    ++ "  }; "
+    ++ "  thread_yield(); "
+    ++ "}; ";
+};
+
+define TaskPool = function(n) {
+    define pool = Pool(n);
+
+    // Create per-worker task channels + shared result channel
+    define task_channels = [];
+    for(let i = 0, i < n, i++) {
+        define name = "__tp_task_" ++ `number->string`(i);
+        task_channels = append(task_channels, [pool->channel(name)]);
+    };
+    define result_ch = pool->channel("__tp_result");
+
+    // State
+    define pending = make_hash_table();
+    define next_id = 0;
+    define robin = 0;
+    define pending_count = 0;
+    define alive = true;
+    define collector_running = true;
+
+    // Bootstrap each worker with its polling loop
+    for(let i = 0, i < n, i++)
+        pool->submit(__tp_worker_code(i));
+
+    // Collector green thread: reads result_ch, resolves promises
+    thread_start(make_thread(function() {
+        while(collector_running || pending_count > 0) {
+            define msg = result_ch->try_recv();
+            if(msg) {
+                define item = car(msg);
+                define task_id = `list-ref`(item, 0);
+                define ok = `list-ref`(item, 1);
+                define val = `list-ref`(item, 2);
+                define p = hash_table_ref(pending, task_id);
+                if(ok)
+                    (p->__resolve__)(val)
+                else
+                    (p->__reject__)(val);
+                hash_table_delete(pending, task_id);
+                pending_count = pending_count - 1;
+            } else {
+                thread_yield();
+            };
+        };
+    }));
+
+    // Submit a thunk for execution on a worker; returns a promise.
+    define do_submit = function(thunk) {
+        define id = next_id;
+        next_id = next_id + 1;
+        define p = `__make-promise__`();
+        hash_table_set(pending, id, p);
+        pending_count = pending_count + 1;
+        // Send (id . thunk) pair to round-robin worker channel
+        define ch = `list-ref`(task_channels, robin);
+        robin = `modulo`(robin + 1, n);
+        ch->send(`cons`(id, thunk));
+        p;
+    };
+
+    // Drain: wait for all pending tasks to complete
+    define do_drain = function() {
+        while(pending_count > 0) thread_yield();
+    };
+
+    // Shutdown: drain, send shutdown signal, stop collector, close pool
+    define do_shutdown = function() {
+        when(alive) {
+            alive = false;
+            do_drain();
+            for(let i = 0, i < n, i++)
+                `list-ref`(task_channels, i)->send("__shutdown__");
+            // Wait for worker futures to complete (they were submitted via pool->submit)
+            thread_yield();
+            collector_running = false;
+            pool->shutdown();
+        };
+    };
+
+    interface(
+        submit: do_submit,
+        run: function(thunk) await(do_submit(thunk)),
+        map: function(lst, fn) {
+            define promises = `map`(function(x) do_submit(function() fn(x)), lst);
+            `map`(function(p) await(p), promises);
+        },
+        drain: do_drain,
+        shutdown: do_shutdown,
+        close: do_shutdown,
+        channel: function(name) pool->channel(name),
+        size: n,
+        pending_count: function() pending_count,
+        __type__: '__task_pool__
+    );
+};

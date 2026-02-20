@@ -1,0 +1,140 @@
+test_begin("TaskPool");
+
+// === Basic submit + await ===
+{
+    with(pool = TaskPool(2));
+    define p = pool->submit(function() 42);
+    test("basic submit", 42, await(p));
+};
+
+// === run() convenience ===
+{
+    with(pool = TaskPool(2));
+    test("run", 100, pool->run(function() 50 + 50));
+};
+
+// === Multiple submits ===
+{
+    with(pool = TaskPool(2));
+    define p1 = pool->submit(function() 10);
+    define p2 = pool->submit(function() 20);
+    define p3 = pool->submit(function() 30);
+    test("multi a", 10, await(p1));
+    test("multi b", 20, await(p2));
+    test("multi c", 30, await(p3));
+};
+
+// === map() distributes and collects ===
+{
+    with(pool = TaskPool(2));
+    define results = pool->map([1, 2, 3, 4], function(x) x * x);
+    test("map squares", [1, 4, 9, 16], results);
+};
+
+// === Error propagation ===
+{
+    with(pool = TaskPool(2));
+    define p = pool->submit(function() error("boom"));
+    define caught = try { await(p); } catch(e) "caught";
+    test("error propagation", "caught", caught);
+};
+
+// === drain() waits for all pending ===
+{
+    with(pool = TaskPool(2));
+    pool->submit(function() 1);
+    pool->submit(function() 2);
+    pool->submit(function() 3);
+    pool->drain();
+    test("drain pending", 0, pool->pending_count());
+};
+
+// === Closures serialize correctly ===
+{
+    with(pool = TaskPool(2));
+    define base = 1000;
+    define add_base = function(x) x + base;
+    test("closure submit", 1042, pool->run(function() add_base(42)));
+};
+
+// === Multiple tasks on single worker complete (green threads) ===
+{
+    with(pool = TaskPool(1));
+    // All 3 tasks go to the same worker (n=1, round-robin).
+    // They run as separate green threads within that worker.
+    define p1 = pool->submit(function() { thread_yield(); 10; });
+    define p2 = pool->submit(function() { thread_yield(); 20; });
+    define p3 = pool->submit(function() { thread_yield(); 30; });
+    test("single worker a", 10, await(p1));
+    test("single worker b", 20, await(p2));
+    test("single worker c", 30, await(p3));
+};
+
+// === Tasks access pool channels by name inside workers ===
+{
+    with(pool = TaskPool(1));
+    define ch = pool->channel("__test_ch");
+    define pa = pool->submit(function() {
+        channel_send(__test_ch, "hello from worker");
+        "sent";
+    });
+    test("worker channel send", "sent", await(pa));
+    test("worker channel recv", "hello from worker", ch->recv());
+};
+
+// === size property ===
+{
+    with(pool = TaskPool(3));
+    test("size", 3, pool->size);
+};
+
+// === Double shutdown is safe ===
+{
+    define pool = TaskPool(1);
+    pool->shutdown();
+    pool->shutdown();
+    test("double shutdown", true, true);
+};
+
+// === RAII via with() ===
+define raii_result = with(p = TaskPool(2)) {
+    p->run(function() 99);
+};
+test("RAII with()", 99, raii_result);
+
+// === map with larger workload ===
+{
+    with(pool = TaskPool(2));
+    define results = pool->map([1, 2, 3, 4, 5, 6, 7, 8], function(x) x * 10);
+    test("map 8 items", [10, 20, 30, 40, 50, 60, 70, 80], results);
+};
+
+// === Computation-heavy tasks ===
+{
+    with(pool = TaskPool(2));
+    define fib = function(n) if(n <= 1) n else fib(n - 1) + fib(n - 2);
+    define p1 = pool->submit(function() fib(15));
+    define p2 = pool->submit(function() fib(16));
+    test("fib 15", 610, await(p1));
+    test("fib 16", 987, await(p2));
+};
+
+// === Same-worker green threads communicate via channel_recv ===
+// This would deadlock if channel_recv wasn't green-thread-aware.
+{
+    with(pool = TaskPool(1));
+    define ch = pool->channel("__sync");
+    // Task A blocks on channel_recv, Task B sends — both on same worker
+    define pa = pool->submit(function() {
+        define msg = channel_recv(__sync);
+        msg + 100;
+    });
+    define pb = pool->submit(function() {
+        channel_send(__sync, 42);
+        "B done";
+    });
+    test("green recv B", "B done", await(pb));
+    test("green recv A", 142, await(pa));
+};
+
+test_end();

@@ -498,6 +498,7 @@ The key primitive for `Monitor->wait()` is `mutex_unlock(m, cv)` — SRFI-18's `
 
 ## See also
 
+- [TASKS.md](TASKS.md) — TaskPool: scalable task execution with OS threads + green threads
 - [THREADS.md](THREADS.md) — Green threads, mutexes, condition variables, continuations
 - [ASYNC.md](ASYNC.md) — Async/await, thread pools, channels, pipelines
 - [NETWORKING.md](NETWORKING.md) — TCP sockets, HTTP, OO wrappers with green threads

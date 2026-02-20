@@ -520,17 +520,55 @@ Combine all three layers — green threads generate data inside workers, channel
 };
 ```
 
+## TaskPool: OS Threads + Green Threads
+
+`TaskPool` combines the thread pool's OS-level parallelism with green threads for concurrent task execution within each worker. Submit closures directly and collect results via promises:
+
+```
+with(pool = TaskPool(4)) {
+    pool->map([1, 2, 3, 4, 5, 6, 7, 8], function(x) x * x);
+    // => [1, 4, 9, 16, 25, 36, 49, 64]
+};
+```
+
+Each worker runs an event loop that spawns a green thread per task. Multiple tasks on the same worker run concurrently:
+
+```
+{
+    with(pool = TaskPool(1));    // single worker
+    define ch = pool->channel("__sync");
+
+    // Task A blocks on channel_recv — yields to other green threads
+    define pa = pool->submit(function() {
+        define msg = channel_recv(__sync);
+        msg + 100;
+    });
+
+    // Task B sends — unblocks Task A
+    define pb = pool->submit(function() {
+        channel_send(__sync, 42);
+        "done";
+    });
+
+    await(pb);    // => "done"
+    await(pa);    // => 142
+};
+```
+
+See [TASKS.md](TASKS.md) for the full TaskPool guide.
+
 ## Comparison
 
-| Feature | Continuations | Green Threads | Thread Pool |
-|---------|--------------|---------------|-------------|
-| **Level** | Control flow | Cooperative concurrency | OS parallelism |
-| **Memory** | Shared | Shared | Isolated per worker |
-| **Overhead** | Zero (just a jump) | Very low (context switch) | Higher (serialization) |
-| **Parallelism** | No | No (single OS thread) | Yes (multiple cores) |
-| **Communication** | Direct (shared state) | Direct (shared state) | Channels / futures |
-| **Serializable** | Yes (to bytes) | No | Closures via `pool_apply` |
-| **Use case** | Early exit, coroutines | I/O concurrency, scheduling | CPU-bound computation |
+| Feature | Continuations | Green Threads | Thread Pool | TaskPool |
+|---------|--------------|---------------|-------------|----------|
+| **Level** | Control flow | Cooperative concurrency | OS parallelism | OS + cooperative |
+| **Memory** | Shared | Shared | Isolated per worker | Isolated per worker |
+| **Overhead** | Zero (just a jump) | Very low (context switch) | Higher (serialization) | Higher (serialization) |
+| **Parallelism** | No | No (single OS thread) | Yes (multiple cores) | Yes (multiple cores) |
+| **Communication** | Direct (shared state) | Direct (shared state) | Channels / futures | Channels / promises |
+| **Submit** | N/A | `make_thread` | Code strings / `pool_apply` | Closures directly |
+| **Per-worker concurrency** | N/A | N/A | One task at a time | Green threads (many) |
+| **Use case** | Early exit, coroutines | I/O concurrency, scheduling | Long-lived workers, raw control | Many independent tasks |
 
 ## Putting It Together
 
@@ -581,6 +619,7 @@ define process_batch = function(items) {
 
 ## See also
 
+- [TASKS.md](TASKS.md) — TaskPool: scalable task execution with OS threads + green threads
 - [MULTITHREADING.md](MULTITHREADING.md) — OO synchronization: Mutex, Monitor, ReadWriteLock, Semaphore with RAII
 - [NETWORKING.md](NETWORKING.md) — TCP sockets and HTTP with OO wrappers (`TcpSocket`, `TcpServer`, `HttpClient`) that integrate with green threads
 - [ASYNC.md](ASYNC.md) — Async/await, thread pools, channels, pipelines

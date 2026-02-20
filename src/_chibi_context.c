@@ -306,9 +306,6 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
         self->env = sexp_context_env(self->ctx);
     }
 
-    /* make-parameter and sort are now provided by srfi/39/syntax.scm
-     * and srfi/95/sort.scm loaded in eval_init_all_libs. */
-
     /* SRFI-18 green thread wrappers */
     sexp_load_module_file(self->ctx, "eval/threads.scm", self->env);
     self->env = sexp_context_env(self->ctx);
@@ -327,6 +324,21 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
 
     /* Generator runtime */
     sexp_load_module_file(self->ctx, "eval/generator.scm", self->env);
+    self->env = sexp_context_env(self->ctx);
+
+    /* Green-thread-aware channel-recv: retries with thread-yield! like
+     * mutex-lock!.  Must come after threads.scm which defines thread-yield!.
+     * Overrides the C opcode binding so user code gets the cooperative version. */
+    sexp_eval_string(self->ctx,
+        "(define (channel-recv ch)"
+        "  (let ((r (%channel-recv ch)))"
+        "    (cond"
+        "      ((eof-object? r) r)"
+        "      (r r)"
+        "      (else (thread-yield!)"
+        "            (channel-recv ch)))))", -1, self->env);
+    sexp_eval_string(self->ctx,
+        "(define channel_recv channel-recv)", -1, self->env);
     self->env = sexp_context_env(self->ctx);
 
     /* OO wrappers: Channel-wrap, Future-wrap, Pool (Eval syntax) */
@@ -379,6 +391,10 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
             "    cv))", -1, self->env);
         sexp_eval_string(self->ctx,
             "(define make_condvar make-condition-variable)", -1, self->env);
+        self->env = sexp_context_env(self->ctx);
+
+        /* TaskPool: hybrid OS thread pool + green threads */
+        eval_load_eval_file(self->ctx, self->env, "eval/taskpool.eval");
         self->env = sexp_context_env(self->ctx);
     }
 

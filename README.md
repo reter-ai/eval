@@ -33,6 +33,7 @@ e.eval("""
 - **Green threads** — cooperative multitasking with fuel-based VM scheduling
 - **Synchronization** — OO wrappers: Mutex, Monitor, ReadWriteLock, Semaphore with RAII lock management
 - **Thread pool** — true OS-level parallelism with worker threads, futures, and channels
+- **Task pool** — scalable task execution: OS thread pool + green threads, submit closures, promises
 - **String methods** — OO-style `"hello"->upper()`, `->trim()`, `->split(",")`, `->contains()`, chaining
 - **Collection methods** — OO-style `[1,2,3]->map(f)`, `->filter()`, `->sort(<)`, `->join(",")`, `#[1,2,3]->length`
 - **Networking** — TCP sockets, HTTP client/server with OO wrappers, RAII, and reactive signals
@@ -615,7 +616,7 @@ with(guard = m2->lock()) {
 };
 ```
 
-See [`examples/green_threads/`](examples/green_threads/) for complete demos, [THREADS.md](THREADS.md) for the full green threads and continuations guide, [MULTITHREADING.md](MULTITHREADING.md) for OO synchronization wrappers, [ASYNC.md](ASYNC.md) for the async programming guide, [NETWORKING.md](NETWORKING.md) for the networking guide, and [LISTS.md](LISTS.md)/[VECTORS.md](VECTORS.md) for collection methods.
+See [`examples/green_threads/`](examples/green_threads/) for complete demos, [THREADS.md](THREADS.md) for the full green threads and continuations guide, [MULTITHREADING.md](MULTITHREADING.md) for OO synchronization wrappers, [ASYNC.md](ASYNC.md) for the async programming guide, [TASKS.md](TASKS.md) for the TaskPool guide, [NETWORKING.md](NETWORKING.md) for the networking guide, and [LISTS.md](LISTS.md)/[VECTORS.md](VECTORS.md) for collection methods.
 
 ## Reactive programming
 
@@ -814,7 +815,20 @@ Block until the worker finishes, then return the result. Raises `EvalError` on f
 
 Send or receive values through a channel. `recv()` blocks until a value is available. `try_recv()` returns `(ok, value)` without blocking — `ok` is `True` if a value was received.
 
-See [ASYNC.md](ASYNC.md) for the full async programming guide, [THREADS.md](THREADS.md) for the complete threads and continuations guide, [MULTITHREADING.md](MULTITHREADING.md) for OO synchronization wrappers, [GENERATORS.md](GENERATORS.md) for generators and lazy sequences, [NETWORKING.md](NETWORKING.md) for TCP/HTTP networking, [FILESYS.md](FILESYS.md) for filesystem operations, [LISTS.md](LISTS.md)/[VECTORS.md](VECTORS.md) for collection methods, [BINARY.md](BINARY.md) for Cap'n Proto binary serialization, [GRAMMARS.md](GRAMMARS.md) for runtime parser generation, and [TESTS.md](TESTS.md) for the built-in test framework.
+### TaskPool: Scalable Task Execution
+
+`TaskPool` combines the thread pool with green threads — submit closures directly (no code strings), distribute work round-robin, and collect results via promises:
+
+```
+with(pool = TaskPool(4)) {
+    pool->map([1, 2, 3, 4, 5, 6, 7, 8], function(x) x * x);
+    // => [1, 4, 9, 16, 25, 36, 49, 64]
+};
+```
+
+Each worker runs green threads, so multiple tasks on the same worker execute concurrently. See [TASKS.md](TASKS.md) for the full guide.
+
+See [ASYNC.md](ASYNC.md) for the full async programming guide, [TASKS.md](TASKS.md) for the TaskPool guide, [THREADS.md](THREADS.md) for the complete threads and continuations guide, [MULTITHREADING.md](MULTITHREADING.md) for OO synchronization wrappers, [GENERATORS.md](GENERATORS.md) for generators and lazy sequences, [NETWORKING.md](NETWORKING.md) for TCP/HTTP networking, [FILESYS.md](FILESYS.md) for filesystem operations, [LISTS.md](LISTS.md)/[VECTORS.md](VECTORS.md) for collection methods, [BINARY.md](BINARY.md) for Cap'n Proto binary serialization, [GRAMMARS.md](GRAMMARS.md) for runtime parser generation, and [TESTS.md](TESTS.md) for the built-in test framework.
 
 ## Binary serialization
 
@@ -908,6 +922,7 @@ eval tests/eval/test_arithmetic.eval
 eval tests/eval/test_functions.eval
 eval tests/eval/test_green_threads.eval
 eval tests/eval/test_pool.eval
+eval tests/eval/test_taskpool.eval
 ```
 
 ## Testing

@@ -626,7 +626,7 @@ sexp sexp_condition_variable_signal (sexp ctx, ..., sexp condvar) {
 
 All synchronization is cooperative — there are no OS-level locks. A mutex is just a Scheme record with a boolean flag. Blocking means "put this context on the paused list." The scheduler later moves it back when the mutex is unlocked.
 
-For higher-level OO wrappers with RAII (`Mutex`, `Monitor`, `ReadWriteLock`, `Semaphore`), see [MULTITHREADING.md](MULTITHREADING.md).
+For higher-level OO wrappers with RAII (`Mutex`, `Monitor`, `ReadWriteLock`, `Semaphore`), see [MULTITHREADING.md](MULTITHREADING.md). For a hybrid combining OS thread pools with green threads, see [TASKS.md](TASKS.md).
 
 ## 13. Thread Termination
 

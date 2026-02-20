@@ -1386,7 +1386,7 @@ pool_shutdown(pool);
 | **Overhead** | Very low | Higher (serialization, thread creation) |
 | **Use case** | Concurrent I/O, structured concurrency | CPU-bound parallelism |
 
-See [ASYNC.md](ASYNC.md) for a comprehensive guide to async programming, thread pools, channels, and pipelines.
+See [ASYNC.md](ASYNC.md) for a comprehensive guide to async programming, thread pools, channels, and pipelines. See [TASKS.md](TASKS.md) for the TaskPool guide (hybrid OS threads + green threads).
 
 ## Thread Pool
 
@@ -1475,6 +1475,64 @@ pool_shutdown(pool);
 ```
 
 See [ASYNC.md](ASYNC.md) and [THREADS.md](THREADS.md) for comprehensive guides covering pool_apply, closures across threads, continuation exchange, and multi-stage pipelines.
+
+## TaskPool
+
+`TaskPool` combines the thread pool with green threads for scalable task execution. Submit closures directly (no code strings), distribute work round-robin, and collect results via promises:
+
+```
+with(pool = TaskPool(4)) {
+    // Submit closures — returns promises
+    define p = pool->submit(function() 42);
+    await(p);    // => 42
+
+    // run() = submit + await
+    pool->run(function() 6 * 7);    // => 42
+
+    // Map distributes work across workers
+    pool->map([1, 2, 3, 4], function(x) x * x);    // => [1, 4, 9, 16]
+};
+```
+
+Each worker runs green threads, so multiple tasks on the same worker execute concurrently — no deadlocks from blocking:
+
+```
+{
+    with(pool = TaskPool(1));    // single worker
+    define ch = pool->channel("__sync");
+
+    // Task A blocks on channel_recv — yields to other green threads
+    define pa = pool->submit(function() {
+        define msg = channel_recv(__sync);
+        msg + 100;
+    });
+
+    // Task B sends — unblocks Task A
+    define pb = pool->submit(function() {
+        channel_send(__sync, 42);
+        "done";
+    });
+
+    await(pb);    // => "done"
+    await(pa);    // => 142
+};
+```
+
+### TaskPool Methods
+
+| Method | Description |
+|---|---|
+| `pool->submit(thunk)` | Submit a zero-arg closure, return a promise |
+| `pool->run(thunk)` | Submit and await — returns the result directly |
+| `pool->map(list, fn)` | Apply `fn` to each element in parallel, return results list |
+| `pool->drain()` | Block until all pending tasks complete |
+| `pool->shutdown()` | Drain, stop workers, clean up |
+| `pool->close()` | Alias for `shutdown()` (used by `with`) |
+| `pool->channel(name)` | Get or create a named channel |
+| `pool->size` | Number of OS workers |
+| `pool->pending_count()` | Number of tasks not yet completed |
+
+See [TASKS.md](TASKS.md) for the full guide including error propagation, drain, inter-worker channels, green threads within workers, architecture, and patterns.
 
 ## Reactive Programming
 
@@ -2091,6 +2149,7 @@ See [NETWORKING.md](NETWORKING.md) for the full networking guide including low-l
 - [NETWORKING.md](NETWORKING.md) — TCP sockets, HTTP client/server, OO wrappers, non-blocking I/O
 - [FILESYS.md](FILESYS.md) — File I/O, directory operations, metadata, path utilities
 - [ASYNC.md](ASYNC.md) — Async/await, thread pools, channels, pipelines
+- [TASKS.md](TASKS.md) — TaskPool: scalable task execution with OS threads + green threads
 - [THREADS.md](THREADS.md) — Green threads, mutexes, condition variables, continuations
 - [MULTITHREADING.md](MULTITHREADING.md) — OO synchronization: Mutex, Monitor, ReadWriteLock, Semaphore
 - [REACTIVE.md](REACTIVE.md) — Signals, computed values, effects, scopes, resources
