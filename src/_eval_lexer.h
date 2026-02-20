@@ -40,6 +40,7 @@ typedef struct {
     char *error_msg;
     int has_error;
     int prev_ends_expr; /* true if previous token can end an expression */
+    int prev_token_type; /* type of the previous token */
     int fstr_mode;      /* 0=normal, 1=text(first), 2=text(mid), 3=expr */
     int fstr_nesting;   /* current nesting depth (0 = not in fstring) */
     int fstr_brace_stack[FSTR_MAX_NESTING]; /* brace depth per nesting level */

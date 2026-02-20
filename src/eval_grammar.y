@@ -132,6 +132,22 @@ expr(A) ::= DEFINE FRESH(N) ASSIGN expr(E). {
     A = sexp_list3(ctx, ps_intern(ctx, "define"),
         ps_make_ident(ctx, N.start, N.length), E);
 }
+expr(A) ::= DEFINE FACT(N) ASSIGN expr(E). {
+    A = sexp_list3(ctx, ps_intern(ctx, "define"),
+        ps_make_ident(ctx, N.start, N.length), E);
+}
+expr(A) ::= DEFINE RULE(N) ASSIGN expr(E). {
+    A = sexp_list3(ctx, ps_intern(ctx, "define"),
+        ps_make_ident(ctx, N.start, N.length), E);
+}
+expr(A) ::= DEFINE WHENEVER(N) ASSIGN expr(E). {
+    A = sexp_list3(ctx, ps_intern(ctx, "define"),
+        ps_make_ident(ctx, N.start, N.length), E);
+}
+expr(A) ::= DEFINE CONDE(N) ASSIGN expr(E). {
+    A = sexp_list3(ctx, ps_intern(ctx, "define"),
+        ps_make_ident(ctx, N.start, N.length), E);
+}
 expr(A) ::= IDENT(N) PLUS_ASSIGN expr(E). {
     A = ps_set_op(ctx, "+", ps_make_ident(ctx, N.start, N.length), E);
 }
@@ -343,6 +359,10 @@ expr(A) ::= FALSE. {
 expr(A) ::= NIL. {
     A = sexp_list2(ctx, ps_intern(ctx, "quote"), SEXP_NULL);
 }
+/* Logic keywords as identifiers in expression context */
+expr(A) ::= FACT(V). { A = ps_make_ident(ctx, V.start, V.length); }
+expr(A) ::= RULE(V). { A = ps_make_ident(ctx, V.start, V.length); }
+expr(A) ::= WHENEVER(V). { A = ps_make_ident(ctx, V.start, V.length); }
 
 /* --- Operator as value: bare +, *, etc. in value position --- */
 expr(A) ::= OPVAL(V). {

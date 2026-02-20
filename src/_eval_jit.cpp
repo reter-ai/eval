@@ -116,27 +116,34 @@ compile_c_to_ir(llvm::LLVMContext& llvm_ctx,
     invocation->getFrontendOpts().Inputs.push_back(
         clang::FrontendInputFile("input.c", clang::Language::C));
 
-    /* Create compiler instance.
-     * setDiagnostics takes IntrusiveRefCntPtr — safe with heap-allocated diags. */
-    clang::CompilerInstance compiler;
-    compiler.setInvocation(invocation);
-    compiler.setDiagnostics(diags.get());
-    compiler.createFileManager(llvm::vfs::getRealFileSystem());
+    /* Create compiler instance on the heap and intentionally leak it.
+     *
+     * WORKAROUND: On Windows with LLVM 18, the CompilerInstance destructor
+     * corrupts the process heap when called repeatedly.  Subsequent memory
+     * allocations (malloc, new, etc.) crash or hang at random points.
+     * Heap-allocating and never deleting avoids the destructor entirely.
+     * The per-compilation leak (~1-2 MB) is acceptable for grammar JIT
+     * which typically compiles only a handful of parsers per session. */
+    auto* compiler = new clang::CompilerInstance();
+    compiler->setInvocation(invocation);
+    compiler->setDiagnostics(diags.get());
+    compiler->createFileManager(llvm::vfs::getRealFileSystem());
 
     /* Run EmitLLVMOnlyAction to get Module */
     auto action = std::make_unique<clang::EmitLLVMOnlyAction>(&llvm_ctx);
-    bool exec_ok = compiler.ExecuteAction(*action);
+    bool exec_ok = compiler->ExecuteAction(*action);
     if (!exec_ok) {
         error_out = "Clang compilation failed: " + diag_str;
-        return nullptr;
+        return nullptr;  /* compiler leaked — see note above */
     }
 
     auto module = action->takeModule();
     if (!module) {
         error_out = "Clang produced no LLVM module";
-        return nullptr;
+        return nullptr;  /* compiler leaked — see note above */
     }
 
+    /* compiler intentionally leaked — destructor not called */
     return module;
 }
 
@@ -175,6 +182,7 @@ extern "C" void* eval_jit_compile(EvalJIT* ej, const char* c_source,
 
     /* Get target triple from LLJIT */
     std::string triple = ej->jit->getTargetTriple().str();
+    int id = ej->module_counter.fetch_add(1);
 
     /* Compile C to LLVM IR */
     auto ts_ctx = std::make_unique<llvm::LLVMContext>();
@@ -186,7 +194,6 @@ extern "C" void* eval_jit_compile(EvalJIT* ej, const char* c_source,
     }
 
     /* Create a unique dylib for this compilation to avoid symbol clashes */
-    int id = ej->module_counter.fetch_add(1);
     std::string dylib_name = "__jit_module_" + std::to_string(id);
 
     auto& es = ej->jit->getExecutionSession();
@@ -212,7 +219,6 @@ extern "C" void* eval_jit_compile(EvalJIT* ej, const char* c_source,
         if (error) *error = make_error_from_llvm(sym_or_err.takeError());
         return nullptr;
     }
-
     return (void*)sym_or_err->getValue();
 }
 

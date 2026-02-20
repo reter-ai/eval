@@ -879,11 +879,12 @@ when(jit_available) {
         %ignore /\s+/
     """)->compile();
     define rta1 = p_ta1->parse("hello 42 world 7");
-    test("term alt regex: count", 4, child_count(rta1));
-    test("term alt regex: first word", "hello", node_value(node_child(rta1, 0)));
-    test("term alt regex: first num", "42", node_value(node_child(rta1, 1)));
-    test("term alt regex: second word", "world", node_value(node_child(rta1, 2)));
-    test("term alt regex: second num", "7", node_value(node_child(rta1, 3)));
+    define rta1L = node_child(rta1, 0);  // list from +
+    test("term alt regex: count", 4, child_count(rta1L));
+    test("term alt regex: first word", "hello", node_value(node_child(rta1L, 0)));
+    test("term alt regex: first num", "42", node_value(node_child(rta1L, 1)));
+    test("term alt regex: second word", "world", node_value(node_child(rta1L, 2)));
+    test("term alt regex: second num", "7", node_value(node_child(rta1L, 3)));
 
     // String alternatives
     define p_ta2 = Grammar("""
@@ -892,10 +893,11 @@ when(jit_available) {
         %ignore /\s+/
     """)->compile();
     define rta2 = p_ta2->parse("if else while if");
-    test("term alt string: count", 4, child_count(rta2));
-    test("term alt string: first", "if", node_value(node_child(rta2, 0)));
-    test("term alt string: second", "else", node_value(node_child(rta2, 1)));
-    test("term alt string: third", "while", node_value(node_child(rta2, 2)));
+    define rta2L = node_child(rta2, 0);
+    test("term alt string: count", 4, child_count(rta2L));
+    test("term alt string: first", "if", node_value(node_child(rta2L, 0)));
+    test("term alt string: second", "else", node_value(node_child(rta2L, 1)));
+    test("term alt string: third", "while", node_value(node_child(rta2L, 2)));
     test_error("term alt string: no match", function() p_ta2->parse("for"));
 
     // Mixed string + regex alternatives
@@ -905,11 +907,12 @@ when(jit_available) {
         %ignore /\s+/
     """)->compile();
     define rta3 = p_ta3->parse("null 42 true hello false 7");
-    test("term alt mixed: count", 6, child_count(rta3));
-    test("term alt mixed: null", "null", node_value(node_child(rta3, 0)));
-    test("term alt mixed: num", "42", node_value(node_child(rta3, 1)));
-    test("term alt mixed: true", "true", node_value(node_child(rta3, 2)));
-    test("term alt mixed: word", "hello", node_value(node_child(rta3, 3)));
+    define rta3L = node_child(rta3, 0);
+    test("term alt mixed: count", 6, child_count(rta3L));
+    test("term alt mixed: null", "null", node_value(node_child(rta3L, 0)));
+    test("term alt mixed: num", "42", node_value(node_child(rta3L, 1)));
+    test("term alt mixed: true", "true", node_value(node_child(rta3L, 2)));
+    test("term alt mixed: word", "hello", node_value(node_child(rta3L, 3)));
 
     // Terminal alt with priority
     define p_ta4 = Grammar("""
@@ -919,10 +922,11 @@ when(jit_available) {
         %ignore /\s+/
     """)->compile();
     define rta4 = p_ta4->parse("if foo else bar");
-    test("term alt prio: keyword if", "KEYWORD", node_name(node_child(rta4, 0)));
-    test("term alt prio: ident foo", "IDENT", node_name(node_child(rta4, 1)));
-    test("term alt prio: keyword else", "KEYWORD", node_name(node_child(rta4, 2)));
-    test("term alt prio: ident bar", "IDENT", node_name(node_child(rta4, 3)));
+    define rta4L = node_child(rta4, 0);
+    test("term alt prio: keyword if", "KEYWORD", node_name(node_child(rta4L, 0)));
+    test("term alt prio: ident foo", "IDENT", node_name(node_child(rta4L, 1)));
+    test("term alt prio: keyword else", "KEYWORD", node_name(node_child(rta4L, 2)));
+    test("term alt prio: ident bar", "IDENT", node_name(node_child(rta4L, 3)));
 
     // ========================================================
     // 2.15 Terminal priority
@@ -936,13 +940,14 @@ when(jit_available) {
     """)->compile();
 
     define rpr = p_pri->parse("if foo else bar while baz");
-    test("priority: keyword if", "KEYWORD", node_name(node_child(rpr, 0)));
-    test("priority: keyword value", "if", node_value(node_child(rpr, 0)));
-    test("priority: ident foo", "IDENT", node_name(node_child(rpr, 1)));
-    test("priority: keyword else", "KEYWORD", node_name(node_child(rpr, 2)));
-    test("priority: ident bar", "IDENT", node_name(node_child(rpr, 3)));
-    test("priority: keyword while", "KEYWORD", node_name(node_child(rpr, 4)));
-    test("priority: ident baz", "IDENT", node_name(node_child(rpr, 5)));
+    define rprL = node_child(rpr, 0);
+    test("priority: keyword if", "KEYWORD", node_name(node_child(rprL, 0)));
+    test("priority: keyword value", "if", node_value(node_child(rprL, 0)));
+    test("priority: ident foo", "IDENT", node_name(node_child(rprL, 1)));
+    test("priority: keyword else", "KEYWORD", node_name(node_child(rprL, 2)));
+    test("priority: ident bar", "IDENT", node_name(node_child(rprL, 3)));
+    test("priority: keyword while", "KEYWORD", node_name(node_child(rprL, 4)));
+    test("priority: ident baz", "IDENT", node_name(node_child(rprL, 5)));
 
     // ========================================================
     // 2.16 Regex patterns
@@ -955,11 +960,12 @@ when(jit_available) {
         %ignore /\s+/
     """)->compile();
     define rid = p_id->parse("foo bar_2 _baz Hello");
-    test("regex ident: count", 4, child_count(rid));
-    test("regex ident: foo", "foo", node_value(node_child(rid, 0)));
-    test("regex ident: bar_2", "bar_2", node_value(node_child(rid, 1)));
-    test("regex ident: _baz", "_baz", node_value(node_child(rid, 2)));
-    test("regex ident: Hello", "Hello", node_value(node_child(rid, 3)));
+    define ridL = node_child(rid, 0);
+    test("regex ident: count", 4, child_count(ridL));
+    test("regex ident: foo", "foo", node_value(node_child(ridL, 0)));
+    test("regex ident: bar_2", "bar_2", node_value(node_child(ridL, 1)));
+    test("regex ident: _baz", "_baz", node_value(node_child(ridL, 2)));
+    test("regex ident: Hello", "Hello", node_value(node_child(ridL, 3)));
 
     // Hex numbers
     define p_hex = Grammar("""
@@ -992,8 +998,8 @@ when(jit_available) {
         start: CHAR+
         CHAR: /./
     """)->compile();
-    test("regex dot: a", "a", node_value(node_child(p_dot->parse("abc"), 0)));
-    test("regex dot: count", 3, child_count(p_dot->parse("xyz")));
+    test("regex dot: a", "a", node_value(node_child(node_child(p_dot->parse("abc"), 0), 0)));
+    test("regex dot: count", 3, child_count(node_child(p_dot->parse("xyz"), 0)));
 
     // ========================================================
     // 2.17 Regex shorthands (\d, \w, \s)
@@ -1014,9 +1020,10 @@ when(jit_available) {
         %ignore /\s+/
     """)->compile();
     define rw = p_w->parse("hello world_42");
-    test("shorthand \\w: count", 2, child_count(rw));
-    test("shorthand \\w: first", "hello", node_value(node_child(rw, 0)));
-    test("shorthand \\w: second", "world_42", node_value(node_child(rw, 1)));
+    define rwL = node_child(rw, 0);
+    test("shorthand \\w: count", 2, child_count(rwL));
+    test("shorthand \\w: first", "hello", node_value(node_child(rwL, 0)));
+    test("shorthand \\w: second", "world_42", node_value(node_child(rwL, 1)));
 
     // \s in ignore pattern
     define p_s = Grammar("""
@@ -1243,8 +1250,9 @@ when(jit_available) {
         %ignore /\s+/
     """)->compile();
     define rtq2 = p_tq2->parse("hello world");
-    test("triple-quoted raw: count", 2, child_count(rtq2));
-    test("triple-quoted raw: first", "hello", node_value(node_child(rtq2, 0)));
+    define rtq2L = node_child(rtq2, 0);
+    test("triple-quoted raw: count", 2, child_count(rtq2L));
+    test("triple-quoted raw: first", "hello", node_value(node_child(rtq2L, 0)));
 
     // ========================================================
     // 2.27 Multiple parsers coexisting
@@ -1338,12 +1346,15 @@ when(jit_available) {
         [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]->map(function(x) `number->string`(x))
     )->replace(",", " ");
     define rlong = p_many->parse(long_input);
-    test("stress: 10 tokens", 10, child_count(rlong));
+    test("stress: 10 tokens", 10, child_count(node_child(rlong, 0)));
 
     // Deeply nested parens
     define rdeep = p_arith->parse("((((42))))");
-    test("stress: nested parens", "NUMBER", node_name(node_child(rdeep, 0)));
-    test("stress: nested value", "42", node_value(node_child(rdeep, 0)));
+    // 4 levels of parens → 4 nested atom wrappers; each atom has 3 children: "(" expr ")"
+    test("stress: nested parens", "atom", node_name(node_child(rdeep, 0)));
+    // Descend through 4 atoms (index 1 = middle child) to reach NUMBER
+    define rdeep4 = node_child(node_child(node_child(node_child(node_child(rdeep, 0), 1), 1), 1), 1);
+    test("stress: nested value", "42", node_value(rdeep4));
 
     // Long expression chain
     define rlong_expr = p_arith->parse("1 + 2 + 3 + 4 + 5 + 6 + 7 + 8");
@@ -1440,13 +1451,16 @@ when(jit_available) {
 
     define rlang = p_lang->parse("x = 1; y = x + 2; print y;");
     test("lang: root", "start", node_name(rlang));
-    // First statement is assign
-    define first_stmt = node_child(rlang, 0);
-    test("lang: first stmt", "assign", node_name(first_stmt));
-    test("lang: first var", "x", node_value(node_child(first_stmt, 0)));
-    // Third statement is print
-    define third_stmt = node_child(rlang, 2);
-    test("lang: third stmt", "print_stmt", node_name(third_stmt));
+    // stmt+ wraps in list node
+    define lang_stmts = node_child(rlang, 0);
+    // First statement is stmt wrapping assign
+    define first_stmt = node_child(lang_stmts, 0);
+    test("lang: first stmt", "stmt", node_name(first_stmt));
+    define first_assign = node_child(first_stmt, 0);
+    test("lang: first var", "x", node_value(node_child(first_assign, 0)));
+    // Third statement is stmt wrapping print_stmt
+    define third_stmt = node_child(lang_stmts, 2);
+    test("lang: third stmt", "stmt", node_name(third_stmt));
 
     display("  (JIT tests ran)\n");
 };

@@ -144,7 +144,7 @@ static void desugar_groups_in_alt(LarkGrammar* g, LarkAlternative* alt) {
         LarkItem* item = &alt->items[i];
         if (item->type == LARK_ITEM_GROUP && item->group_alts) {
             char name[64];
-            snprintf(name, sizeof(name), "__grp_%d", _group_rule_counter++);
+            snprintf(name, sizeof(name), "xgrp_%d", _group_rule_counter++);
             /* Add synthetic inline rule */
             LarkRule* rule = lark_grammar_add_rule(g, name, 1);
             rule->alts = item->group_alts;
@@ -361,10 +361,14 @@ char* lark_generate_lemon_y(LarkGrammar* grammar, const char* parser_prefix) {
 
 /* Convert Lark regex shorthand to re2c pattern.
  * re2c doesn't support \d, \w, \s — expand them to character classes.
+ * Also: bare alphanumeric sequences outside [...] must be quoted for re2c
+ * (otherwise re2c interprets them as named definitions, not literals).
  * Returns malloc'd string. Caller frees. */
 static char* lark_to_re2c_regex(const char* pat) {
     SBuf sb;
     sb_init(&sb);
+    int in_class = 0;
+    int in_brace = 0;  /* inside {...} quantifier */
 
     while (*pat) {
         if (*pat == '\\' && pat[1]) {
@@ -381,18 +385,62 @@ static char* lark_to_re2c_regex(const char* pat) {
                 case 'r': sb_append(&sb, "\\r"); break;
                 case '\\': sb_append(&sb, "\\\\"); break;
                 default: {
-                    /* Pass through other escapes */
-                    char tmp[3] = {'\\', *pat, 0};
+                    /* Escaped metacharacter (\., \+, \/, etc.) — quote for re2c.
+                     * re2c only supports \n, \t, \r, \xHH as backslash escapes;
+                     * other escaped chars must be quoted string literals. */
+                    char tmp[4] = {'"', *pat, '"', 0};
                     sb_append(&sb, tmp);
                     break;
                 }
             }
+            pat++;
+        } else if (*pat == '[') {
+            in_class = 1;
+            sb_append(&sb, "[");
+            pat++;
+        } else if (*pat == ']') {
+            in_class = 0;
+            sb_append(&sb, "]");
+            pat++;
+        } else if (*pat == '{') {
+            in_brace = 1;
+            sb_append(&sb, "{");
+            pat++;
+        } else if (*pat == '}') {
+            in_brace = 0;
+            sb_append(&sb, "}");
             pat++;
         } else if (*pat == '.') {
             /* Lark '.' = any char. re2c '.' = any except newline.
              * Use [^\x00] for "any byte except NUL" (our EOF sentinel). */
             sb_append(&sb, "[^\\x00]");
             pat++;
+        } else if (*pat == '"' && !in_class) {
+            /* Literal double-quote — use character class to avoid
+             * conflicting with re2c's string quoting syntax. */
+            sb_append(&sb, "[\"]");
+            pat++;
+        } else if (!in_class && !in_brace && !isalnum((unsigned char)*pat) &&
+                   *pat != '(' && *pat != ')' && *pat != '|' && *pat != '[' &&
+                   *pat != ']' && *pat != '+' && *pat != '*' && *pat != '?' &&
+                   *pat != '^' && *pat != '$' && *pat != '{' && *pat != '}' &&
+                   *pat != '.' && *pat != '-' && *pat != '\\') {
+            /* Non-regex-meta, non-alnum character outside character class
+             * (e.g. @, #, !, etc.) — quote for re2c. */
+            char tmp[4] = {'"', *pat, '"', 0};
+            sb_append(&sb, tmp);
+            pat++;
+        } else if (!in_class && !in_brace && isalnum((unsigned char)*pat)) {
+            /* Bare alphanumeric sequence outside [...] and {...} — quote for re2c.
+             * Without quotes, re2c treats e.g. "if" or "0x" as named definitions.
+             * Digits inside {...} are quantifiers ({1,3}) and must not be quoted. */
+            sb_append(&sb, "\"");
+            while (*pat && (isalnum((unsigned char)*pat) || *pat == '_')) {
+                char tmp[2] = {*pat, 0};
+                sb_append(&sb, tmp);
+                pat++;
+            }
+            sb_append(&sb, "\"");
         } else {
             char tmp[2] = {*pat, 0};
             sb_append(&sb, tmp);
@@ -408,9 +456,19 @@ static char* lark_to_re2c_regex(const char* pat) {
 static void emit_re2c_string_literal(SBuf* sb, const char* lit) {
     sb_append(sb, "\"");
     while (*lit) {
+        if (*lit == '\\' && lit[1]) {
+            /* Process Lark escape sequences stored as raw two-char pairs */
+            switch (lit[1]) {
+                case 'n':  sb_append(sb, "\\n"); lit += 2; continue;
+                case 't':  sb_append(sb, "\\t"); lit += 2; continue;
+                case 'r':  sb_append(sb, "\\r"); lit += 2; continue;
+                case '\\': sb_append(sb, "\\\\"); lit += 2; continue;
+                case '"':  sb_append(sb, "\\\""); lit += 2; continue;
+                default:   sb_append(sb, "\\\\"); lit++; continue; /* lone backslash */
+            }
+        }
         switch (*lit) {
             case '"':  sb_append(sb, "\\\""); break;
-            case '\\': sb_append(sb, "\\\\"); break;
             case '\n': sb_append(sb, "\\n"); break;
             case '\t': sb_append(sb, "\\t"); break;
             case '\r': sb_append(sb, "\\r"); break;
@@ -743,8 +801,12 @@ char* lark_generate_combined_c(LarkGrammar* grammar,
     sb_append(&sb, "    AstNode* tok_val;\n");
     sb_printf(&sb, "    while ((tok_val = %s_next_token(&lex, &tok_type, &state)) != 0\n",
               func_prefix);
-    sb_append(&sb, "           || tok_type > 0) {\n");
-    sb_append(&sb, "        if (tok_type < 0) { state.has_error = 1; break; }\n");
+    sb_append(&sb, "           || tok_type != 0) {\n");
+    sb_append(&sb, "        if (tok_type < 0) {\n");
+    sb_append(&sb, "            strncpy(state.error_msg, \"unexpected character in input\",\n");
+    sb_append(&sb, "                    sizeof(state.error_msg) - 1);\n");
+    sb_append(&sb, "            state.has_error = 1; break;\n");
+    sb_append(&sb, "        }\n");
     sb_append(&sb, "        Parse(parser, tok_type, tok_val, &state);\n");
     sb_append(&sb, "        if (state.has_error) break;\n");
     sb_append(&sb, "    }\n\n");

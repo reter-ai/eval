@@ -14,6 +14,7 @@ void eval_lexer_init(EvalLexer *lexer, const char *source) {
     lexer->error_msg = NULL;
     lexer->has_error = 0;
     lexer->prev_ends_expr = 0;
+    lexer->prev_token_type = 0;
     lexer->fstr_mode = 0;
     lexer->fstr_nesting = 0;
     memset(lexer->fstr_brace_stack, 0, sizeof(lexer->fstr_brace_stack));
@@ -382,6 +383,7 @@ static void lexer_post_process(EvalLexer *lexer, EvalToken *token) {
         lexer->prev_ends_expr = 0;
         break;
     }
+    lexer->prev_token_type = token->type;
 }
 
 /* Scan f-string text segment. Called when fstr_mode is 1 (first) or 2 (mid).
@@ -594,7 +596,8 @@ int eval_lexer_next(EvalLexer *lexer, EvalToken *token) {
         break;
 
     case ':':
-        if (peek(lexer) == '-') {
+        if (peek(lexer) == '-' && lexer->prev_token_type == TOK_RPAREN) {
+            /* :- only after ) for Prolog rules: rule foo(X) :- bar(X) */
             advance(lexer);
             token->type = TOK_COLONMINUS;
             token->length = 2;
