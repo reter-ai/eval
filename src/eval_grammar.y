@@ -53,7 +53,7 @@
 %nonassoc RPAREN COMMA DOTDOT RBRACKET RBRACE SEMICOLON COLON.
 /* Additional keyword tokens recognized by the lexer.
    Declaring them here makes lemon generate their TOK_ defines. */
-%token LIBRARY EXPORT INCLUDE MACRO SYNTAX_RULES OPVAL TEST_GROUP DEFINE IN DICT WITH ASYNC AWAIT STATIC ABSTRACT YIELD GENERATOR RAW_STRING.
+%token LIBRARY EXPORT INCLUDE MACRO SYNTAX_RULES OPVAL TEST_GROUP DEFINE IN DICT WITH ASYNC AWAIT STATIC ABSTRACT YIELD GENERATOR RAW_STRING PARALLEL.
 
 /* Non-terminal types - all are sexp */
 %type program { sexp }
@@ -244,6 +244,7 @@ member_name(A) ::= STATIC(T). { A = T; }
 member_name(A) ::= ABSTRACT(T). { A = T; }
 member_name(A) ::= YIELD(T). { A = T; }
 member_name(A) ::= GENERATOR(T). { A = T; }
+member_name(A) ::= PARALLEL(T). { A = T; }
 
 /* --- Postfix: indexing expr[i] --- */
 expr(A) ::= expr(E) LBRACKET expr(I) RBRACKET. {
@@ -533,6 +534,9 @@ expr(A) ::= WITH LPAREN bindings(B) RPAREN expr(E). [ARGLIST_PREC] {
 /* --- Async / Await --- */
 expr(A) ::= ASYNC expr(E). [RETURN_PREC] {
     A = ps_make_async(ctx, E);
+}
+expr(A) ::= PARALLEL ASYNC expr(E). [RETURN_PREC] {
+    A = ps_make_parallel_async(ctx, E);
 }
 expr(A) ::= AWAIT LPAREN arglist(L) RPAREN. {
     A = sexp_cons(ctx, ps_intern(ctx, "__await__"), L);

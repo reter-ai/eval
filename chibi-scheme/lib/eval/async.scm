@@ -32,6 +32,24 @@
         ((eq? __msg__ '__type__) '__promise__)
         (else (error "promise: unknown message" __msg__))))))
 
+;; Pool target for `parallel async` (set via set_async_pool / AsyncPool)
+(define __async_pool__ #f)
+
+;; async expr — always green thread (cooperative, shared state)
+(define (__async_dispatch__ thunk)
+  (let ((p (__make-promise__)))
+    (thread-start! (make-thread (lambda ()
+      (protect (__async_e__
+        (else ((p '__reject__) __async_e__)))
+        ((p '__resolve__) (thunk))))))
+    p))
+
+;; parallel async expr — always OS thread via __async_pool__
+(define (__parallel_async_dispatch__ thunk)
+  (if __async_pool__
+      ((__async_pool__ 'submit) thunk)
+      (error "parallel async requires a pool -- use AsyncPool(n) or set_async_pool(pool)")))
+
 (define (__promise-resolve!__ p val)
   (protect (e (else ((p '__reject__) e)))
     ((p '__resolve__) val)))

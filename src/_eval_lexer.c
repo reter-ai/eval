@@ -137,6 +137,7 @@ static const Keyword keywords[] = {
     {"abstract",    TOK_ABSTRACT},
     {"yield",       TOK_YIELD},
     {"generator",   TOK_GENERATOR},
+    {"parallel",    TOK_PARALLEL},
     {"true",        TOK_TRUE},
     {"false",       TOK_FALSE},
     {"nil",         TOK_NIL},

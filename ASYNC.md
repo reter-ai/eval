@@ -411,26 +411,104 @@ with(pool = TaskPool(4)) {
 
 See [TASKS.md](TASKS.md) for the full TaskPool guide including drain, inter-worker channels, green threads within workers, architecture, and patterns.
 
+## Hybrid Async: `parallel async`
+
+`async` always spawns a green thread. `parallel async` always dispatches to an OS thread pool. Use both in the same scope for hybrid concurrency — green threads for I/O, OS threads for CPU:
+
+```
+define fib = function(n) if(n <= 1) n else fib(n - 1) + fib(n - 2);
+
+with(ap = AsyncPool(4)) {
+    define a = async fetch(url);              // green thread (I/O, shared state)
+    define b = parallel async fib(30);        // OS thread (CPU, isolated)
+    define c = parallel async fib(31);        // OS thread (CPU, isolated)
+    [await(a), await(b), await(c)];           // all return promises — same await
+};
+```
+
+### How it works
+
+| | `async expr` | `parallel async expr` |
+|---|---|---|
+| **Dispatch** | Always green thread | Always OS thread pool |
+| **State** | Shared — access local variables | Isolated — closure serialized to worker |
+| **Overhead** | Very low (continuation switch) | Higher (serialization) |
+| **Requires pool** | No | Yes — errors if no pool set |
+| **Best for** | I/O, coordination, shared state | CPU-bound computation |
+
+Both produce the same promise type. `await` works identically on both.
+
+### Setting up a pool
+
+`parallel async` requires a pool target. Use `AsyncPool` (RAII) or `set_async_pool` (manual):
+
+```
+// RAII — pool shuts down and is removed when the block exits
+with(ap = AsyncPool(4)) {
+    define a = parallel async fib(30);
+    define b = parallel async fib(31);
+    [await(a), await(b)];
+};
+
+// Manual
+define pool = TaskPool(4);
+set_async_pool(pool);
+define p = parallel async fib(30);
+await(p);
+set_async_pool(false);
+pool->shutdown();
+```
+
+Without a pool, `parallel async` raises an error:
+
+```
+parallel async 42;    // ERROR: "parallel async requires a pool"
+```
+
+### Nested pools
+
+AsyncPool restores the previous pool on close:
+
+```
+with(outer = AsyncPool(2)) {
+    // parallel async uses outer pool (2 workers)
+    with(inner = AsyncPool(4)) {
+        // parallel async uses inner pool (4 workers)
+    };
+    // parallel async uses outer pool again
+};
+// parallel async would error — no pool
+```
+
+### Trade-offs
+
+`parallel async` serializes the closure to an isolated worker VM:
+- Shared mutable state does **not** propagate back (workers have independent memory)
+- Closures must be serializable (no captured Python objects or ports)
+- Higher overhead per task (serialization vs. continuation switch)
+
+Use `async` when you need shared state or low overhead. Use `parallel async` when you need true parallelism for CPU-bound work.
+
 ## When to Use What
 
-| | `async` | `Pool` | `TaskPool` |
-|---|---|---|---|
-| **Mechanism** | Green thread (cooperative) | OS thread (true parallelism) | OS threads + green threads |
-| **Submit** | Expression | Code strings or `pool_apply` | Closures directly |
-| **Results** | Promises | Futures | Promises (unified `await`) |
-| **Context** | Shared — access local variables | Isolated — separate VM | Isolated with serialized closures |
-| **Communication** | Shared mutable state | Channels and futures | Same, plus promise-based results |
-| **Per-worker concurrency** | N/A (single VM) | One task at a time | Green threads — many concurrent tasks |
-| **Overhead** | Very low (continuation switch) | Higher (serialization) | Higher (serialization) |
-| **Best for** | Concurrent I/O, structured concurrency | Long-lived workers, raw control | Many independent tasks to distribute |
+| | `async` | `parallel async` | `Pool` | `TaskPool` |
+|---|---|---|---|---|
+| **Mechanism** | Green thread (cooperative) | OS thread (via TaskPool) | OS thread (true parallelism) | OS threads + green threads |
+| **Submit** | `async expr` | `parallel async expr` | Code strings or `pool_apply` | Closures directly |
+| **Results** | Promises | Promises (same type!) | Futures | Promises (unified `await`) |
+| **Context** | Shared — access local variables | Isolated — serialized closure | Isolated — separate VM | Isolated with serialized closures |
+| **Overhead** | Very low (continuation switch) | Higher (serialization) | Higher (serialization) | Higher (serialization) |
+| **Best for** | Concurrent I/O, shared state | CPU-bound parallelism | Long-lived workers, raw control | Many independent tasks to distribute |
 
 **Use `async`** when you need lightweight concurrency with shared state — multiple tasks that cooperatively share the same VM. Works naturally with networking: `TcpClient`, `TcpServer`, and `HttpClient` all yield to the green thread scheduler on blocking operations.
 
-**Use `Pool`** when you need true parallelism with raw control — long-lived worker loops, custom protocols over channels, or when you want to manage the worker lifecycle yourself.
+**Use `parallel async`** when you need true OS-level parallelism for CPU-bound work. Requires a pool (`AsyncPool` or `set_async_pool`). The closure is serialized to an isolated worker.
 
-**Use `TaskPool`** when you have many independent tasks to distribute across workers — it handles round-robin assignment, green-thread-per-task execution, and promise-based result collection automatically.
+**Use both together** for hybrid concurrency: `async` for I/O and coordination, `parallel async` for heavy computation — in the same scope, with the same `await`.
 
-**Mix all three** when you need both: use TaskPool for heavy computation, `async` within the main thread for coordination, and Pool for long-lived background workers. For example, a `TcpServer` can dispatch CPU-bound work to a TaskPool while handling I/O with green threads.
+**Use `Pool`** when you need raw control — long-lived worker loops, custom protocols over channels, or managing the worker lifecycle yourself.
+
+**Use `TaskPool`** when you have many independent tasks to distribute across workers via `pool->submit(thunk)` — it handles round-robin assignment, green-thread-per-task execution, and promise-based result collection automatically.
 
 **For shared-state synchronization** between green threads, use the OO wrappers: `Mutex`, `Monitor`, `ReadWriteLock`, `Semaphore` — all support RAII via `with`. See [MULTITHREADING.md](MULTITHREADING.md) for the full guide.
 

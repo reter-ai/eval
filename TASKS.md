@@ -289,6 +289,44 @@ with(pool = TaskPool(4)) {
 };
 ```
 
+## Hybrid Async: `parallel async`
+
+`async` always spawns a green thread. `parallel async` always dispatches to an OS thread pool. Use both in the same scope for hybrid concurrency:
+
+```
+define fib = function(n) if(n <= 1) n else fib(n - 1) + fib(n - 2);
+
+with(ap = AsyncPool(4)) {
+    define a = async light_io();              // green thread (shared state)
+    define b = parallel async fib(30);        // OS thread (true parallelism)
+    define c = parallel async fib(31);        // OS thread (true parallelism)
+    [await(a), await(b), await(c)];           // all return the same promise type
+};
+```
+
+`parallel async` requires a pool — set one up with `AsyncPool` (RAII) or `set_async_pool` (manual). Without a pool, it raises an error.
+
+### AsyncPool API
+
+| | Description |
+|---|---|
+| `AsyncPool(n)` | Create TaskPool with `n` workers, set as `parallel async` target |
+| `ap->pool` | The underlying TaskPool |
+| `ap->submit(thunk)` | Submit directly (delegates to pool) |
+| `ap->run(thunk)` | Submit and await |
+| `ap->map(list, fn)` | Parallel map |
+| `ap->drain()` | Wait for all pending tasks |
+| `ap->size` | Number of workers |
+| `ap->pending_count()` | Pending task count |
+| `ap->close()` | Drain, restore previous pool, shutdown |
+
+### Dispatch helpers
+
+| | Description |
+|---|---|
+| `set_async_pool(pool)` | Set the `parallel async` dispatch target (`false` to clear) |
+| `get_async_pool()` | Get the current dispatch target |
+
 ## See also
 
 - [ASYNC.md](ASYNC.md) — Async/await, basic thread pools, channels, pipelines

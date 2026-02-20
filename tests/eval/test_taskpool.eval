@@ -137,4 +137,83 @@ test("RAII with()", 99, raii_result);
     test("green recv A", 142, await(pa));
 };
 
+// === parallel async: dispatches to OS threads ===
+{
+    define fib = function(n) if(n <= 1) n else fib(n - 1) + fib(n - 2);
+    with(ap = AsyncPool(2));
+    define a = parallel async fib(15);
+    define b = parallel async fib(16);
+    test("parallel async fib15", 610, await(a));
+    test("parallel async fib16", 987, await(b));
+};
+
+// === async always uses green threads (even with pool set) ===
+{
+    with(ap = AsyncPool(2));
+    test("async green inside AsyncPool", 42, await(async 42));
+};
+
+// === Hybrid: async (green) + parallel async (OS) in same scope ===
+{
+    define fib = function(n) if(n <= 1) n else fib(n - 1) + fib(n - 2);
+    with(ap = AsyncPool(2));
+    define green = async 1 + 2;              // green thread
+    define os1 = parallel async fib(15);     // OS thread
+    define os2 = parallel async fib(16);     // OS thread
+    test("hybrid green", 3, await(green));
+    test("hybrid os1", 610, await(os1));
+    test("hybrid os2", 987, await(os2));
+};
+
+// === AsyncPool restores pool on close ===
+{
+    test("pre-AsyncPool no pool", false, get_async_pool());
+    {
+        with(ap = AsyncPool(2));
+        test("inside AsyncPool has pool", true, not(not(get_async_pool())));
+    };
+    test("post-AsyncPool no pool", false, get_async_pool());
+};
+
+// === Green thread fallback (no pool set) ===
+{
+    test("green thread fallback", 42, await(async 42));
+};
+
+// === parallel async without pool errors ===
+{
+    define caught = try { parallel async 42; } catch(e) "caught";
+    test("parallel async no pool", "caught", caught);
+};
+
+// === Manual set_async_pool / get_async_pool ===
+{
+    define pool = TaskPool(2);
+    set_async_pool(pool);
+    define p = parallel async 100 + 23;
+    test("manual parallel dispatch", 123, await(p));
+    set_async_pool(false);
+    test("manual restore", false, get_async_pool());
+    pool->shutdown();
+};
+
+// === Error propagation through parallel async ===
+{
+    with(ap = AsyncPool(2));
+    define p = parallel async { error("boom"); };
+    define caught = try { await(p); } catch(e) "caught";
+    test("parallel async error", "caught", caught);
+};
+
+// === Nested AsyncPool restores to outer ===
+{
+    with(outer = AsyncPool(1));
+    define outer_pool = get_async_pool();
+    {
+        with(inner = AsyncPool(1));
+        test("nested inner has pool", true, not(not(get_async_pool())));
+    };
+    test("nested restores outer", outer_pool, get_async_pool());
+};
+
 test_end();

@@ -725,37 +725,16 @@ sexp ps_make_with(sexp ctx, sexp bindings, sexp body) {
     return result;
 }
 
-/*  async expr  →
-    (let ((p (__make-promise__)))
-      (thread-start! (make-thread (lambda ()
-        (protect (__async_e__
-          (else ((p '__reject__) __async_e__)))
-          ((p '__resolve__) expr)))))
-      p) */
+/*  async expr  →  (__async_dispatch__ (lambda () expr))  — always green thread */
 sexp ps_make_async(sexp ctx, sexp expr) {
-    sexp p = ps_intern(ctx, "__async_p__");
-    sexp e = ps_intern(ctx, "__async_e__");
-    sexp make_prom = sexp_list1(ctx, ps_intern(ctx, "__make-promise__"));
-    /* ((p '__resolve__) expr) */
-    sexp q_resolve = sexp_list2(ctx, ps_intern(ctx, "quote"), ps_intern(ctx, "__resolve__"));
-    sexp get_resolve = sexp_list2(ctx, p, q_resolve);
-    sexp do_resolve = sexp_list2(ctx, get_resolve, expr);
-    /* ((p '__reject__) __async_e__) */
-    sexp q_reject = sexp_list2(ctx, ps_intern(ctx, "quote"), ps_intern(ctx, "__reject__"));
-    sexp get_reject = sexp_list2(ctx, p, q_reject);
-    sexp do_reject = sexp_list2(ctx, get_reject, e);
-    /* (else ((p '__reject__) e)) */
-    sexp else_clause = sexp_list2(ctx, ps_intern(ctx, "else"), do_reject);
-    /* (protect (e (else ...)) ((p '__resolve__) expr)) */
-    sexp protect_args = sexp_list2(ctx, e, else_clause);
-    sexp protect_form = sexp_list3(ctx, ps_intern(ctx, "protect"), protect_args, do_resolve);
-    /* (lambda () protect_form) */
-    sexp thunk = sexp_list3(ctx, ps_intern(ctx, "lambda"), SEXP_NULL, protect_form);
-    sexp mk_thread = sexp_list2(ctx, ps_intern(ctx, "make-thread"), thunk);
-    sexp start = sexp_list2(ctx, ps_intern(ctx, "thread-start!"), mk_thread);
-    sexp body = sexp_list3(ctx, ps_intern(ctx, "begin"), start, p);
-    sexp binding = sexp_list1(ctx, sexp_list2(ctx, p, make_prom));
-    return sexp_list3(ctx, ps_intern(ctx, "let"), binding, body);
+    sexp thunk = sexp_list3(ctx, ps_intern(ctx, "lambda"), SEXP_NULL, expr);
+    return sexp_list2(ctx, ps_intern(ctx, "__async_dispatch__"), thunk);
+}
+
+/*  parallel async expr  →  (__parallel_async_dispatch__ (lambda () expr))  — always OS thread */
+sexp ps_make_parallel_async(sexp ctx, sexp expr) {
+    sexp thunk = sexp_list3(ctx, ps_intern(ctx, "lambda"), SEXP_NULL, expr);
+    return sexp_list2(ctx, ps_intern(ctx, "__parallel_async_dispatch__"), thunk);
 }
 
 sexp ps_make_try_catch_finally(sexp ctx, sexp body, sexp var, sexp handler, sexp cleanup) {

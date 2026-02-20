@@ -98,6 +98,9 @@ sexp ps_make_with(sexp ctx, sexp bindings, sexp body);
 /* async expr — spawn green thread, return promise */
 sexp ps_make_async(sexp ctx, sexp expr);
 
+/* parallel async expr — dispatch to OS thread pool, return promise */
+sexp ps_make_parallel_async(sexp ctx, sexp expr);
+
 /* Build (call-with-values (lambda () expr) (lambda params body)) */
 sexp ps_make_receive(sexp ctx, sexp params, sexp expr, sexp body);
 

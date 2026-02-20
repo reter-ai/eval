@@ -139,3 +139,33 @@ define TaskPool = function(n) {
         __type__: '__task_pool__
     );
 };
+
+// === Async dispatch integration ===
+
+define set_async_pool = function(pool) {
+    __async_pool__ = pool;
+};
+
+define get_async_pool = function() __async_pool__;
+
+// RAII wrapper: redirects `async` to a TaskPool, restores on close
+define AsyncPool = function(n) {
+    define pool = TaskPool(n);
+    define old_pool = __async_pool__;
+    __async_pool__ = pool;
+    interface(
+        pool: pool,
+        submit: pool->submit,
+        run: pool->run,
+        map: pool->map,
+        drain: pool->drain,
+        size: pool->size,
+        pending_count: pool->pending_count,
+        close: function() {
+            pool->drain();
+            __async_pool__ = old_pool;
+            pool->shutdown();
+        },
+        __type__: '__async_pool__
+    );
+};

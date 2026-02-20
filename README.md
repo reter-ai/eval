@@ -34,6 +34,7 @@ e.eval("""
 - **Synchronization** — OO wrappers: Mutex, Monitor, ReadWriteLock, Semaphore with RAII lock management
 - **Thread pool** — true OS-level parallelism with worker threads, futures, and channels
 - **Task pool** — scalable task execution: OS thread pool + green threads, submit closures, promises
+- **Hybrid async** — `async` for green threads, `parallel async` for OS threads — mix both in the same scope
 - **String methods** — OO-style `"hello"->upper()`, `->trim()`, `->split(",")`, `->contains()`, chaining
 - **Collection methods** — OO-style `[1,2,3]->map(f)`, `->filter()`, `->sort(<)`, `->join(",")`, `#[1,2,3]->length`
 - **Networking** — TCP sockets, HTTP client/server with OO wrappers, RAII, and reactive signals
@@ -588,10 +589,18 @@ e2.eval('k("resumed");')    # resumes where captured
 Cooperative green threads with fuel-based VM scheduling, plus async/await sugar:
 
 ```
-// Lightweight async tasks
+// Lightweight async tasks (green threads by default)
 define a = async fib(10);
 define b = async fib(12);
 [await(a), await(b)];    // => [55, 144]
+
+// Hybrid: green threads + OS threads in the same scope
+with(ap = AsyncPool(4)) {
+    define a = async light_io();              // green thread (shared state)
+    define b = parallel async fib(30);        // OS thread (true parallelism)
+    define c = parallel async fib(31);        // OS thread (true parallelism)
+    [await(a), await(b), await(c)];           // same promise type, same await
+};
 
 // SRFI-18 threads with shared state
 define counter = 0;
