@@ -626,20 +626,20 @@ define content = file_to_string("data.txt");
 define bytes = file_to_bytevector("image.png");
 
 // Write (auto-close)
-`call-with-output-file`("out.txt", function(port) {
+call_with_output_file("out.txt", function(port) {
     write_string("hello\n", port);
 });
 
 // Read line-by-line
-`call-with-input-file`("data.txt", function(port) {
+call_with_input_file("data.txt", function(port) {
     define line = read_line(port);
     // ...
 });
 
 // Append
-define port = `open-output-file/append`("log.txt");
+define port = open_output_file_append("log.txt");
 write_string("entry\n", port);
-`close-output-port`(port);
+close_output_port(port);
 ```
 
 ### Directories
@@ -699,12 +699,16 @@ macro my_and syntax_rules() {
 };
 ```
 
-### Backtick Identifiers (Scheme interop)
+### Scheme Interop
+
+Most Scheme functions have OO arrow-method equivalents or underscore aliases. Prefer arrow methods; use backticks only for rare functions:
 
 ```
-`string-append`("hello", " ", "world")
-`char->integer`('A')
-`for-each`(print, [1, 2, 3])
+"hello" ++ " " ++ "world"                // string-append → ++ operator
+"hello"->length                           // string-length → ->length
+[1, 2, 3]->for_each(print)               // for-each → ->for_each
+char_to_integer('A')                      // alias (no OO equivalent)
+`some-rare-function`(args)                // backtick for uncommon names
 ```
 
 ### Compile-Time Evaluation
@@ -745,7 +749,18 @@ apply(f, args_list)       // apply(+, [3, 4]) => 7
 `abs` `min` `max` `floor` `ceiling` `round` `truncate` `sqrt` `expt` `modulo` `remainder` `gcd` `lcm`
 
 ### Conversion
-`number->string` `string->number` `symbol->string` `string->symbol` `char->integer` `integer->char` `list->vector` `vector->list` — use backtick syntax for hyphenated names.
+```
+"42"->to_number()              // string → number
+"x"->to_symbol()               // string → symbol
+"hi"->chars()                  // string → list of chars
+[1,2,3]->to_vector()           // list → vector
+#[1,2,3]->to_list()            // vector → list
+number_to_string(42)           // number → string (alias)
+symbol_to_string('abc)         // symbol → string (alias)
+char_to_integer('A')           // char → integer (alias)
+integer_to_char(65)            // integer → char (alias)
+list_to_string(['A','B','C'])  // char list → string (alias)
+```
 
 ### JSON
 ```
@@ -756,7 +771,7 @@ json_read(input_port);
 ### Hash
 ```
 hash(value);
-`string-hash`("hello");
+string_hash("hello");
 ```
 
 ---
@@ -773,7 +788,7 @@ hash(value);
 8. **Semicolons separate statements** in blocks; optional after the last one.
 9. **Green threads share memory**; thread pool workers have isolated VMs (communicate via channels).
 10. **Block `define`s use `letrec`** — mutual recursion works within a block.
-11. **Scheme interop** via backticks: `` `string-append`("a", "b") ``.
+11. **Scheme interop** — prefer arrow methods (`->length`, `->map`, `->to_number`) and operators (`++`). Underscore aliases exist for functions without OO equivalents (`char_to_integer`, `number_to_string`). Backticks only for rare cases.
 12. **Signals must be called** `()` to read: `count()`, not `count`. Tracked automatically in `Computed`/`Effect`.
 13. **`test_end()` returns failure count** — use as last expression for exit status.
 14. **`amb` is lazy** — untried branches never execute.

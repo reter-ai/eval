@@ -284,6 +284,14 @@ static sexp init_context(const char *extra_module_dir) {
         extern void register_concurrent_types(sexp ctx);
         register_concurrent_types(ctx);
     }
+    {
+        extern void register_datetime_types(sexp ctx);
+        register_datetime_types(ctx);
+    }
+    {
+        extern void register_decimal_type(sexp ctx, sexp env);
+        register_decimal_type(ctx, env);
+    }
 
     /* Register C bridge functions */
     register_bridge_functions_c(ctx, env);
@@ -304,6 +312,14 @@ static sexp init_context(const char *extra_module_dir) {
     {
         extern void register_rete_bridge_functions(sexp ctx, sexp env);
         register_rete_bridge_functions(ctx, env);
+    }
+    {
+        extern void register_datetime_bridge_functions(sexp ctx, sexp env);
+        register_datetime_bridge_functions(ctx, env);
+    }
+    {
+        extern void register_decimal_bridge_functions(sexp ctx, sexp env);
+        register_decimal_bridge_functions(ctx, env);
     }
 
     /* Load scheme extras, test framework */
@@ -382,6 +398,15 @@ static sexp init_context(const char *extra_module_dir) {
 
     /* OO list/vector methods: [1,2,3]->map(...), #[1,2]->length, etc. */
     sexp_load_module_file(ctx, "eval/collection-oo.scm", sexp_context_env(ctx));
+
+    /* OO DateTime/Date/TimeDelta methods */
+    sexp_load_module_file(ctx, "eval/datetime-oo.scm", sexp_context_env(ctx));
+
+    /* OO Decimal methods */
+    sexp_load_module_file(ctx, "eval/decimal-oo.scm", sexp_context_env(ctx));
+
+    /* Money wrapper (pure Scheme, uses Decimal) */
+    sexp_load_module_file(ctx, "eval/money-oo.scm", sexp_context_env(ctx));
 
     /* Logic programming runtime */
     sexp_load_module_file(ctx, "eval/logic.scm", sexp_context_env(ctx));

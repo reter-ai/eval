@@ -232,6 +232,18 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
         register_concurrent_types(self->ctx);
     }
 
+    /* Register DateTime/Date/TimeDelta types */
+    {
+        extern void register_datetime_types(sexp ctx);
+        register_datetime_types(self->ctx);
+    }
+
+    /* Register Decimal type (GC-traced simple type) */
+    {
+        extern void register_decimal_type(sexp ctx, sexp env);
+        register_decimal_type(self->ctx, self->env);
+    }
+
     /* Register bridge functions */
     register_bridge_functions(self->ctx, self->env);
 
@@ -262,6 +274,18 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
     {
         extern void register_rete_bridge_functions(sexp ctx, sexp env);
         register_rete_bridge_functions(self->ctx, self->env);
+    }
+
+    /* Register DateTime/Date/TimeDelta bridge functions */
+    {
+        extern void register_datetime_bridge_functions(sexp ctx, sexp env);
+        register_datetime_bridge_functions(self->ctx, self->env);
+    }
+
+    /* Register Decimal bridge functions */
+    {
+        extern void register_decimal_bridge_functions(sexp ctx, sexp env);
+        register_decimal_bridge_functions(self->ctx, self->env);
     }
 
     /* Import (scheme base) via the meta-environment — this adds:
@@ -462,6 +486,18 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
 
     /* OO list/vector methods: [1,2,3]->map(...), #[1,2]->length, etc. */
     sexp_load_module_file(self->ctx, "eval/collection-oo.scm", self->env);
+    self->env = sexp_context_env(self->ctx);
+
+    /* OO DateTime/Date/TimeDelta methods */
+    sexp_load_module_file(self->ctx, "eval/datetime-oo.scm", self->env);
+    self->env = sexp_context_env(self->ctx);
+
+    /* OO Decimal methods */
+    sexp_load_module_file(self->ctx, "eval/decimal-oo.scm", self->env);
+    self->env = sexp_context_env(self->ctx);
+
+    /* Money wrapper (pure Scheme, uses Decimal) */
+    sexp_load_module_file(self->ctx, "eval/money-oo.scm", self->env);
     self->env = sexp_context_env(self->ctx);
 
     /* Grammar/Parser OO wrappers: Grammar("lark EBNF") constructor */

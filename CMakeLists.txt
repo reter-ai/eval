@@ -333,6 +333,8 @@ if(BUILD_PYTHON_MODULE)
         src/_eval_concurrent.c
         src/_eval_lib_init.c
         src/_eval_rete.c
+        src/_eval_datetime.c
+        src/_eval_decimal.c
         src/eval_embedded_extract.c
         ${EMBEDDED_SCM_C}
     )
@@ -404,6 +406,8 @@ if(BUILD_EVAL_STANDALONE)
         src/_eval_concurrent.c
         src/_eval_lib_init.c
         src/_eval_rete.c
+        src/_eval_datetime.c
+        src/_eval_decimal.c
     )
 
     if(HAVE_STUB_LIBS)

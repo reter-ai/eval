@@ -467,6 +467,18 @@ static sexp bridge_tostr(sexp ctx, sexp self, sexp_sint_t n, sexp x) {
         buf[1] = '\0';
         return sexp_c_string(ctx, buf, 1);
     }
+    /* DateTime/Date/TimeDelta → string */
+    {
+        extern sexp datetime_tostr(sexp ctx, sexp x);
+        sexp r = datetime_tostr(ctx, x);
+        if (r != SEXP_FALSE) return r;
+    }
+    /* Decimal → string */
+    {
+        extern sexp decimal_tostr(sexp ctx, sexp x);
+        sexp r = decimal_tostr(ctx, x);
+        if (r != SEXP_FALSE) return r;
+    }
     /* Fallback: write-to-string (write semantics) */
     sexp str = sexp_write_to_string(ctx, x);
     return sexp_stringp(str) ? str : sexp_c_string(ctx, "?", 1);

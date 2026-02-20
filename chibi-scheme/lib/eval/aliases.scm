@@ -75,6 +75,42 @@
 (define prime_above prime-above)
 (define prime_below prime-below)
 
+;; Type conversion — only those WITHOUT OO wrappers
+;; (string->number has ->to_number(), string->symbol has ->to_symbol(),
+;;  list->vector has ->to_vector(), vector->list has ->to_list(),
+;;  string->list has ->chars() — all covered by arrow methods)
+(define number_to_string number->string)
+(define symbol_to_string symbol->string)
+(define char_to_integer char->integer)
+(define integer_to_char integer->char)
+(define list_to_string list->string)
+
+;; String functions — only those without OO wrappers
+;; (string-length has ->length, string-ref has s[i], string-append has ++,
+;;  string-map/for-each already in C aliases and have ->map/->for_each)
+(define string_hash string-hash)
+(define string_copy string-copy)
+
+;; File I/O
+(define call_with_output_file call-with-output-file)
+(define call_with_input_file call-with-input-file)
+(define open_output_file_append open-output-file/append)
+(define close_output_port close-output-port)
+(define close_input_port close-input-port)
+(define open_input_file open-input-file)
+(define open_output_file open-output-file)
+(define open_input_string open-input-string)
+(define open_output_string open-output-string)
+(define get_output_string get-output-string)
+;; write_string, read_line, read_string already in C aliases
+(define read_char read-char)
+(define write_char write-char)
+(define peek_char peek-char)
+
+;; Char predicates
+(define char_alphabetic char-alphabetic?)
+(define char_numeric char-numeric?)
+
 ;; Test framework
 (define test_begin test-begin)
 (define test_end test-end)

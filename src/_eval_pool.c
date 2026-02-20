@@ -1272,6 +1272,18 @@ void eval_standard_aliases(sexp ctx, sexp env) {
     sexp_load_module_file(ctx, "eval/collection-oo.scm", env);
     env = sexp_context_env(ctx);
 
+    /* OO DateTime/Date/TimeDelta methods */
+    sexp_load_module_file(ctx, "eval/datetime-oo.scm", env);
+    env = sexp_context_env(ctx);
+
+    /* OO Decimal methods */
+    sexp_load_module_file(ctx, "eval/decimal-oo.scm", env);
+    env = sexp_context_env(ctx);
+
+    /* Money wrapper (pure Scheme, uses Decimal) */
+    sexp_load_module_file(ctx, "eval/money-oo.scm", env);
+    env = sexp_context_env(ctx);
+
     /* Grammar/Parser OO wrappers */
     sexp_load_module_file(ctx, "eval/grammar-rt.scm", env);
     env = sexp_context_env(ctx);
@@ -1419,6 +1431,14 @@ static EVAL_THREAD_FUNC worker_main(void *arg) {
         extern void register_concurrent_types(sexp ctx);
         register_concurrent_types(ctx);
     }
+    {
+        extern void register_datetime_types(sexp ctx);
+        register_datetime_types(ctx);
+    }
+    {
+        extern void register_decimal_type(sexp ctx, sexp env);
+        register_decimal_type(ctx, env);
+    }
 
     /* 4. Register C-only bridge functions */
     register_bridge_functions_c(ctx, env);
@@ -1439,6 +1459,14 @@ static EVAL_THREAD_FUNC worker_main(void *arg) {
     {
         extern void register_rete_bridge_functions(sexp ctx, sexp env);
         register_rete_bridge_functions(ctx, env);
+    }
+    {
+        extern void register_datetime_bridge_functions(sexp ctx, sexp env);
+        register_datetime_bridge_functions(ctx, env);
+    }
+    {
+        extern void register_decimal_bridge_functions(sexp ctx, sexp env);
+        register_decimal_bridge_functions(ctx, env);
     }
 
     /* 5. Load scheme extras, test framework */
