@@ -1,6 +1,10 @@
-// http_client.eval — HTTP client helper functions using chibi/net
+// http_client.eval — HTTP client with hybrid async patterns
 //
-// Provides: http_get, http_post (low-level), HttpClient (OO wrapper, built-in)
+// Provides:
+//   Low-level:  tcp_connect, http_get, http_post
+//   Async:      http_get_async (green thread I/O)
+//   Fan-out:    http_fan_out (concurrent green threads)
+//   Pipeline:   http_pipeline (green I/O fan-out → OS CPU processing)
 //
 // Usage (low-level):
 //   include("examples/http_client.eval");
@@ -14,6 +18,8 @@
 //       display(r->first);       // status code
 //       display(r->ref(1));      // body
 //   };
+
+// ===== Low-level helpers =====
 
 // Connect to host:port, returns socket fileno
 define tcp_connect = function(host, port) {
@@ -106,4 +112,107 @@ define http_post = function(host, port, path, body) {
     define result = parse_response(sock);
     close_file_descriptor(sock);
     result;
+};
+
+// ===== Async helpers =====
+
+// Wrap http_get in a green thread — returns a promise (non-blocking I/O)
+define http_get_async = function(host, port, path)
+    async http_get(host, port, path);
+
+// Wrap http_post in a green thread — returns a promise
+define http_post_async = function(host, port, path, body)
+    async http_post(host, port, path, body);
+
+// Fan-out: fire N GET requests concurrently via green threads, collect all results
+define http_fan_out = function(host, port, paths) {
+    define promises = paths->map(function(p) http_get_async(host, port, p));
+    promises->map(function(p) await(p));
+};
+
+// Full pipeline: fan-out I/O (green threads) → process each response (OS threads)
+// process_fn takes [status, body] and returns a transformed result
+define http_pipeline = function(host, port, paths, process_fn) {
+    // Phase 1: fire all requests concurrently (green threads — I/O)
+    define promises = paths->map(function(p) http_get_async(host, port, p));
+    // Phase 2: as results arrive, process on OS threads (CPU)
+    promises->map(function(p) {
+        define response = await(p);
+        await(parallel async process_fn(response));
+    });
+};
+
+// ===== Demo (requires http_server.eval running on localhost:8080) =====
+
+{
+    define host = "127.0.0.1";
+    define port = 8080;
+
+    display("=== HTTP Client Demo ===");
+    newline();
+
+    // --- 1. Basic requests ---
+    display("--- Basic requests ---");
+    newline();
+
+    define r1 = http_get(host, port, "/");
+    display("GET / => " ++ `number->string`(r1->first) ++ " " ++ r1->ref(1));
+    newline();
+
+    define r2 = http_post(host, port, "/api/echo", "hello from client");
+    display("POST /api/echo => " ++ `number->string`(r2->first) ++ " " ++ r2->ref(1));
+    newline();
+
+    // --- 2. CPU-heavy routes (server uses parallel async) ---
+    display("--- CPU routes (parallel async on server) ---");
+    newline();
+
+    define r3 = http_get(host, port, "/api/fib?n=20");
+    display("GET /api/fib?n=20 => " ++ r3->ref(1));
+    newline();
+
+    define r4 = http_post(host, port, "/api/transform", "hybrid async is great");
+    display("POST /api/transform => " ++ r4->ref(1));
+    newline();
+
+    // --- 3. Async fan-out (concurrent green thread I/O) ---
+    display("--- Fan-out: 3 concurrent GET requests ---");
+    newline();
+
+    define results = http_fan_out(host, port, ["/", "/api/count", "/api/fib?n=10"]);
+    results->for_each(function(r) {
+        display("  " ++ `number->string`(r->first) ++ " " ++ r->ref(1));
+        newline();
+    });
+
+    // --- 4. Full pipeline: fan-out I/O → parallel CPU processing ---
+    display("--- Pipeline: fan-out + parallel processing ---");
+    newline();
+
+    with(ap = AsyncPool(2)) {
+        define processed = http_pipeline(host, port,
+            ["/", "/api/count", "/api/fib?n=10"],
+            function(response) {
+                define body = response->ref(1);
+                define upper = body->upper();
+                "PROCESSED: " ++ upper;
+            }
+        );
+
+        processed->for_each(function(r) {
+            display("  " ++ r);
+            newline();
+        });
+    };
+
+    // --- 5. Stats after all requests ---
+    display("--- Final stats ---");
+    newline();
+
+    define stats = http_get(host, port, "/api/stats");
+    display("Stats: " ++ stats->ref(1));
+    newline();
+
+    display("=== Done ===");
+    newline();
 };

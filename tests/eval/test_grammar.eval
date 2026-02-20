@@ -406,9 +406,13 @@ test_assert("create: regular string escaped regex",
     Grammar("start: WORD+\nWORD: /\\w+/\n%ignore /\\s+/\n") != false);
 
 
+test_end();
+
 // ============================================================
 // Section 2: Compile + Parse (requires LLVM JIT)
 // ============================================================
+
+test_begin("Grammar JIT");
 
 define jit_available = try {
     Grammar("start: NUMBER\nNUMBER: /[0-9]+/\n")->compile();
@@ -768,11 +772,12 @@ when(jit_available) {
     test("arith prec: mul left", "2", node_value(node_child(right1, 0)));
     test("arith prec: mul right", "3", node_value(node_child(right1, 2)));
 
-    // (1 + 2) * 3 → mul(add(1, 2), 3) parens override
+    // (1 + 2) * 3 → mul(atom("(",add(1,+,2),")"), *, 3) parens override
+    // ?atom inlines single-child alternatives but "(" expr ")" has 3 items → atom node kept
     define c2 = p_arith->parse("(1 + 2) * 3");
     define top2 = node_child(c2, 0);
     test("arith paren: top is mul", "mul", node_name(top2));
-    test("arith paren: left is add", "add", node_name(node_child(top2, 0)));
+    test("arith paren: left is atom", "atom", node_name(node_child(top2, 0)));
     test("arith paren: right is 3", "3", node_value(node_child(top2, 2)));
 
     // 10 - 3 - 2 → sub(sub(10, 3), 2) left-associative
@@ -782,8 +787,8 @@ when(jit_available) {
     test("arith left-assoc: inner sub", "sub", node_name(node_child(top3, 0)));
     test("arith left-assoc: rightmost", "2", node_value(node_child(top3, 2)));
 
-    // Nested parentheses
-    test("arith nested parens: add", "add", node_name(node_child(p_arith->parse("((1 + 2))"), 0)));
+    // Nested parentheses — double parens produces atom(atom(add(...)))
+    test("arith nested parens: atom", "atom", node_name(node_child(p_arith->parse("((1 + 2))"), 0)));
 
     // Single number — inline passthrough
     test("arith single: passthrough", "NUMBER", node_name(node_child(p_arith->parse("42"), 0)));

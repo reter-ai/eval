@@ -437,8 +437,19 @@ static uint32_t ser_walk(SerState *s, sexp x) {
 
         /* Walk sub-fields first */
         uint32_t name_id = ser_walk(s, sexp_bytecode_name(x));
-        uint32_t lit_id = ser_walk(s, sexp_bytecode_literals(x));
-        uint32_t src_id = ser_walk(s, sexp_bytecode_source(x));
+        /* Skip the literals field entirely.  It serves two purposes
+         * in the live VM:
+         *  (a) GC rooting for objects embedded in the instruction
+         *      stream (PUSH operands, MAKE_PROCEDURE bytecodes, etc.)
+         *  (b) Error-reporting parent link: (name . parent-proc)
+         * Neither is needed in serialized form — all instruction-stream
+         * references are already captured by the patch table, and error
+         * reporting works from the name field alone.  Serializing the
+         * literals naively pulls in the entire closure graph (e.g.
+         * __send__ → all OO method lambdas → 2700+ objects). */
+        uint32_t lit_id = ser_walk(s, SEXP_FALSE);
+        /* Skip source (may contain non-serializable compile artifacts) */
+        uint32_t src_id = 0;
         uint32_t bc_len = (uint32_t)sexp_bytecode_length(x);
         uint32_t max_depth = (uint32_t)sexp_bytecode_max_depth(x);
 
@@ -464,8 +475,7 @@ static uint32_t ser_walk(SerState *s, sexp x) {
             switch (op) {
             case SEXP_OP_FCALL0: case SEXP_OP_FCALL1:
             case SEXP_OP_FCALL2: case SEXP_OP_FCALL3:
-            case SEXP_OP_FCALL4: case SEXP_OP_CALL:
-            case SEXP_OP_TAIL_CALL: case SEXP_OP_PUSH:
+            case SEXP_OP_FCALL4: case SEXP_OP_PUSH:
             case SEXP_OP_GLOBAL_REF: case SEXP_OP_GLOBAL_KNOWN_REF:
 #if SEXP_USE_GREEN_THREADS
             case SEXP_OP_PARAMETER_REF:
@@ -475,6 +485,7 @@ static uint32_t ser_walk(SerState *s, sexp x) {
 #endif
                 patch_count++;
                 /* fallthrough */
+            case SEXP_OP_CALL: case SEXP_OP_TAIL_CALL:
             case SEXP_OP_JUMP: case SEXP_OP_JUMP_UNLESS:
             case SEXP_OP_STACK_REF: case SEXP_OP_CLOSURE_REF:
             case SEXP_OP_LOCAL_REF: case SEXP_OP_LOCAL_SET:
@@ -508,14 +519,58 @@ static uint32_t ser_walk(SerState *s, sexp x) {
             switch (op) {
             case SEXP_OP_FCALL0: case SEXP_OP_FCALL1:
             case SEXP_OP_FCALL2: case SEXP_OP_FCALL3:
-            case SEXP_OP_FCALL4: case SEXP_OP_CALL:
-            case SEXP_OP_TAIL_CALL: case SEXP_OP_PUSH:
+            case SEXP_OP_FCALL4:
+#if SEXP_USE_EXTENDED_FCALL
+            case SEXP_OP_FCALLN:
+#endif
+            {
+                /* FCALL operands embed callee info for stack traces
+                 * (error reporting / debugging).  The actual function
+                 * being called is on the stack, not in the operand.
+                 * Skip serializing the operand to avoid pulling in
+                 * the entire standard library's closure graph. */
+                sexp *slot = (sexp *)(&raw[i]);
+                sexp ref = *slot;
+                uint32_t ref_id = 0;
+                /* Only preserve env-cell refs (global bindings) and
+                 * opcodes — these are cheap name-only references and
+                 * enable the worker to produce meaningful errors. */
+                if (ref && sexp_pointerp(ref)) {
+                    if (sexp_pairp(ref) && sexp_symbolp(sexp_car(ref)) &&
+                        sexp_env_cell(s->ctx, s->env,
+                                      sexp_car(ref), 0) == ref) {
+                        char nbuf[256];
+                        int nlen = sym_to_cstr(sexp_car(ref), nbuf,
+                                               sizeof(nbuf));
+                        uint32_t si = strtab_intern(&s->strtab, nbuf,
+                                                     (uint32_t)nlen);
+                        uint32_t gid = ser_alloc_obj(s, SER_GLOBAL_REF);
+                        buf_write_u32(&s->obj_bufs[gid - 1], si);
+                        ref_id = gid;
+                    } else if (sexp_opcodep(ref)) {
+                        sexp name = sexp_opcode_name(ref);
+                        if (name && sexp_stringp(name)) {
+                            uint32_t si = strtab_intern(&s->strtab,
+                                sexp_string_data(name),
+                                (uint32_t)sexp_string_size(name));
+                            uint32_t oid = ser_alloc_obj(s, SER_OPCODE_REF);
+                            buf_write_u32(&s->obj_bufs[oid - 1], si);
+                            ref_id = oid;
+                        }
+                    }
+                    /* else: procedure/closure/other → skip (ref_id=0) */
+                }
+                patch_offs[pi] = i;
+                patch_refs[pi] = ref_id;
+                pi++;
+                memset(&raw[i], 0, sizeof(sexp));
+                i += sizeof(sexp);
+                break;
+            }
+            case SEXP_OP_PUSH:
             case SEXP_OP_GLOBAL_REF: case SEXP_OP_GLOBAL_KNOWN_REF:
 #if SEXP_USE_GREEN_THREADS
             case SEXP_OP_PARAMETER_REF:
-#endif
-#if SEXP_USE_EXTENDED_FCALL
-            case SEXP_OP_FCALLN:
 #endif
             {
                 sexp *slot = (sexp *)(&raw[i]);
@@ -534,10 +589,7 @@ static uint32_t ser_walk(SerState *s, sexp x) {
                      * (resolved by name in the target context).  This
                      * ensures PUSH (set!) and GLOBAL_KNOWN_REF (read)
                      * share the same env cell. */
-                    if ((op == SEXP_OP_GLOBAL_REF ||
-                         op == SEXP_OP_GLOBAL_KNOWN_REF ||
-                         op == SEXP_OP_PUSH) &&
-                        sexp_pairp(ref) && sexp_symbolp(sexp_car(ref)) &&
+                    if (sexp_pairp(ref) && sexp_symbolp(sexp_car(ref)) &&
                         sexp_env_cell(s->ctx, s->env,
                                       sexp_car(ref), 0) == ref) {
                         char nbuf[256];
@@ -545,13 +597,8 @@ static uint32_t ser_walk(SerState *s, sexp x) {
                                                sizeof(nbuf));
                         uint32_t si = strtab_intern(&s->strtab, nbuf,
                                                      (uint32_t)nlen);
-                        /* Serialize value alongside name so the target
-                         * context can create the binding if missing
-                         * (e.g. user-defined globals, underscore aliases) */
-                        uint32_t val_id = ser_walk(s, sexp_cdr(ref));
-                        uint32_t gid = ser_alloc_obj(s, SER_GLOBAL_REF_VAL);
+                        uint32_t gid = ser_alloc_obj(s, SER_GLOBAL_REF);
                         buf_write_u32(&s->obj_bufs[gid - 1], si);
-                        buf_write_u32(&s->obj_bufs[gid - 1], val_id);
                         ref_id = gid;
                     } else if (sexp_opcodep(ref)) {
                         /* Opcode: serialize by name */
@@ -570,10 +617,9 @@ static uint32_t ser_walk(SerState *s, sexp x) {
                     } else {
                         ref_id = ser_walk(s, ref);
                     }
-                } else if (sexp_fixnump(ref) || sexp_charp(ref) ||
-                           ref == SEXP_TRUE || ref == SEXP_FALSE ||
-                           ref == SEXP_NULL || ref == SEXP_VOID ||
-                           ref == SEXP_UNDEF || ref == SEXP_EOF) {
+                } else if (ref) {
+                    /* Immediate value: fixnum, char, inline symbol,
+                     * boolean, null, void, undef, eof */
                     ref_id = ser_walk(s, ref);
                 }
                 patch_offs[pi] = i;
@@ -584,6 +630,7 @@ static uint32_t ser_walk(SerState *s, sexp x) {
                 i += sizeof(sexp);
                 break;
             }
+            case SEXP_OP_CALL: case SEXP_OP_TAIL_CALL:
             case SEXP_OP_JUMP: case SEXP_OP_JUMP_UNLESS:
             case SEXP_OP_STACK_REF: case SEXP_OP_CLOSURE_REF:
             case SEXP_OP_LOCAL_REF: case SEXP_OP_LOCAL_SET:
@@ -667,17 +714,43 @@ static uint32_t ser_walk(SerState *s, sexp x) {
         return 0;
     }
 
+    case SEXP_TYPE: {
+        /* Serialize type descriptor by name — resolved by name in target context */
+        sexp tname = sexp_type_name(x);
+        if (!tname || !sexp_stringp(tname)) {
+            ser_error(s, "type without name cannot be serialized");
+            return 0;
+        }
+        uint32_t si = strtab_intern(&s->strtab,
+            sexp_string_data(tname), (uint32_t)sexp_string_size(tname));
+        uint32_t id = ser_alloc_obj(s, SER_TYPE_REF);
+        map_put(&s->visited, x, id);
+        buf_write_u32(&s->obj_bufs[id - 1], si);
+        return id;
+    }
+
+    case SEXP_SYNCLO: {
+        /* Syntactic closures are compile-time artifacts from macro
+         * expansion.  They wrap (env, free-vars, expr).  For
+         * serialization we only need the underlying expression —
+         * the macro environment is irrelevant at runtime. */
+        uint32_t eid = ser_walk(s, sexp_synclo_expr(x));
+        map_put(&s->visited, x, eid);
+        return eid;
+    }
+
     default: {
         /* Check for python-object or port types — not serializable */
         if (sexp_cpointerp(x)) {
             ser_error(s, "cannot serialize C pointer / Python object in continuation");
             return 0;
         }
-        /* For other unrecognized pointer types (env cells, etc.),
-         * try to handle as an env cell (pair-like) or error out */
-        char msg[128];
+        /* For other unrecognized pointer types (env cells, etc.) */
+        char msg[256];
+        sexp tname = sexp_type_name_by_index(s->ctx, tag);
         snprintf(msg, sizeof(msg),
-                 "cannot serialize sexp with tag %u", (unsigned)tag);
+                 "cannot serialize sexp with tag %u (%s)", (unsigned)tag,
+                 (tname && sexp_stringp(tname)) ? sexp_string_data(tname) : "?");
         ser_error(s, msg);
         return 0;
     }
@@ -748,7 +821,6 @@ int ser_sexp_to_buf(sexp ctx, sexp env, sexp val,
     ser_init(&s, ctx, env);
 
     uint32_t root_id = ser_walk(&s, val);
-
     if (s.error || root_id == 0) {
         if (err_msg) {
             const char *msg = s.error ? s.error_msg : "failed to serialize";
@@ -1114,6 +1186,38 @@ static void deser_alloc(DeserState *d) {
         case SER_CONTEXT_DK: {
             /* Resolve to the target context's dk — preserves pointer identity */
             d->objs[i] = sexp_context_dk(d->ctx);
+            break;
+        }
+        case SER_TYPE_REF: {
+            if (olen < 4) { deser_error(d, "truncated type ref"); break; }
+            uint32_t si;
+            memcpy(&si, odata, 4);
+            if (si >= d->str_count) { deser_error(d, "invalid type name index"); break; }
+            const char *tname = d->strs[si];
+            uint32_t tlen = d->str_lens[si];
+            /* Linear scan registered types by name */
+            int num_types = sexp_context_num_types(d->ctx);
+            sexp found = SEXP_FALSE;
+            for (int ti = num_types - 1; ti >= 0; ti--) {
+                sexp t = sexp_type_by_index(d->ctx, ti);
+                if (t && sexp_typep(t)) {
+                    sexp tn = sexp_type_name(t);
+                    if (sexp_stringp(tn) &&
+                        (uint32_t)sexp_string_size(tn) == tlen &&
+                        memcmp(sexp_string_data(tn), tname, tlen) == 0) {
+                        found = t;
+                        break;
+                    }
+                }
+            }
+            if (found == SEXP_FALSE) {
+                char msg[256];
+                snprintf(msg, sizeof(msg),
+                         "cannot resolve type '%.200s' in target context", tname);
+                deser_error(d, msg);
+                break;
+            }
+            d->objs[i] = found;
             break;
         }
         case SER_BYTEVECTOR:

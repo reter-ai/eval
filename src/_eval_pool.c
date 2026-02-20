@@ -595,8 +595,9 @@ static sexp bridge_channel_send(sexp ctx, sexp self, sexp_sint_t n,
     size_t buf_len = 0;
     char err_msg[256] = {0};
     if (ser_sexp_to_buf(ctx, sexp_context_env(ctx), val,
-                        &buf, &buf_len, err_msg, sizeof(err_msg)) != 0)
+                        &buf, &buf_len, err_msg, sizeof(err_msg)) != 0) {
         return sexp_user_exception(ctx, self, err_msg, val);
+    }
     eval_channel_send(c, (char *)buf, buf_len);
     free(buf);
     return SEXP_VOID;

@@ -266,6 +266,17 @@ char* lark_generate_lemon_y(LarkGrammar* grammar, const char* parser_prefix) {
     }
     sb_append(&sb, "\n");
 
+    /* Emit wrapper start rule FIRST: lkstart ::= <first_rule>.
+     * Lemon uses the LHS of the first rule as the start symbol.
+     * This must come before EBNF helper rules so lemon picks lkstart,
+     * not a desugared helper like xstart_star_0. */
+    if (grammar->num_rules > 0) {
+        sb_printf(&sb, "lkstart(A) ::= %s(B). {\n", grammar->rules[0].name);
+        sb_append(&sb, "    A = B;\n");
+        sb_append(&sb, "    s->result = A;\n");
+        sb_append(&sb, "}\n");
+    }
+
     /* First pass: emit EBNF desugaring helper rules */
     for (r = 0; r < grammar->num_rules; r++) {
         LarkRule* rule = &grammar->rules[r];
@@ -277,15 +288,6 @@ char* lark_generate_lemon_y(LarkGrammar* grammar, const char* parser_prefix) {
                 }
             }
         }
-    }
-
-    /* Emit wrapper start rule: lkstart ::= <first_rule>.
-     * Lemon requires the start symbol to not appear on any RHS. */
-    if (grammar->num_rules > 0) {
-        sb_printf(&sb, "lkstart(A) ::= %s(B). {\n", grammar->rules[0].name);
-        sb_append(&sb, "    A = B;\n");
-        sb_append(&sb, "    s->result = A;\n");
-        sb_append(&sb, "}\n");
     }
 
     /* Second pass: emit main rules.

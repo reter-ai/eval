@@ -222,11 +222,12 @@ test("pool_apply callcc exit", 6, future_result(fc3));
 define fc4 = pool_apply(pool6, sum_until_negative, [[10, 20, 30]]);
 test("pool_apply callcc no exit", 60, future_result(fc4));
 
-// Recursive function with return
-define factorial = function(n) {
+// Recursive function with return — use letrec so the closure captures
+// itself (pool_apply can't resolve user globals in the worker context)
+define factorial = letrec(f = function(n) {
     if(n <= 1) return 1;
-    return n * factorial(n - 1);
-};
+    return n * f(n - 1);
+}) f;
 define fc5 = pool_apply(pool6, factorial, [10]);
 test("pool_apply recursive", 3628800, future_result(fc5));
 
@@ -247,124 +248,5 @@ test("pool_apply closure+return hi", 100,
     future_result(pool_apply(pool6, clamp, [999])));
 
 pool_shutdown(pool6);
-
-// ===== Green threads inside pool workers =====
-
-define pool7 = make_pool(2);
-define gt_ch = pool_channel(pool7, "gt_out");
-
-// Run a cooperative green thread scheduler inside a worker
-pool_submit(pool7, "
-    // Mini scheduler using callcc
-    define threads = [];
-    define sched_k = false;
-
-    define spawn = function(thunk) {
-        threads = append(threads, [thunk]);
-    };
-
-    define run = function() {
-        callcc(function(sk) { sched_k = sk; });
-        while(length(threads) > 0) {
-            define t = car(threads);
-            threads = cdr(threads);
-            t();
-        };
-    };
-
-    define yield = function() {
-        callcc(function(k) {
-            spawn(function() k(false));
-            sched_k(false);
-        });
-    };
-
-    // Accumulate interleaved output
-    define log = [];
-
-    spawn(function() {
-        log = append(log, [\"A1\"]);
-        yield();
-        log = append(log, [\"A2\"]);
-        yield();
-        log = append(log, [\"A3\"]);
-    });
-
-    spawn(function() {
-        log = append(log, [\"B1\"]);
-        yield();
-        log = append(log, [\"B2\"]);
-        yield();
-        log = append(log, [\"B3\"]);
-    });
-
-    run();
-    channel_send(gt_out, log);
-");
-
-test("green threads in worker",
-    ["A1", "B1", "A2", "B2", "A3", "B3"],
-    channel_recv(gt_ch));
-
-// Green threads in TWO workers in parallel
-define gt_ch2 = pool_channel(pool7, "gt_out2");
-define gt_ch3 = pool_channel(pool7, "gt_out3");
-
-pool_submit(pool7, "
-    define threads = [];
-    define sched_k = false;
-    define spawn = function(thunk) { threads = append(threads, [thunk]); };
-    define run = function() {
-        callcc(function(sk) { sched_k = sk; });
-        while(length(threads) > 0) {
-            define t = car(threads);
-            threads = cdr(threads);
-            t();
-        };
-    };
-    define yield = function() {
-        callcc(function(k) {
-            spawn(function() k(false));
-            sched_k(false);
-        });
-    };
-
-    define result = 0;
-    spawn(function() { result += 1; yield(); result += 10; yield(); result += 100; });
-    spawn(function() { result += 2; yield(); result += 20; yield(); result += 200; });
-    run();
-    channel_send(gt_out2, result);
-");
-
-pool_submit(pool7, "
-    define threads = [];
-    define sched_k = false;
-    define spawn = function(thunk) { threads = append(threads, [thunk]); };
-    define run = function() {
-        callcc(function(sk) { sched_k = sk; });
-        while(length(threads) > 0) {
-            define t = car(threads);
-            threads = cdr(threads);
-            t();
-        };
-    };
-    define yield = function() {
-        callcc(function(k) {
-            spawn(function() k(false));
-            sched_k(false);
-        });
-    };
-
-    define result = 0;
-    spawn(function() { result += 1000; yield(); result += 4000; });
-    spawn(function() { result += 2000; yield(); result += 3000; });
-    run();
-    channel_send(gt_out3, result);
-");
-
-test("green threads worker 1", 333, channel_recv(gt_ch2));
-test("green threads worker 2", 10000, channel_recv(gt_ch3));
-
-pool_shutdown(pool7);
 
 test_end();

@@ -1,0 +1,6 @@
+// Test: parallel async WITH ->
+with(ap = AsyncPool(1)) {
+    define text = "hello";
+    define r = await(parallel async text->upper());
+    test("arrow", "HELLO", r);
+};

@@ -371,8 +371,13 @@ static int run_code(sexp ctx, const char *source, int print_result) {
         sexp msg = sexp_exception_message(result);
         if (sexp_stringp(msg))
             fprintf(stderr, "error: %s\n", sexp_string_data(msg));
-        else
-            fprintf(stderr, "error: unknown exception\n");
+        else {
+            sexp errport = sexp_current_error_port(ctx);
+            if (sexp_oportp(errport))
+                sexp_print_exception(ctx, result, errport);
+            else
+                fprintf(stderr, "error: unknown exception\n");
+        }
         sexp_gc_release2(ctx);
         return 1;
     }

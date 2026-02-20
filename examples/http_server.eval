@@ -1,21 +1,26 @@
-// http_server.eval — Concurrent HTTP server with green threads
+// http_server.eval — Concurrent HTTP server with hybrid async
 //
-// Demonstrates: Signal, Computed, Effect, batch, green threads, nonblocking I/O
+// Demonstrates: Signal, Computed, Effect, batch, green threads, nonblocking I/O,
+//               AsyncPool, parallel async (OS threads for CPU work)
 //
-// This example uses the low-level socket API for full control over routing,
-// reactive state, and shutdown logic. For simpler servers, use the built-in
-// TcpServer OO wrapper:
+// Architecture:
+//   AsyncPool(4) provides OS thread pool for `parallel async`
+//   Accept loop runs on green thread scheduler
+//   Per-connection green threads handle I/O
+//   CPU-heavy routes offload to OS threads via `parallel async`
 //
-//   define server = TcpServer(8080, function(sock, addr, port) {
-//       define data = sock->recv(4096);
-//       sock->send("HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nOK");
-//   });
-//   server->run();
+// Routes:
+//   GET  /              — static welcome page
+//   GET  /api/count     — request count
+//   GET  /api/stats     — JSON stats (compute vs I/O counts)
+//   GET  /api/fib?n=N   — fibonacci (CPU on OS thread)
+//   POST /api/transform — uppercase text (CPU on OS thread)
+//   POST /api/echo      — echo body
+//   GET  /shutdown      — stop the server
 //
 // Usage:
 //   eval examples/http_server.eval
 //   Then visit http://localhost:8080/ in a browser
-//   GET /shutdown to stop the server
 
 // ===== Helpers =====
 
@@ -35,10 +40,13 @@ define active_conns = Signal(0);
 define last_path = Signal("");
 define last_method = Signal("");
 define error_count = Signal(0);
+define io_count = Signal(0);
+define compute_count = Signal(0);
 
 define stats = Computed(function() {
     [request_count(), active_conns(), error_count(),
-     last_method(), last_path()];
+     last_method(), last_path(),
+     io_count(), compute_count()];
 });
 
 Effect(function() {
@@ -48,6 +56,8 @@ Effect(function() {
         display("[server] Requests: " ++ `number->string`(count)
             ++ "  Active: " ++ `number->string`(s->ref(1))
             ++ "  Errors: " ++ `number->string`(s->ref(2))
+            ++ "  I/O: " ++ `number->string`(s->ref(5))
+            ++ "  Compute: " ++ `number->string`(s->ref(6))
             ++ "  Last: " ++ s->ref(3)
             ++ " " ++ s->ref(4));
         newline();
@@ -93,7 +103,7 @@ define send_response = function(sock, status, content_type, body) {
 // ===== Route Handlers =====
 
 define handle_index = function(method, path, body) {
-    [200, "text/plain", "Welcome to Eval HTTP Server\n"];
+    [200, "text/plain", "Welcome to Eval HTTP Server (hybrid async)\n"];
 };
 
 define handle_count = function(method, path, body) {
@@ -105,6 +115,8 @@ define handle_stats = function(method, path, body) {
     define json = "{\"requests\":" ++ `number->string`(s->first)
         ++ ",\"active\":" ++ `number->string`(s->ref(1))
         ++ ",\"errors\":" ++ `number->string`(s->ref(2))
+        ++ ",\"io\":" ++ `number->string`(s->ref(5))
+        ++ ",\"compute\":" ++ `number->string`(s->ref(6))
         ++ ",\"last_method\":\"" ++ s->ref(3)
         ++ "\",\"last_path\":\"" ++ s->ref(4)
         ++ "\"}";
@@ -116,17 +128,55 @@ define handle_echo = function(method, path, body) {
     else [405, "text/plain", "Method Not Allowed\n"];
 };
 
-// Route table: [method-or-false, path, handler]
+// CPU-heavy: fibonacci on OS thread via parallel async
+define handle_fib = function(method, path, body) {
+    // Parse n from query string: /api/fib?n=30
+    define eq_idx = path->index_of("=");
+    define n = if(eq_idx) (path->slice(eq_idx + 1, path->length))->to_number() else 10;
+
+    // Offload CPU work to OS thread, green thread yields to accept loop
+    define result = await(parallel async {
+        define fib = function(n) if(n <= 1) n else fib(n - 1) + fib(n - 2);
+        fib(n);
+    });
+
+    compute_count->update(function(c) c + 1);
+    [200, "text/plain", `number->string`(result)];
+};
+
+// CPU-heavy: uppercase transform on OS thread via parallel async
+define handle_transform = function(method, path, body) {
+    if(method != "POST") return [405, "text/plain", "Method Not Allowed\n"];
+
+    define text = body;
+    // Offload string processing to OS thread
+    define result = await(parallel async {
+        text->upper() ++ " [transformed on OS thread]";
+    });
+
+    compute_count->update(function(c) c + 1);
+    [200, "text/plain", result];
+};
+
+// Route table: [method-or-false, path-prefix, handler, prefix-match?]
 define routes = [
-    ["GET",  "/",          handle_index],
-    ["GET",  "/api/count", handle_count],
-    ["GET",  "/api/stats", handle_stats],
-    [false,  "/api/echo",  handle_echo]
+    ["GET",  "/",              handle_index,     false],
+    ["GET",  "/api/count",     handle_count,     false],
+    ["GET",  "/api/stats",     handle_stats,     false],
+    ["GET",  "/api/fib",       handle_fib,       true],
+    [false,  "/api/transform", handle_transform, true],
+    [false,  "/api/echo",      handle_echo,      false]
 ];
 
 define find_route = function(method, path) {
-    define match = routes->find(function(route)
-        (route->first == false || route->first == method) && route->ref(1) == path);
+    define match = routes->find(function(route) {
+        define method_ok = route->first == false || route->first == method;
+        define path_ok = if(route->ref(3))
+            path->starts_with(route->ref(1))
+        else
+            route->ref(1) == path;
+        method_ok && path_ok;
+    });
     if(match) match->ref(2) else false;
 };
 
@@ -149,6 +199,7 @@ define handle_connection = function(conn) {
             running->set(false);
         } else {
             define handler = find_route(method, path);
+            define is_compute = path->starts_with("/api/fib") || path->starts_with("/api/transform");
             define response = if(handler != false) {
                 try handler(method, path, body)
                 catch(err) {
@@ -168,6 +219,8 @@ define handle_connection = function(conn) {
                 request_count->update(function(n) n + 1);
                 last_method->set(method);
                 last_path->set(path);
+                unless(is_compute)
+                    io_count->update(function(n) n + 1);
             });
         };
     } catch(err) {
@@ -178,24 +231,28 @@ define handle_connection = function(conn) {
     active_conns->update(function(n) n - 1);
 };
 
-// ===== Accept loop =====
+// ===== Accept loop (wrapped in AsyncPool for parallel async support) =====
 
 define port = 8080;
 define running = Signal(true);
 
-define ai = get_address_info("0.0.0.0", `number->string`(port));
-define listener = make_listener_socket(ai);
-display("[server] Listening on port " ++ `number->string`(port));
-newline();
+with(ap = AsyncPool(4)) {
+    define ai = get_address_info("0.0.0.0", `number->string`(port));
+    define listener = make_listener_socket(ai);
+    display("[server] Listening on port " ++ `number->string`(port) ++ " (4 OS threads for compute)");
+    newline();
 
-// Main loop: accept is nonblocking (yields to green thread scheduler).
-// Each connection is dispatched to a green thread immediately.
-while(running()) {
-    define sa = make_sockaddr();
-    define conn = accept(listener, sa, 16);
-    thread_start(make_thread(function() handle_connection(conn)));
+    // Main loop: accept is nonblocking (yields to green thread scheduler).
+    // Each connection is dispatched to a green thread immediately.
+    // CPU-heavy route handlers use `parallel async` to offload to OS threads.
+    while(running()) {
+        define sa = make_sockaddr();
+        define conn = accept(listener, sa, 16);
+        thread_start(make_thread(function() handle_connection(conn)));
+    };
+
+    close_file_descriptor(listener);
 };
 
-close_file_descriptor(listener);
 display("[server] Stopped.");
 newline();

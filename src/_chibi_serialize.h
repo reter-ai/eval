@@ -32,6 +32,7 @@ enum ser_object_kind {
     SER_ENV_CELL     = 15,
     SER_CONTEXT_DK   = 16,
     SER_GLOBAL_REF_VAL = 17,  /* name + captured value */
+    SER_TYPE_REF       = 18,  /* type descriptor, resolved by name */
 };
 
 /* Immediate sub-kinds */
