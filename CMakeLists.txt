@@ -313,6 +313,27 @@ else()
     set(CAPNP_LIBS "")
 endif()
 
+# ---------- TensorFlow C API (optional GPU-accelerated tensor ops) ----------
+find_path(TF_INCLUDE_DIR tensorflow/c/c_api.h
+    HINTS ${CMAKE_SOURCE_DIR}/vcpkg_installed/x64-windows/include
+          ${CMAKE_SOURCE_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/include)
+find_library(TF_LIBRARY NAMES tensorflow
+    HINTS ${CMAKE_SOURCE_DIR}/vcpkg_installed/x64-windows/lib
+          ${CMAKE_SOURCE_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/lib)
+if(TF_INCLUDE_DIR AND TF_LIBRARY)
+    message(STATUS "Found TensorFlow — GPU-accelerated tensor ops enabled")
+    set(TF_SOURCES src/_eval_tf.c)
+    set(TF_DEFS EVAL_HAVE_TF=1)
+    set(TF_LIBS ${TF_LIBRARY})
+    set(TF_INCLUDES ${TF_INCLUDE_DIR})
+else()
+    message(STATUS "TensorFlow not found — using native tensor ops")
+    set(TF_SOURCES "")
+    set(TF_DEFS "")
+    set(TF_LIBS "")
+    set(TF_INCLUDES "")
+endif()
+
 # ============================================================
 # Python C extension module
 # ============================================================
@@ -335,6 +356,7 @@ if(BUILD_PYTHON_MODULE)
         src/_eval_rete.c
         src/_eval_datetime.c
         src/_eval_decimal.c
+        src/_eval_ad.c
         src/eval_embedded_extract.c
         ${EMBEDDED_SCM_C}
     )
@@ -343,9 +365,9 @@ if(BUILD_PYTHON_MODULE)
         list(APPEND EXT_SOURCES src/_eval_stub_libs.c)
     endif()
 
-    python_add_library(_chibi MODULE ${CHIBI_SOURCES} ${CHIBI_LIB_SOURCES} ${EXT_SOURCES} ${GRAMMAR_SOURCES} ${CAPNP_SOURCES})
+    python_add_library(_chibi MODULE ${CHIBI_SOURCES} ${CHIBI_LIB_SOURCES} ${EXT_SOURCES} ${GRAMMAR_SOURCES} ${CAPNP_SOURCES} ${TF_SOURCES})
 
-    target_include_directories(_chibi PRIVATE ${CHIBI_INCLUDE_DIRS} ${CMAKE_BINARY_DIR} ${GRAMMAR_JIT_INCLUDES})
+    target_include_directories(_chibi PRIVATE ${CHIBI_INCLUDE_DIRS} ${CMAKE_BINARY_DIR} ${GRAMMAR_JIT_INCLUDES} ${TF_INCLUDES})
     target_link_libraries(_chibi PRIVATE re2c_core)
 
     if(WIN32)
@@ -354,20 +376,20 @@ if(BUILD_PYTHON_MODULE)
         )
     endif()
 
-    target_compile_definitions(_chibi PRIVATE ${CHIBI_COMPILE_DEFS} ${GRAMMAR_JIT_DEFS} ${CAPNP_DEFS})
+    target_compile_definitions(_chibi PRIVATE ${CHIBI_COMPILE_DEFS} ${GRAMMAR_JIT_DEFS} ${CAPNP_DEFS} ${TF_DEFS})
 
     if(HAVE_STUB_LIBS)
         target_compile_definitions(_chibi PRIVATE EVAL_HAVE_STUB_LIBS=1)
     endif()
 
     if(WIN32)
-        target_link_libraries(_chibi PRIVATE ws2_32 ${GRAMMAR_JIT_LIBS} ${CAPNP_LIBS})
+        target_link_libraries(_chibi PRIVATE ws2_32 ${GRAMMAR_JIT_LIBS} ${CAPNP_LIBS} ${TF_LIBS})
         target_compile_definitions(_chibi PRIVATE
             _CRT_SECURE_NO_WARNINGS
             SEXP_USE_STRING_STREAMS=0
         )
     elseif(UNIX)
-        target_link_libraries(_chibi PRIVATE re2c_core m ${GRAMMAR_JIT_LIBS} ${CAPNP_LIBS})
+        target_link_libraries(_chibi PRIVATE re2c_core m ${GRAMMAR_JIT_LIBS} ${CAPNP_LIBS} ${TF_LIBS})
     endif()
 
     if(BUILD_GRAMMAR_JIT)
@@ -408,6 +430,7 @@ if(BUILD_EVAL_STANDALONE)
         src/_eval_rete.c
         src/_eval_datetime.c
         src/_eval_decimal.c
+        src/_eval_ad.c
     )
 
     if(HAVE_STUB_LIBS)
@@ -421,11 +444,12 @@ if(BUILD_EVAL_STANDALONE)
         ${STANDALONE_SOURCES}
         ${GRAMMAR_SOURCES}
         ${CAPNP_SOURCES}
+        ${TF_SOURCES}
     )
 
     set_target_properties(eval_standalone PROPERTIES OUTPUT_NAME eval)
 
-    target_include_directories(eval_standalone PRIVATE ${CHIBI_INCLUDE_DIRS} ${CMAKE_BINARY_DIR} ${GRAMMAR_JIT_INCLUDES})
+    target_include_directories(eval_standalone PRIVATE ${CHIBI_INCLUDE_DIRS} ${CMAKE_BINARY_DIR} ${GRAMMAR_JIT_INCLUDES} ${TF_INCLUDES})
 
     if(WIN32)
         target_include_directories(eval_standalone PRIVATE
@@ -437,6 +461,7 @@ if(BUILD_EVAL_STANDALONE)
         ${CHIBI_COMPILE_DEFS}
         ${GRAMMAR_JIT_DEFS}
         ${CAPNP_DEFS}
+        ${TF_DEFS}
         EVAL_STANDALONE=1
     )
 
@@ -445,13 +470,13 @@ if(BUILD_EVAL_STANDALONE)
     endif()
 
     if(WIN32)
-        target_link_libraries(eval_standalone PRIVATE re2c_core ws2_32 ${GRAMMAR_JIT_LIBS} ${CAPNP_LIBS})
+        target_link_libraries(eval_standalone PRIVATE re2c_core ws2_32 ${GRAMMAR_JIT_LIBS} ${CAPNP_LIBS} ${TF_LIBS})
         target_compile_definitions(eval_standalone PRIVATE
             _CRT_SECURE_NO_WARNINGS
             SEXP_USE_STRING_STREAMS=0
         )
     elseif(UNIX)
-        target_link_libraries(eval_standalone PRIVATE re2c_core m pthread ${GRAMMAR_JIT_LIBS} ${CAPNP_LIBS})
+        target_link_libraries(eval_standalone PRIVATE re2c_core m pthread ${GRAMMAR_JIT_LIBS} ${CAPNP_LIBS} ${TF_LIBS})
     endif()
 
     if(BUILD_GRAMMAR_JIT)

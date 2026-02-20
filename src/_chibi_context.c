@@ -244,6 +244,12 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
         register_decimal_type(self->ctx, self->env);
     }
 
+    /* Register AD types (Var, Dual, Tensor) */
+    {
+        extern void register_ad_types(sexp ctx);
+        register_ad_types(self->ctx);
+    }
+
     /* Register bridge functions */
     register_bridge_functions(self->ctx, self->env);
 
@@ -286,6 +292,12 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
     {
         extern void register_decimal_bridge_functions(sexp ctx, sexp env);
         register_decimal_bridge_functions(self->ctx, self->env);
+    }
+
+    /* Register AD bridge functions */
+    {
+        extern void register_ad_bridge_functions(sexp ctx, sexp env);
+        register_ad_bridge_functions(self->ctx, self->env);
     }
 
     /* Import (scheme base) via the meta-environment — this adds:
@@ -486,6 +498,10 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
 
     /* OO list/vector methods: [1,2,3]->map(...), #[1,2]->length, etc. */
     sexp_load_module_file(self->ctx, "eval/collection-oo.scm", self->env);
+    self->env = sexp_context_env(self->ctx);
+
+    /* Automatic differentiation: operator overloading, grad, math, SGD */
+    sexp_load_module_file(self->ctx, "eval/ad.scm", self->env);
     self->env = sexp_context_env(self->ctx);
 
     /* OO DateTime/Date/TimeDelta methods */

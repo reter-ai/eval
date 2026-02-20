@@ -292,6 +292,10 @@ static sexp init_context(const char *extra_module_dir) {
         extern void register_decimal_type(sexp ctx, sexp env);
         register_decimal_type(ctx, env);
     }
+    {
+        extern void register_ad_types(sexp ctx);
+        register_ad_types(ctx);
+    }
 
     /* Register C bridge functions */
     register_bridge_functions_c(ctx, env);
@@ -320,6 +324,10 @@ static sexp init_context(const char *extra_module_dir) {
     {
         extern void register_decimal_bridge_functions(sexp ctx, sexp env);
         register_decimal_bridge_functions(ctx, env);
+    }
+    {
+        extern void register_ad_bridge_functions(sexp ctx, sexp env);
+        register_ad_bridge_functions(ctx, env);
     }
 
     /* Load scheme extras, test framework */
@@ -398,6 +406,9 @@ static sexp init_context(const char *extra_module_dir) {
 
     /* OO list/vector methods: [1,2,3]->map(...), #[1,2]->length, etc. */
     sexp_load_module_file(ctx, "eval/collection-oo.scm", sexp_context_env(ctx));
+
+    /* Automatic differentiation: operator overloading, grad, math, SGD */
+    sexp_load_module_file(ctx, "eval/ad.scm", sexp_context_env(ctx));
 
     /* OO DateTime/Date/TimeDelta methods */
     sexp_load_module_file(ctx, "eval/datetime-oo.scm", sexp_context_env(ctx));

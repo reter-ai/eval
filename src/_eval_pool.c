@@ -872,6 +872,7 @@ static sexp bridge_op_c(sexp ctx, sexp self, sexp_sint_t n, sexp name) {
     else if (strcmp(s, "~") == 0) scheme_name = "bitwise-not";
     else if (strcmp(s, "<<") == 0) scheme_name = "arithmetic-shift";
     else if (strcmp(s, ">>") == 0) scheme_name = "shift-right";
+    else if (strcmp(s, "@") == 0) scheme_name = "matmul";
     else scheme_name = s;
 
     sexp sym = sexp_intern(ctx, scheme_name, -1);
@@ -1272,6 +1273,10 @@ void eval_standard_aliases(sexp ctx, sexp env) {
     sexp_load_module_file(ctx, "eval/collection-oo.scm", env);
     env = sexp_context_env(ctx);
 
+    /* Automatic differentiation: operator overloading, grad, math, SGD */
+    sexp_load_module_file(ctx, "eval/ad.scm", env);
+    env = sexp_context_env(ctx);
+
     /* OO DateTime/Date/TimeDelta methods */
     sexp_load_module_file(ctx, "eval/datetime-oo.scm", env);
     env = sexp_context_env(ctx);
@@ -1443,6 +1448,10 @@ static EVAL_THREAD_FUNC worker_main(void *arg) {
         extern void register_decimal_type(sexp ctx, sexp env);
         register_decimal_type(ctx, env);
     }
+    {
+        extern void register_ad_types(sexp ctx);
+        register_ad_types(ctx);
+    }
 
     /* 4. Register C-only bridge functions */
     register_bridge_functions_c(ctx, env);
@@ -1471,6 +1480,10 @@ static EVAL_THREAD_FUNC worker_main(void *arg) {
     {
         extern void register_decimal_bridge_functions(sexp ctx, sexp env);
         register_decimal_bridge_functions(ctx, env);
+    }
+    {
+        extern void register_ad_bridge_functions(sexp ctx, sexp env);
+        register_ad_bridge_functions(ctx, env);
     }
 
     /* 5. Load scheme extras, test framework */

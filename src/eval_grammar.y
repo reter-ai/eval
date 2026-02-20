@@ -48,14 +48,14 @@
 %left LT GT LTE GTE.
 %left SHL SHR.
 %left PLUS MINUS CONCAT MAPPEND.
-%left STAR SLASH PERCENT.
+%left STAR SLASH PERCENT AT.
 %right STARSTAR.
 %right UMINUS BANG BITNOT BANGBANG QUOTE_PREC.
 %left LPAREN LBRACKET ARROW PLUSPLUS MINUSMINUS FOR.
 %nonassoc RPAREN COMMA DOTDOT RBRACKET RBRACE SEMICOLON COLON.
 /* Additional keyword tokens recognized by the lexer.
    Declaring them here makes lemon generate their TOK_ defines. */
-%token LIBRARY EXPORT INCLUDE MACRO SYNTAX_RULES OPVAL TEST_GROUP DEFINE IN DICT WITH ASYNC AWAIT STATIC ABSTRACT YIELD GENERATOR RAW_STRING PARALLEL FSTR_START FSTR_MID FSTR_END.
+%token LIBRARY EXPORT INCLUDE MACRO SYNTAX_RULES OPVAL TEST_GROUP DEFINE IN DICT WITH ASYNC AWAIT STATIC ABSTRACT YIELD GENERATOR RAW_STRING PARALLEL FSTR_START FSTR_MID FSTR_END PARAM.
 %token LOGICVAR COLONMINUS FRESH CONDE RUN FACT RULE QUERY FINDALL WHENEVER.
 %token PIPE BIND BIND_ARROW MDO MAPPEND.
 
@@ -152,6 +152,12 @@ expr(A) ::= DEFINE CONDE(N) ASSIGN expr(E). {
     A = sexp_list3(ctx, ps_intern(ctx, "define"),
         ps_make_ident(ctx, N.start, N.length), E);
 }
+/* param x = 5.0;  →  (define x (Param 5.0)) */
+expr(A) ::= PARAM IDENT(N) ASSIGN expr(E). {
+    A = sexp_list3(ctx, ps_intern(ctx, "define"),
+        ps_make_ident(ctx, N.start, N.length),
+        sexp_list2(ctx, ps_intern(ctx, "Param"), E));
+}
 expr(A) ::= IDENT(N) PLUS_ASSIGN expr(E). {
     A = ps_set_op(ctx, "+", ps_make_ident(ctx, N.start, N.length), E);
 }
@@ -223,6 +229,10 @@ expr(A) ::= expr(L) PERCENT expr(R). {
 }
 expr(A) ::= expr(L) STARSTAR expr(R). {
     A = sexp_list3(ctx, ps_intern(ctx, "expt"), L, R);
+}
+/* --- Matmul: X @ W  ->  (matmul X W) --- */
+expr(A) ::= expr(L) AT expr(R). {
+    A = sexp_list3(ctx, ps_intern(ctx, "matmul"), L, R);
 }
 expr(A) ::= expr(L) CONCAT expr(R). {
     A = sexp_list3(ctx, ps_intern(ctx, "string-append"), L, R);
@@ -336,6 +346,7 @@ member_name(A) ::= FACT(T).    { A = T; }
 member_name(A) ::= RULE(T).    { A = T; }
 member_name(A) ::= WHENEVER(T). { A = T; }
 member_name(A) ::= MDO(T). { A = T; }
+member_name(A) ::= PARAM(T). { A = T; }
 
 /* --- Postfix: indexing expr[i] --- */
 expr(A) ::= expr(E) LBRACKET expr(I) RBRACKET. {

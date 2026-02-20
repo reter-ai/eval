@@ -149,6 +149,7 @@ static const Keyword keywords[] = {
     {"rule",        TOK_RULE},
     {"whenever",    TOK_WHENEVER},
     {"mdo",         TOK_MDO},
+    {"param",       TOK_PARAM},
     {"true",        TOK_TRUE},
     {"false",       TOK_FALSE},
     {"nil",         TOK_NIL},
@@ -341,6 +342,7 @@ static void lexer_post_process(EvalLexer *lexer, EvalToken *token) {
         case TOK_SHR:
         case TOK_CONCAT:
         case TOK_MAPPEND:
+        case TOK_AT:
             token->value.int_val = token->type;
             token->type = TOK_OPVAL;
             break;
@@ -676,6 +678,10 @@ int eval_lexer_next(EvalLexer *lexer, EvalToken *token) {
         token->type = TOK_PERCENT;
         break;
 
+    case '@':
+        token->type = TOK_AT;
+        break;
+
     case '<':
         if (peek(lexer) == '=') {
             advance(lexer);
@@ -909,6 +915,8 @@ const char *eval_token_name(int type) {
     case TOK_BIND_ARROW:    return "<~";
     case TOK_MDO:           return "mdo";
     case TOK_MAPPEND:       return "<>";
+    case TOK_AT:            return "@";
+    case TOK_PARAM:         return "param";
     default:                return "UNKNOWN";
     }
 }
