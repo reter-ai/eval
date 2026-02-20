@@ -437,6 +437,41 @@ static sexp bridge_slice(sexp ctx, sexp self, sexp_sint_t n,
     }
 }
 
+/* __tostr__(x) -> fast value-to-string conversion for f-string interpolation */
+static sexp bridge_tostr(sexp ctx, sexp self, sexp_sint_t n, sexp x) {
+    if (sexp_stringp(x)) return x;
+    if (sexp_fixnump(x)) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%lld", (long long)sexp_unbox_fixnum(x));
+        return sexp_c_string(ctx, buf, -1);
+    }
+    if (sexp_flonump(x)) {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%g", sexp_flonum_value(x));
+        return sexp_c_string(ctx, buf, -1);
+    }
+    if (sexp_booleanp(x)) {
+        return x == SEXP_TRUE ? sexp_c_string(ctx, "true", 4)
+                              : sexp_c_string(ctx, "false", 5);
+    }
+    if (x == SEXP_NULL) {
+        return sexp_c_string(ctx, "nil", 3);
+    }
+    if (sexp_symbolp(x)) {
+        sexp str = sexp_symbol_to_string(ctx, x);
+        return sexp_stringp(str) ? str : sexp_c_string(ctx, "?", 1);
+    }
+    if (sexp_charp(x)) {
+        char buf[2];
+        buf[0] = (char)sexp_unbox_character(x);
+        buf[1] = '\0';
+        return sexp_c_string(ctx, buf, 1);
+    }
+    /* Fallback: write-to-string (write semantics) */
+    sexp str = sexp_write_to_string(ctx, x);
+    return sexp_stringp(str) ? str : sexp_c_string(ctx, "?", 1);
+}
+
 /* === Registration === */
 
 /* op("+"") → look up the Scheme procedure for an Eval operator symbol.
@@ -559,6 +594,9 @@ void register_bridge_functions(sexp ctx, sexp env) {
     /* Evaluate Scheme expression string in isolated eval context */
     sexp_define_foreign(ctx, env, "eval-scheme", 1, bridge_eval_scheme);
     sexp_define_foreign(ctx, env, "eval_scheme", 1, bridge_eval_scheme);
+
+    /* F-string tostr */
+    sexp_define_foreign(ctx, env, "__tostr__", 1, bridge_tostr);
 
     /* Indexing and slicing */
     sexp_define_foreign(ctx, env, "ref", 2, bridge_ref);

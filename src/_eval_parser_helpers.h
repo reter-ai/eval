@@ -159,6 +159,13 @@ sexp ps_make_ref(sexp ctx, sexp obj, sexp index);
 /* Build (slice obj start end) for slicing */
 sexp ps_make_slice(sexp ctx, sexp obj, sexp start, sexp end);
 
+/* F-string helpers */
+sexp ps_make_fstr_text(sexp ctx, const char *start, int length);
+sexp ps_fstr_build(sexp ctx, const char *s_start, int s_len,
+                   sexp body,
+                   const char *e_start, int e_len);
+sexp ps_fstr_mid(sexp ctx, sexp list, const char *m_start, int m_len, sexp expr);
+
 /* Parse Eval source code into a chibi sexp.
    Returns the parsed sexp, or SEXP_VOID on error.
    On error, sets *error_msg (caller must free), *error_line, *error_col. */

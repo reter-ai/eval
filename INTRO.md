@@ -23,6 +23,7 @@ Every Eval expression compiles down to an s-expression. You can think of Eval as
 "hello\n"       // string (escapes: \n \t \r \\ \" \0)
 """multi
 line"""         // triple-quoted raw string (literal newlines, embedded "quotes", no escapes)
+f"hello {name}" // f-string (interpolation, auto type conversion)
 true            // boolean #t
 false           // boolean #f
 nil             // empty list '()
@@ -977,6 +978,22 @@ dict(x: x * x for x in count(3));       // dict from generator
 ```
 
 See [GENERATORS.md](GENERATORS.md) for the complete guide including infinite generators, lazy pipelines, and compilation details.
+
+## F-Strings
+
+F-strings provide string interpolation — embed expressions directly in a string with `{expr}`:
+
+```
+define name = "world";
+f"hello {name}"                              // => "hello world"
+f"sum: {1 + 2 + 3}"                         // => "sum: 6"
+f"name: {name->upper()}"                     // => "name: WORLD"
+f"n={42}, b={true}"                          // => "n=42, b=true"
+```
+
+Expressions are automatically converted to strings. Use `{{` and `}}` for literal braces. Escape sequences (`\n`, `\t`, etc.) work in text portions. F-strings can be nested.
+
+See [FSTRINGS.md](FSTRINGS.md) for the complete guide.
 
 ## String Methods
 
@@ -2142,6 +2159,7 @@ See [NETWORKING.md](NETWORKING.md) for the full networking guide including low-l
 
 - [GENERATORS.md](GENERATORS.md) — Generators, yield, generator comprehensions, lazy pipelines
 - [INDEXING.md](INDEXING.md) — Bracket indexing vs arrow properties: `xs[0]` vs `xs->first`, when to use which
+- [FSTRINGS.md](FSTRINGS.md) — F-strings: interpolated strings with `f"hello {name}"`, escaping, nesting, type conversion
 - [STRINGS.md](STRINGS.md) — String methods: upper, lower, trim, split, replace, contains, and more
 - [LISTS.md](LISTS.md) — List methods: map, filter, sort, fold, join, take, drop, and more
 - [VECTORS.md](VECTORS.md) — Vector methods: map, filter, sort, fold, set, to_list, and more

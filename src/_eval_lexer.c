@@ -14,6 +14,9 @@ void eval_lexer_init(EvalLexer *lexer, const char *source) {
     lexer->error_msg = NULL;
     lexer->has_error = 0;
     lexer->prev_ends_expr = 0;
+    lexer->fstr_mode = 0;
+    lexer->fstr_nesting = 0;
+    memset(lexer->fstr_brace_stack, 0, sizeof(lexer->fstr_brace_stack));
 }
 
 void eval_lexer_free(EvalLexer *lexer) {
@@ -365,6 +368,7 @@ static void lexer_post_process(EvalLexer *lexer, EvalToken *token) {
     case TOK_RPAREN: case TOK_RBRACKET: case TOK_RBRACE:
     case TOK_PLUSPLUS: case TOK_MINUSMINUS:
     case TOK_OPVAL:
+    case TOK_FSTR_END:
         lexer->prev_ends_expr = 1;
         break;
     default:
@@ -373,7 +377,100 @@ static void lexer_post_process(EvalLexer *lexer, EvalToken *token) {
     }
 }
 
+/* Scan f-string text segment. Called when fstr_mode is 1 (first) or 2 (mid).
+   Scans until { (start of interpolation), " (end of f-string), or end of input.
+   Token start/length point to raw text (including {{ and }} escapes). */
+static int lex_fstring_text(EvalLexer *lexer, EvalToken *token) {
+    token->line = lexer->line;
+    token->col = lexer->col;
+    const char *start = lexer->current;
+
+    while (peek(lexer) != '\0') {
+        char c = peek(lexer);
+
+        if (c == '{' && peek_next(lexer) == '{') {
+            /* Escaped brace {{ — include both chars in text */
+            advance(lexer);
+            advance(lexer);
+            continue;
+        }
+
+        if (c == '}' && peek_next(lexer) == '}') {
+            /* Escaped brace }} — include both chars in text */
+            advance(lexer);
+            advance(lexer);
+            continue;
+        }
+
+        if (c == '{') {
+            /* Start of interpolation — end text segment */
+            token->start = start;
+            token->length = (int)(lexer->current - start);
+            if (lexer->fstr_mode == 1) {
+                token->type = TOK_FSTR_START;
+            } else {
+                token->type = TOK_FSTR_MID;
+            }
+            advance(lexer); /* consume '{' */
+            lexer->fstr_mode = 3; /* switch to expr mode */
+            lexer->fstr_brace_stack[lexer->fstr_nesting - 1] = 1;
+            lexer_post_process(lexer, token);
+            return 0;
+        }
+
+        if (c == '"') {
+            /* End of f-string */
+            token->start = start;
+            token->length = (int)(lexer->current - start);
+            advance(lexer); /* consume closing '"' */
+            if (lexer->fstr_mode == 1) {
+                /* No interpolation: emit FSTR_START, then FSTR_END on next call */
+                token->type = TOK_FSTR_START;
+                lexer->fstr_mode = 4; /* pending FSTR_END */
+            } else {
+                /* End after interpolation(s) */
+                token->type = TOK_FSTR_END;
+                lexer->fstr_nesting--;
+                lexer->fstr_mode = lexer->fstr_nesting > 0 ? 3 : 0;
+            }
+            lexer_post_process(lexer, token);
+            return 0;
+        }
+
+        if (c == '\\') {
+            /* Escape sequence — skip backslash + next char */
+            advance(lexer);
+            if (peek(lexer) != '\0') advance(lexer);
+            continue;
+        }
+
+        advance(lexer);
+    }
+
+    lexer_error(lexer, "unterminated f-string");
+    return -1;
+}
+
 int eval_lexer_next(EvalLexer *lexer, EvalToken *token) {
+    /* Pending FSTR_END: no-interpolation f-string needs a closing token */
+    if (lexer->fstr_mode == 4) {
+        token->line = lexer->line;
+        token->col = lexer->col;
+        token->start = lexer->current;
+        token->length = 0;
+        token->value.int_val = 0;
+        token->type = TOK_FSTR_END;
+        lexer->fstr_nesting--;
+        lexer->fstr_mode = lexer->fstr_nesting > 0 ? 3 : 0;
+        lexer_post_process(lexer, token);
+        return 0;
+    }
+
+    /* If we're in f-string text mode, scan text first */
+    if (lexer->fstr_mode == 1 || lexer->fstr_mode == 2) {
+        return lex_fstring_text(lexer, token);
+    }
+
     skip_whitespace_and_comments(lexer);
 
     token->line = lexer->line;
@@ -412,6 +509,20 @@ int eval_lexer_next(EvalLexer *lexer, EvalToken *token) {
         return r;
     }
 
+    /* F-string: f"..." */
+    if (c == 'f' && *(lexer->current + 1) == '"') {
+        advance(lexer); /* consume 'f' */
+        advance(lexer); /* consume '"' */
+        if (lexer->fstr_nesting >= FSTR_MAX_NESTING) {
+            lexer_error(lexer, "f-string nesting too deep");
+            return -1;
+        }
+        lexer->fstr_mode = 1; /* text-first */
+        lexer->fstr_nesting++;
+        lexer->fstr_brace_stack[lexer->fstr_nesting - 1] = 0;
+        return lex_fstring_text(lexer, token);
+    }
+
     /* Identifiers and keywords */
     if (is_ident_start(c)) {
         int r = lex_ident(lexer, token);
@@ -430,9 +541,19 @@ int eval_lexer_next(EvalLexer *lexer, EvalToken *token) {
         token->type = TOK_RPAREN;
         break;
     case '{':
+        if (lexer->fstr_mode == 3)
+            lexer->fstr_brace_stack[lexer->fstr_nesting - 1]++;
         token->type = TOK_LBRACE;
         break;
     case '}':
+        if (lexer->fstr_mode == 3) {
+            lexer->fstr_brace_stack[lexer->fstr_nesting - 1]--;
+            if (lexer->fstr_brace_stack[lexer->fstr_nesting - 1] == 0) {
+                /* End of interpolation expression — switch to text-mid */
+                lexer->fstr_mode = 2;
+                return lex_fstring_text(lexer, token);
+            }
+        }
         token->type = TOK_RBRACE;
         break;
     case '[':
@@ -716,6 +837,9 @@ const char *eval_token_name(int type) {
     case TOK_ABSTRACT:      return "abstract";
     case TOK_YIELD:         return "yield";
     case TOK_GENERATOR:     return "generator";
+    case TOK_FSTR_START:    return "FSTR_START";
+    case TOK_FSTR_MID:      return "FSTR_MID";
+    case TOK_FSTR_END:      return "FSTR_END";
     default:                return "UNKNOWN";
     }
 }

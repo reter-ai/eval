@@ -12,7 +12,7 @@
 #define TOK_EOF 0
 
 /* TOK_COUNT: one past the highest token value (for debug name arrays etc.) */
-#define TOK_COUNT (TOK_AWAIT + 1)
+#define TOK_COUNT (TOK_FSTR_END + 1)
 
 /* Token structure */
 typedef struct {
@@ -27,6 +27,9 @@ typedef struct {
     } value;
 } EvalToken;
 
+/* F-string nesting limit */
+#define FSTR_MAX_NESTING 8
+
 /* Lexer state */
 typedef struct {
     const char *source;
@@ -36,6 +39,9 @@ typedef struct {
     char *error_msg;
     int has_error;
     int prev_ends_expr; /* true if previous token can end an expression */
+    int fstr_mode;      /* 0=normal, 1=text(first), 2=text(mid), 3=expr */
+    int fstr_nesting;   /* current nesting depth (0 = not in fstring) */
+    int fstr_brace_stack[FSTR_MAX_NESTING]; /* brace depth per nesting level */
 } EvalLexer;
 
 /* Initialize the lexer with source code */

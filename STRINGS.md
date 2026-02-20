@@ -2,7 +2,7 @@
 
 ## String Literals
 
-Eval supports two forms of string literal:
+Eval supports three forms of string literal:
 
 ### Regular strings
 
@@ -41,6 +41,42 @@ define g = Grammar("""
     %ignore /\s+/
 """);
 ```
+
+### F-strings `f"...{expr}..."`
+
+F-strings provide string interpolation with embedded expressions. Prefix a string with `f` and use `{expr}` placeholders — each expression is evaluated and converted to a string automatically:
+
+```
+define name = "world";
+f"hello {name}"                    // => "hello world"
+f"sum: {1 + 2 + 3}"               // => "sum: 6"
+f"item: {[10, 20, 30][0]}"        // => "item: 10"
+```
+
+Any Eval expression can appear inside `{...}`, including function calls, method chains, blocks, and nested f-strings:
+
+```
+f"upper: {name->upper()}"         // method calls
+f"val: {{ define a = 1; a + 2 }}" // blocks
+f"outer {f"inner {x}"} done"      // nested f-strings
+```
+
+Text portions support escape sequences (`\n`, `\t`, etc.) just like regular strings. Use `{{` and `}}` for literal braces:
+
+```
+f"line1\nline2 {x}"               // escape sequences work
+f"{{ and }}"                       // => "{ and }"
+```
+
+Interpolated values are automatically converted to strings — numbers, booleans, `nil`, symbols, and any other type. String values pass through without conversion:
+
+```
+f"n={42}, b={true}, nil={nil}"     // => "n=42, b=true, nil=nil"
+```
+
+F-strings compile to `(string-append ... (__tostr__ expr) ...)`. An f-string with no interpolation is optimized to a plain string constant.
+
+See [FSTRINGS.md](FSTRINGS.md) for the complete guide including compilation details, nesting, escaping, and examples.
 
 ## String Methods
 

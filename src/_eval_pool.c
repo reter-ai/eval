@@ -1068,6 +1068,40 @@ static sexp bridge_slice_c(sexp ctx, sexp self, sexp_sint_t n,
     }
 }
 
+/* __tostr__(x) -> fast value-to-string for f-string interpolation (pure C) */
+static sexp bridge_tostr_c(sexp ctx, sexp self, sexp_sint_t n, sexp x) {
+    if (sexp_stringp(x)) return x;
+    if (sexp_fixnump(x)) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%lld", (long long)sexp_unbox_fixnum(x));
+        return sexp_c_string(ctx, buf, -1);
+    }
+    if (sexp_flonump(x)) {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%g", sexp_flonum_value(x));
+        return sexp_c_string(ctx, buf, -1);
+    }
+    if (sexp_booleanp(x)) {
+        return x == SEXP_TRUE ? sexp_c_string(ctx, "true", 4)
+                              : sexp_c_string(ctx, "false", 5);
+    }
+    if (x == SEXP_NULL) {
+        return sexp_c_string(ctx, "nil", 3);
+    }
+    if (sexp_symbolp(x)) {
+        sexp str = sexp_symbol_to_string(ctx, x);
+        return sexp_stringp(str) ? str : sexp_c_string(ctx, "?", 1);
+    }
+    if (sexp_charp(x)) {
+        char buf[2];
+        buf[0] = (char)sexp_unbox_character(x);
+        buf[1] = '\0';
+        return sexp_c_string(ctx, buf, 1);
+    }
+    sexp str = sexp_write_to_string(ctx, x);
+    return sexp_stringp(str) ? str : sexp_c_string(ctx, "?", 1);
+}
+
 /* Register all pure-C bridge functions in a worker context */
 #ifdef EVAL_STANDALONE
 void register_bridge_functions_c(sexp ctx, sexp env) {
@@ -1122,6 +1156,9 @@ static void register_bridge_functions_c(sexp ctx, sexp env) {
     /* Operators and exceptions */
     sexp_define_foreign(ctx, env, "op", 1, bridge_op_c);
     sexp_define_foreign(ctx, env, "exception-message", 1, bridge_exception_message_c);
+
+    /* F-string tostr */
+    sexp_define_foreign(ctx, env, "__tostr__", 1, bridge_tostr_c);
 
     /* Indexing and slicing */
     sexp_define_foreign(ctx, env, "ref", 2, bridge_ref_c);

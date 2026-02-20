@@ -25,7 +25,7 @@ e.eval("""
 
 ## Features
 
-- **Infix syntax** — familiar C-style expressions with `define`, `let`, `if/else`, `while`, `for`, `{ blocks }`, `"""raw triple-quoted strings"""`
+- **Infix syntax** — familiar C-style expressions with `define`, `let`, `if/else`, `while`, `for`, `{ blocks }`, `"""raw triple-quoted strings"""`, `f"interpolated {strings}"`
 - **First-class functions** — closures, higher-order functions, `map`, `filter`, `fold`
 - **Generators** — lazy sequences with `yield`, generator comprehensions, infinite streams, lazy pipelines
 - **Reactive programming** — signals, computed values, effects, scopes, async resources
@@ -35,6 +35,7 @@ e.eval("""
 - **Thread pool** — true OS-level parallelism with worker threads, futures, and channels
 - **Task pool** — scalable task execution: OS thread pool + green threads, submit closures, promises
 - **Hybrid async** — `async` for green threads, `parallel async` for OS threads — mix both in the same scope
+- **F-strings** — `f"hello {name}, you are {age} years old"` — interpolated strings with auto type conversion
 - **String methods** — OO-style `"hello"->upper()`, `->trim()`, `->split(",")`, `->contains()`, chaining
 - **Collection methods** — OO-style `[1,2,3]->map(f)`, `->filter()`, `->sort(<)`, `->join(",")`, `#[1,2,3]->length`
 - **Networking** — TCP sockets, HTTP client/server with OO wrappers, RAII, and reactive signals
@@ -318,6 +319,24 @@ define p = make_Point(3, 4);
 Point_x(p);               // => 3
 Point?(p);                 // => true
 ```
+
+### F-strings
+
+Interpolated strings with embedded expressions — prefix with `f` and use `{expr}`:
+
+```
+define name = "Alice";
+define age = 30;
+f"Hello, {name}! You are {age} years old.";
+// => "Hello, Alice! You are 30 years old."
+
+f"sum: {1 + 2 + 3}"               // => "sum: 6"
+f"upper: {name->upper()}"          // => "upper: ALICE"
+f"n={42}, b={true}"                // => "n=42, b=true"
+f"braces: {{ and }}"               // => "braces: { and }"
+```
+
+Expressions are auto-converted to strings. Supports escape sequences, nested f-strings, and arbitrary expressions inside `{}`. See [FSTRINGS.md](FSTRINGS.md) for the full guide.
 
 ### String methods
 
@@ -837,7 +856,7 @@ with(pool = TaskPool(4)) {
 
 Each worker runs green threads, so multiple tasks on the same worker execute concurrently. See [TASKS.md](TASKS.md) for the full guide.
 
-See [ASYNC.md](ASYNC.md) for the full async programming guide, [TASKS.md](TASKS.md) for the TaskPool guide, [THREADS.md](THREADS.md) for the complete threads and continuations guide, [MULTITHREADING.md](MULTITHREADING.md) for OO synchronization wrappers, [GENERATORS.md](GENERATORS.md) for generators and lazy sequences, [NETWORKING.md](NETWORKING.md) for TCP/HTTP networking, [FILESYS.md](FILESYS.md) for filesystem operations, [LISTS.md](LISTS.md)/[VECTORS.md](VECTORS.md) for collection methods, [BINARY.md](BINARY.md) for Cap'n Proto binary serialization, [GRAMMARS.md](GRAMMARS.md) for runtime parser generation, and [TESTS.md](TESTS.md) for the built-in test framework.
+See [ASYNC.md](ASYNC.md) for the full async programming guide, [TASKS.md](TASKS.md) for the TaskPool guide, [THREADS.md](THREADS.md) for the complete threads and continuations guide, [MULTITHREADING.md](MULTITHREADING.md) for OO synchronization wrappers, [GENERATORS.md](GENERATORS.md) for generators and lazy sequences, [FSTRINGS.md](FSTRINGS.md) for interpolated strings, [NETWORKING.md](NETWORKING.md) for TCP/HTTP networking, [FILESYS.md](FILESYS.md) for filesystem operations, [LISTS.md](LISTS.md)/[VECTORS.md](VECTORS.md) for collection methods, [BINARY.md](BINARY.md) for Cap'n Proto binary serialization, [GRAMMARS.md](GRAMMARS.md) for runtime parser generation, and [TESTS.md](TESTS.md) for the built-in test framework.
 
 ## Binary serialization
 

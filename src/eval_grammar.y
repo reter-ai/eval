@@ -53,7 +53,7 @@
 %nonassoc RPAREN COMMA DOTDOT RBRACKET RBRACE SEMICOLON COLON.
 /* Additional keyword tokens recognized by the lexer.
    Declaring them here makes lemon generate their TOK_ defines. */
-%token LIBRARY EXPORT INCLUDE MACRO SYNTAX_RULES OPVAL TEST_GROUP DEFINE IN DICT WITH ASYNC AWAIT STATIC ABSTRACT YIELD GENERATOR RAW_STRING PARALLEL.
+%token LIBRARY EXPORT INCLUDE MACRO SYNTAX_RULES OPVAL TEST_GROUP DEFINE IN DICT WITH ASYNC AWAIT STATIC ABSTRACT YIELD GENERATOR RAW_STRING PARALLEL FSTR_START FSTR_MID FSTR_END.
 
 /* Non-terminal types - all are sexp */
 %type program { sexp }
@@ -81,6 +81,7 @@
 %type comp_clauses { sexp }
 %type dict_entries { sexp }
 %type member_name { EvalToken }
+%type fstr_body { sexp }
 
 /* ===== PROGRAM ===== */
 
@@ -285,6 +286,26 @@ expr(A) ::= STRING(V). {
 }
 expr(A) ::= RAW_STRING(V). {
     A = sexp_c_string(ctx, V.start, V.length);
+}
+
+/* --- F-string interpolation: f"text {expr} text" --- */
+expr(A) ::= FSTR_START(S) FSTR_END(E). {
+    /* No interpolation: concatenate start + end text */
+    sexp s1 = S.length > 0 ? ps_make_fstr_text(ctx, S.start, S.length) : SEXP_FALSE;
+    sexp s2 = E.length > 0 ? ps_make_fstr_text(ctx, E.start, E.length) : SEXP_FALSE;
+    if (s1 == SEXP_FALSE && s2 == SEXP_FALSE) A = sexp_c_string(ctx, "", 0);
+    else if (s2 == SEXP_FALSE) A = s1;
+    else if (s1 == SEXP_FALSE) A = s2;
+    else A = sexp_list3(ctx, ps_intern(ctx, "string-append"), s1, s2);
+}
+expr(A) ::= FSTR_START(S) fstr_body(B) FSTR_END(E). {
+    A = ps_fstr_build(ctx, S.start, S.length, B, E.start, E.length);
+}
+fstr_body(A) ::= expr(E). [ARGLIST_PREC] {
+    A = sexp_list1(ctx, E);
+}
+fstr_body(A) ::= fstr_body(L) FSTR_MID(M) expr(E). [ARGLIST_PREC] {
+    A = ps_fstr_mid(ctx, L, M.start, M.length, E);
 }
 expr(A) ::= IDENT(V). {
     A = ps_make_ident(ctx, V.start, V.length);

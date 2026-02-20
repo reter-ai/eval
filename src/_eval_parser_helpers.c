@@ -1347,6 +1347,119 @@ sexp ps_make_gen_comp(sexp ctx, sexp body, sexp clauses) {
     return sexp_list2(ctx, ps_intern(ctx, "make-coroutine-generator"), inner);
 }
 
+/* F-string text: like ps_make_string but also folds {{ → { and }} → } */
+sexp ps_make_fstr_text(sexp ctx, const char *start, int length) {
+    char *buf = (char *)malloc(length + 1);
+    if (!buf) return sexp_c_string(ctx, start, length);
+
+    int j = 0;
+    for (int i = 0; i < length; i++) {
+        if (start[i] == '{' && i + 1 < length && start[i + 1] == '{') {
+            buf[j++] = '{';
+            i++; /* skip second { */
+        } else if (start[i] == '}' && i + 1 < length && start[i + 1] == '}') {
+            buf[j++] = '}';
+            i++; /* skip second } */
+        } else if (start[i] == '\\' && i + 1 < length) {
+            i++;
+            switch (start[i]) {
+            case 'n': buf[j++] = '\n'; break;
+            case 't': buf[j++] = '\t'; break;
+            case 'r': buf[j++] = '\r'; break;
+            case '\\': buf[j++] = '\\'; break;
+            case '"': buf[j++] = '"'; break;
+            case '0': buf[j++] = '\0'; break;
+            default: buf[j++] = start[i]; break;
+            }
+        } else {
+            buf[j++] = start[i];
+        }
+    }
+    buf[j] = '\0';
+
+    sexp result = sexp_c_string(ctx, buf, j);
+    free(buf);
+    return result;
+}
+
+/* Build f-string: (string-append "start_text" (__tostr__ e1) "mid_text" (__tostr__ e2) ... "end_text")
+   body is a list where odd elements are wrapped exprs and even elements are mid-text strings.
+   The body list structure from the parser is:
+     single expr:   (e1)
+     with mids:     (e1 mid_text1 e2 mid_text2 e3 ...) */
+sexp ps_fstr_build(sexp ctx, const char *s_start, int s_len,
+                   sexp body,
+                   const char *e_start, int e_len) {
+    sexp tostr_sym = ps_intern(ctx, "__tostr__");
+    sexp sa_sym = ps_intern(ctx, "string-append");
+
+    /* Collect all parts into a list */
+    sexp parts = SEXP_NULL;
+    sexp parts_tail = SEXP_NULL;
+
+    /* Helper to append a part */
+    #define FSTR_APPEND(val) do { \
+        sexp _cell = sexp_cons(ctx, (val), SEXP_NULL); \
+        if (sexp_nullp(parts)) { parts = _cell; parts_tail = _cell; } \
+        else { sexp_cdr(parts_tail) = _cell; parts_tail = _cell; } \
+    } while(0)
+
+    /* Start text */
+    if (s_len > 0) {
+        sexp s = ps_make_fstr_text(ctx, s_start, s_len);
+        FSTR_APPEND(s);
+    }
+
+    /* Process body list: exprs are wrapped with __tostr__, strings are mid-text */
+    sexp p = body;
+    while (sexp_pairp(p)) {
+        sexp elem = sexp_car(p);
+        if (sexp_stringp(elem)) {
+            /* Mid-text segment (only if non-empty) */
+            if (sexp_string_size(elem) > 0)
+                FSTR_APPEND(elem);
+        } else {
+            /* Expression: wrap with __tostr__ */
+            sexp wrapped = sexp_list2(ctx, tostr_sym, elem);
+            FSTR_APPEND(wrapped);
+        }
+        p = sexp_cdr(p);
+    }
+
+    /* End text */
+    if (e_len > 0) {
+        sexp s = ps_make_fstr_text(ctx, e_start, e_len);
+        FSTR_APPEND(s);
+    }
+
+    #undef FSTR_APPEND
+
+    /* If only one part, return it directly */
+    if (sexp_pairp(parts) && sexp_nullp(sexp_cdr(parts)))
+        return sexp_car(parts);
+
+    /* If no parts at all (shouldn't happen), return empty string */
+    if (sexp_nullp(parts))
+        return sexp_c_string(ctx, "", 0);
+
+    /* (string-append part1 part2 ...) */
+    return sexp_cons(ctx, sa_sym, parts);
+}
+
+/* Append mid-text + wrapped expr to f-string body list.
+   L is the existing body list, M is the mid token, E is the new expr. */
+sexp ps_fstr_mid(sexp ctx, sexp list, const char *m_start, int m_len, sexp expr) {
+    sexp result = list;
+    /* Append mid-text (as a string sexp) */
+    if (m_len > 0) {
+        sexp mid_str = ps_make_fstr_text(ctx, m_start, m_len);
+        result = ps_append(ctx, result, mid_str);
+    }
+    /* Append the expression */
+    result = ps_append(ctx, result, expr);
+    return result;
+}
+
 /* Build (ref obj index) */
 sexp ps_make_ref(sexp ctx, sexp obj, sexp index) {
     return sexp_list3(ctx, ps_intern(ctx, "ref"), obj, index);
