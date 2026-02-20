@@ -301,6 +301,10 @@ static sexp init_context(const char *extra_module_dir) {
         extern void register_concurrent_bridge_functions(sexp ctx, sexp env);
         register_concurrent_bridge_functions(ctx, env);
     }
+    {
+        extern void register_rete_bridge_functions(sexp ctx, sexp env);
+        register_rete_bridge_functions(ctx, env);
+    }
 
     /* Load scheme extras, test framework */
     sexp_load_module_file(ctx, "scheme/extras.scm", env);

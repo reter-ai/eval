@@ -45,6 +45,7 @@ e.eval("""
 - **Full numeric tower** — integers, floats, bignums, rationals
 - **Nondeterministic choice** — `amb` operator with backtracking search, `require` constraints, `amb_collect` for all solutions
 - **Logic programming** — miniKanren + Prolog-style: `fact`, `rule`, `run`, `fresh`, `conde`, `===` unification, interleaving search
+- **Forward-chaining rules** — Rete algorithm: `whenever` rules fire automatically when matching facts are asserted, with multi-condition joins and chaining
 - **Binary serialization** — Cap'n Proto zero-copy serialization with runtime schema parsing, wire-compatible with any language
 - **Scheme power** — access any chibi-scheme primitive via backtick identifiers
 
@@ -898,7 +899,7 @@ with(pool = TaskPool(4)) {
 
 Each worker runs green threads, so multiple tasks on the same worker execute concurrently. See [TASKS.md](TASKS.md) for the full guide.
 
-See [ASYNC.md](ASYNC.md) for the full async programming guide, [TASKS.md](TASKS.md) for the TaskPool guide, [THREADS.md](THREADS.md) for the complete threads and continuations guide, [MULTITHREADING.md](MULTITHREADING.md) for OO synchronization wrappers, [CONCURRENT.md](CONCURRENT.md) for thread-safe containers, [GENERATORS.md](GENERATORS.md) for generators and lazy sequences, [FSTRINGS.md](FSTRINGS.md) for interpolated strings, [NETWORKING.md](NETWORKING.md) for TCP/HTTP networking, [FILESYS.md](FILESYS.md) for filesystem operations, [LISTS.md](LISTS.md)/[VECTORS.md](VECTORS.md) for collection methods, [BINARY.md](BINARY.md) for Cap'n Proto binary serialization, [GRAMMARS.md](GRAMMARS.md) for runtime parser generation, [AMB.md](AMB.md) for nondeterministic choice, [PROLOG.md](PROLOG.md) for logic programming, and [TESTS.md](TESTS.md) for the built-in test framework.
+See [ASYNC.md](ASYNC.md) for the full async programming guide, [TASKS.md](TASKS.md) for the TaskPool guide, [THREADS.md](THREADS.md) for the complete threads and continuations guide, [MULTITHREADING.md](MULTITHREADING.md) for OO synchronization wrappers, [CONCURRENT.md](CONCURRENT.md) for thread-safe containers, [GENERATORS.md](GENERATORS.md) for generators and lazy sequences, [FSTRINGS.md](FSTRINGS.md) for interpolated strings, [NETWORKING.md](NETWORKING.md) for TCP/HTTP networking, [FILESYS.md](FILESYS.md) for filesystem operations, [LISTS.md](LISTS.md)/[VECTORS.md](VECTORS.md) for collection methods, [BINARY.md](BINARY.md) for Cap'n Proto binary serialization, [GRAMMARS.md](GRAMMARS.md) for runtime parser generation, [AMB.md](AMB.md) for nondeterministic choice, [PROLOG.md](PROLOG.md) for logic programming, [RETE.md](RETE.md) for forward-chaining rules, and [TESTS.md](TESTS.md) for the built-in test framework.
 
 ## Binary serialization
 
@@ -1020,6 +1021,34 @@ Logic variables use `?` prefix (`?x`, `?name`). `===` is the unification operato
 
 See [PROLOG.md](PROLOG.md) for the full guide including facts, rules, recursive relations, and the runtime API.
 
+## Forward-chaining rules (Rete)
+
+`whenever` defines rules that fire automatically when matching facts are asserted — the complement to backward-chaining queries:
+
+```
+// Single condition: fires on every new parent fact
+whenever parent(?x, ?y) {
+    display(f"{?x} is parent of {?y}");
+    newline();
+}
+
+// Multi-condition join: fires when shared variable ?y matches across facts
+whenever parent(?x, ?y), parent(?y, ?z) {
+    display(f"{?x} is grandparent of {?z}");
+    newline();
+}
+
+fact parent("tom", "bob");     // fires rule 1
+fact parent("bob", "ann");     // fires rule 1 AND rule 2 (join on ?y="bob")
+// => tom is parent of bob
+// => bob is parent of ann
+// => tom is grandparent of ann
+```
+
+Supports constant filtering (`whenever parent("tom", ?child) { ... }`), three+ condition joins, late rule activation (rules added after facts), and chaining (rule actions that assert new facts trigger further rules).
+
+See [RETE.md](RETE.md) for the full guide including the Rete algorithm, joins, chaining, and management functions.
+
 ## Scheme-to-Eval transpiler
 
 The included `scm2eval` tool converts Scheme source files to Eval syntax:
@@ -1060,6 +1089,8 @@ eval tests/eval/test_green_threads.eval
 eval tests/eval/test_pool.eval
 eval tests/eval/test_taskpool.eval
 eval tests/eval/test_logic.eval
+eval tests/eval/test_amb.eval
+eval tests/eval/test_rete.eval
 ```
 
 ## Testing

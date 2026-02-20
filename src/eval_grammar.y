@@ -54,7 +54,7 @@
 /* Additional keyword tokens recognized by the lexer.
    Declaring them here makes lemon generate their TOK_ defines. */
 %token LIBRARY EXPORT INCLUDE MACRO SYNTAX_RULES OPVAL TEST_GROUP DEFINE IN DICT WITH ASYNC AWAIT STATIC ABSTRACT YIELD GENERATOR RAW_STRING PARALLEL FSTR_START FSTR_MID FSTR_END.
-%token LOGICVAR COLONMINUS FRESH CONDE RUN FACT RULE QUERY FINDALL.
+%token LOGICVAR COLONMINUS FRESH CONDE RUN FACT RULE QUERY FINDALL WHENEVER.
 
 /* Non-terminal types - all are sexp */
 %type program { sexp }
@@ -87,6 +87,10 @@
 %type logic_var_list { sexp }
 %type conde_clauses { sexp }
 %type rule_body { sexp }
+%type whenever_patterns { sexp }
+%type whenever_pattern { sexp }
+%type whenever_args { sexp }
+%type whenever_arg { sexp }
 
 /* ===== PROGRAM ===== */
 
@@ -265,6 +269,7 @@ member_name(A) ::= CONDE(T).   { A = T; }
 member_name(A) ::= RUN(T).     { A = T; }
 member_name(A) ::= FACT(T).    { A = T; }
 member_name(A) ::= RULE(T).    { A = T; }
+member_name(A) ::= WHENEVER(T). { A = T; }
 
 /* --- Postfix: indexing expr[i] --- */
 expr(A) ::= expr(E) LBRACKET expr(I) RBRACKET. {
@@ -780,6 +785,65 @@ conde_clauses(A) ::= conde_clauses(L) COMMA LBRACE logic_goals(G) RBRACE. {
 rule_body(A) ::= expr(E). [ARGLIST_PREC] { A = sexp_list1(ctx, E); }
 rule_body(A) ::= rule_body(L) COMMA expr(E). [ARGLIST_PREC] {
     A = ps_append(ctx, L, E);
+}
+
+/* ===== FORWARD CHAINING (RETE) ===== */
+
+/* whenever pattern, pattern, ... { body } */
+stmt(A) ::= WHENEVER whenever_patterns(P) LBRACE stmt_list(S) RBRACE. {
+    A = ps_make_whenever(ctx, P, S);
+}
+stmt(A) ::= WHENEVER whenever_patterns(P) LBRACE stmt_list(S) expr(E) RBRACE. {
+    A = ps_make_whenever(ctx, P, ps_sexp_begin(ctx, S, E));
+}
+stmt(A) ::= WHENEVER whenever_patterns(P) LBRACE expr(E) RBRACE. {
+    A = ps_make_whenever(ctx, P, E);
+}
+
+/* Pattern list: parent(?x, ?y), parent(?y, ?z) */
+whenever_patterns(A) ::= whenever_pattern(P). {
+    A = sexp_list1(ctx, P);
+}
+whenever_patterns(A) ::= whenever_patterns(L) COMMA whenever_pattern(P). {
+    A = ps_append(ctx, L, P);
+}
+
+/* Single pattern: relation(?x, "const", ?y) */
+whenever_pattern(A) ::= IDENT(N) LPAREN whenever_args(Args) RPAREN. {
+    A = sexp_cons(ctx, ps_make_ident(ctx, N.start, N.length), Args);
+}
+
+/* Pattern arguments: mix of ?vars and constant exprs */
+whenever_args(A) ::= whenever_arg(E). {
+    A = sexp_list1(ctx, E);
+}
+whenever_args(A) ::= whenever_args(L) COMMA whenever_arg(E). {
+    A = ps_append(ctx, L, E);
+}
+
+whenever_arg(A) ::= LOGICVAR(V). {
+    A = ps_make_rete_var(ctx, V.start + 1, V.length - 1);
+}
+whenever_arg(A) ::= STRING(V). {
+    A = ps_make_string(ctx, V.start, V.length);
+}
+whenever_arg(A) ::= RAW_STRING(V). {
+    A = sexp_c_string(ctx, V.start, V.length);
+}
+whenever_arg(A) ::= INT(V). {
+    A = sexp_make_fixnum(V.value.int_val);
+}
+whenever_arg(A) ::= FLOAT(V). {
+    A = sexp_make_flonum(ctx, V.value.float_val);
+}
+whenever_arg(A) ::= TRUE. {
+    A = SEXP_TRUE;
+}
+whenever_arg(A) ::= FALSE. {
+    A = SEXP_FALSE;
+}
+whenever_arg(A) ::= IDENT(N). {
+    A = ps_make_ident(ctx, N.start, N.length);
 }
 
 

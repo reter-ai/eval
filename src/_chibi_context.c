@@ -258,6 +258,12 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
         register_concurrent_bridge_functions(self->ctx, self->env);
     }
 
+    /* Register Rete forward-chaining bridge functions */
+    {
+        extern void register_rete_bridge_functions(sexp ctx, sexp env);
+        register_rete_bridge_functions(self->ctx, self->env);
+    }
+
     /* Import (scheme base) via the meta-environment — this adds:
      * error-object?, error-object-message, square, boolean=?, symbol=?,
      * string-map, string-for-each, vector-map, vector-for-each,

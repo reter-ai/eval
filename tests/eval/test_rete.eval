@@ -1,0 +1,114 @@
+test_begin("Rete Forward Chaining");
+
+// === Phase 1: Single-condition rules ===
+
+// Basic forward rule fires on fact assertion
+define log1 = [];
+whenever parent(?x, ?y) {
+    log1 = cons([?x, ?y], log1);
+}
+fact parent("tom", "bob");
+fact parent("bob", "ann");
+test("single-cond fires", 2, length(log1));
+test("first match", ["bob", "ann"], car(log1));
+test("second match", ["tom", "bob"], car(cdr(log1)));
+
+// Multiple rules on same relation
+define count1 = 0;
+define count2 = 0;
+whenever likes(?a, ?b) {
+    count1 = count1 + 1;
+}
+whenever likes(?x, ?y) {
+    count2 = count2 + 1;
+}
+fact likes("alice", "bob");
+fact likes("bob", "carol");
+test("multi-rule fires", 2, count1);
+test("multi-rule both fire", 2, count2);
+
+// === Constant filtering ===
+
+define tom_kids = [];
+whenever parent2("tom", ?child) {
+    tom_kids = cons(?child, tom_kids);
+}
+fact parent2("tom", "bob");
+fact parent2("bob", "ann");   // should NOT fire (not tom)
+fact parent2("tom", "sue");
+test("const filter count", 2, length(tom_kids));
+test("const filter values", ["sue", "bob"], tom_kids);
+
+// === Phase 2: Multi-condition rules (beta joins) ===
+
+define gp = [];
+whenever ancestor(?x, ?y), ancestor(?y, ?z) {
+    gp = cons([?x, ?z], gp);
+}
+fact ancestor("tom", "bob");
+fact ancestor("bob", "ann");
+test("join fires", 1, length(gp));
+test("join values", ["tom", "ann"], car(gp));
+
+// Three conditions
+define chain3 = [];
+whenever link(?a, ?b), link(?b, ?c), link(?c, ?d) {
+    chain3 = cons([?a, ?d], chain3);
+}
+fact link("a", "b");
+fact link("b", "c");
+fact link("c", "d");
+test("3-cond join", 1, length(chain3));
+test("3-cond values", ["a", "d"], car(chain3));
+
+// Join with constants in one pattern
+define mixed = [];
+whenever rel("start", ?x), rel(?x, ?end) {
+    mixed = cons(?end, mixed);
+}
+fact rel("start", "mid");
+fact rel("mid", "goal");
+test("mixed const+join", 1, length(mixed));
+test("mixed value", "goal", car(mixed));
+
+// === Rule added after facts ===
+
+fact early("a", "b");
+fact early("b", "c");
+define late_log = [];
+whenever early(?x, ?y), early(?y, ?z) {
+    late_log = cons([?x, ?z], late_log);
+}
+test("late rule fires on existing facts", 1, length(late_log));
+
+// === Chaining: rule fires assert new fact, triggers more rules ===
+
+define chain_log = [];
+whenever step1(?x) {
+    // Use direct assertion (not `fact` statement) to avoid define-in-lambda
+    logic_assert_fact('step2, ?x);
+}
+whenever step2(?x) {
+    chain_log = cons(?x, chain_log);
+}
+fact step1("hello");
+test("chain fires", 1, length(chain_log));
+test("chain value", "hello", car(chain_log));
+
+// === Coexistence with backward-chaining ===
+
+fact person("alice", 30);
+fact person("bob", 25);
+fact person("carol", 35);
+
+test("backward still works", ["alice", "bob", "carol"],
+     run(*, ?q) { fresh(?age) { person(?q, ?age) } });
+
+// === Rule count ===
+test("rule count > 0", true, __rete_rule_count__() > 0);
+
+// === Reset ===
+__rete_reset__();
+test("reset clears rules", 0, __rete_rule_count__());
+
+test_end();

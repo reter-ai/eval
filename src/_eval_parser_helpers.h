@@ -166,6 +166,10 @@ sexp ps_fstr_build(sexp ctx, const char *s_start, int s_len,
                    const char *e_start, int e_len);
 sexp ps_fstr_mid(sexp ctx, sexp list, const char *m_start, int m_len, sexp expr);
 
+/* Rete (forward-chaining) helpers */
+sexp ps_make_rete_var(sexp ctx, const char *name, int len);
+sexp ps_make_whenever(sexp ctx, sexp patterns, sexp body);
+
 /* Logic programming helpers */
 sexp ps_make_fresh(sexp ctx, sexp vars, sexp goals);
 sexp ps_make_run(sexp ctx, sexp n, const char *qname, int qlen, sexp goals);

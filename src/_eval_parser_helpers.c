@@ -1682,6 +1682,105 @@ sexp ps_make_logic_guard(sexp ctx, sexp expr) {
     return sexp_list2(ctx, ps_intern(ctx, "logic_guard"), thunk);
 }
 
+/* ===== Rete (forward-chaining) helpers ===== */
+
+/* Tag a pattern variable: ?x -> '__var_x (a quoted symbol) */
+sexp ps_make_rete_var(sexp ctx, const char *name, int len) {
+    char buf[256];
+    snprintf(buf, sizeof(buf), "__var_%.*s", len, name);
+    return sexp_intern(ctx, buf, -1);
+}
+
+/* Collect unique variable names from patterns.
+ * Each pattern is (relation arg1 arg2 ...) where args may be __var_X symbols.
+ * Returns a list of plain variable name symbols (x, y, z) in discovery order. */
+static sexp rete_collect_vars(sexp ctx, sexp patterns) {
+    sexp result = SEXP_NULL;
+    for (sexp p = patterns; sexp_pairp(p); p = sexp_cdr(p)) {
+        sexp pattern = sexp_car(p);
+        /* skip relation name */
+        for (sexp a = sexp_cdr(pattern); sexp_pairp(a); a = sexp_cdr(a)) {
+            sexp arg = sexp_car(a);
+            if (sexp_symbolp(arg)) {
+                const char *s = sexp_string_data(sexp_symbol_to_string(ctx, arg));
+                if (strncmp(s, "__var_", 6) == 0) {
+                    const char *vname = s + 6;
+                    sexp vsym = sexp_intern(ctx, vname, -1);
+                    /* Check uniqueness */
+                    int found = 0;
+                    for (sexp r = result; sexp_pairp(r); r = sexp_cdr(r)) {
+                        if (sexp_car(r) == vsym) { found = 1; break; }
+                    }
+                    if (!found) {
+                        if (result == SEXP_NULL)
+                            result = sexp_list1(ctx, vsym);
+                        else
+                            result = ps_append(ctx, result, vsym);
+                    }
+                }
+            }
+        }
+    }
+    return result;
+}
+
+/* Build the __rete_add_rule__ call from patterns + body.
+ *
+ * whenever parent(?x, ?y), parent(?y, ?z) { body }
+ * ->
+ * (__rete_add_rule__
+ *   (list (list 'parent '__var_x '__var_y) (list 'parent '__var_y '__var_z))
+ *   '(x y z)
+ *   (lambda (x y z) body))
+ */
+sexp ps_make_whenever(sexp ctx, sexp patterns, sexp body) {
+    /* 1. Collect unique variable names */
+    sexp var_names = rete_collect_vars(ctx, patterns);
+
+    /* 2. Build conditions list expression:
+     *    (list (list 'relation '__var_x ...) ...) */
+    sexp conds_elems = SEXP_NULL;
+    for (sexp p = patterns; sexp_pairp(p); p = sexp_cdr(p)) {
+        sexp pattern = sexp_car(p);  /* (relation arg1 arg2 ...) */
+        /* Build (list 'relation arg1 arg2 ...) */
+        sexp elems = SEXP_NULL;
+        for (sexp a = pattern; sexp_pairp(a); a = sexp_cdr(a)) {
+            sexp arg = sexp_car(a);
+            sexp quoted;
+            if (sexp_symbolp(arg)) {
+                /* Quote the symbol */
+                quoted = sexp_list2(ctx, ps_intern(ctx, "quote"), arg);
+            } else {
+                /* Constant expression: evaluate at rule-add time */
+                quoted = arg;
+            }
+            if (elems == SEXP_NULL)
+                elems = sexp_list1(ctx, quoted);
+            else
+                elems = ps_append(ctx, elems, quoted);
+        }
+        sexp list_call = sexp_cons(ctx, ps_intern(ctx, "list"), elems);
+
+        if (conds_elems == SEXP_NULL)
+            conds_elems = sexp_list1(ctx, list_call);
+        else
+            conds_elems = ps_append(ctx, conds_elems, list_call);
+    }
+    sexp conds_list = sexp_cons(ctx, ps_intern(ctx, "list"), conds_elems);
+
+    /* 3. Build var_names quoted list: '(x y z) */
+    sexp var_names_quoted = sexp_list2(ctx, ps_intern(ctx, "quote"), var_names);
+
+    /* 4. Build lambda: (lambda (x y z) body) */
+    sexp lam = sexp_list3(ctx, ps_intern(ctx, "lambda"), var_names, body);
+
+    /* 5. Return: (__rete_add_rule__ conditions var-names lambda) */
+    return sexp_cons(ctx, ps_intern(ctx, "__rete_add_rule__"),
+               sexp_cons(ctx, conds_list,
+                   sexp_cons(ctx, var_names_quoted,
+                       sexp_cons(ctx, lam, SEXP_NULL))));
+}
+
 /* ===== Lemon parser wrapper ===== */
 
 sexp eval_parse(sexp ctx, sexp env, const char *source,

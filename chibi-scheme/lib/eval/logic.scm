@@ -156,7 +156,9 @@
 (define (logic_assert_fact name . args)
   (let ((existing (__logic_db_ref__ name)))
     (__logic_db_set!__ name
-      (append existing (list (cons 'fact args))))))
+      (append existing (list (cons 'fact args)))))
+  ;; Propagate through Rete forward-chaining network
+  (__rete_propagate__ name args))
 
 (define (logic_assert_rule name arity body-fn)
   (let ((existing (__logic_db_ref__ name)))

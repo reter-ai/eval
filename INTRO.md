@@ -2101,7 +2101,61 @@ run(*, ?q) { ancestor(?q, "ann") };    // => ["bob", "tom"]
 
 `run(n, ?q)` finds `n` solutions (`*` for all). Goals separated by commas are conjunctive (all must hold). `conde` clauses are disjunctive (any may hold). The search uses fair interleaving.
 
-See [PROLOG.md](PROLOG.md) for the full guide.
+Forward-chaining rules fire automatically when matching facts are asserted:
+
+```
+whenever parent(?x, ?y) {
+    display(f"{?x} is parent of {?y}");
+    newline();
+}
+
+// Multi-condition join
+whenever parent(?x, ?y), parent(?y, ?z) {
+    display(f"grandparent: {?x} -> {?z}");
+    newline();
+}
+
+fact parent("tom", "bob");     // fires rule 1
+fact parent("bob", "ann");     // fires both rules (join on ?y)
+```
+
+See [PROLOG.md](PROLOG.md) for the backward-chaining guide and [RETE.md](RETE.md) for the forward-chaining guide.
+
+## Nondeterministic Choice (amb)
+
+`amb` picks from a set of alternatives and backtracks automatically when a constraint fails. It is implemented as a macro, so alternatives are lazily evaluated:
+
+```
+// Choose and constrain
+define x = amb(1, 2, 3, 4, 5);
+require(x > 3);
+x;    // => 4
+
+// Multiple choice points — full combinatorial search
+define a = amb(1, 2, 3);
+define b = amb(1, 2, 3);
+require(a + b == 4);
+[a, b];    // => [1, 3]
+
+// Fail (no choices)
+amb();    // ERROR: "amb: no more choices"
+
+// Collect all solutions
+amb_collect(function() {
+    define x = amb(1, 2, 3);
+    define y = amb(1, 2, 3);
+    require(x + y == 4);
+    [x, y];
+});
+// => [[1, 3], [2, 2], [3, 1]]
+
+// Lazy — untried branches never execute
+amb(1, error("boom"));    // => 1
+```
+
+`require(pred)` fails if `pred` is false, triggering backtracking. `amb_collect(thunk)` calls a zero-argument function repeatedly, collecting all successful return values.
+
+See [AMB.md](AMB.md) for the full guide including examples and comparison with logic programming.
 
 ## Continuation Serialization
 
@@ -2221,4 +2275,6 @@ See [NETWORKING.md](NETWORKING.md) for the full networking guide including low-l
 - [TESTS.md](TESTS.md) — Built-in test framework: test, test_assert, test_error, test_group
 - [BINARY.md](BINARY.md) — Cap'n Proto binary serialization: Schema, build, read, save, mmap, RAII cleanup
 - [GRAMMARS.md](GRAMMARS.md) — Grammar JIT: runtime parser generation from Lark EBNF
+- [AMB.md](AMB.md) — Nondeterministic choice: amb, require, amb_collect, backtracking search
 - [PROLOG.md](PROLOG.md) — Logic programming: facts, rules, unification, run, fresh, conde
+- [RETE.md](RETE.md) — Forward-chaining rules: whenever, Rete algorithm, joins, chaining

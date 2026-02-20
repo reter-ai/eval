@@ -1436,6 +1436,10 @@ static EVAL_THREAD_FUNC worker_main(void *arg) {
         extern void register_concurrent_bridge_functions(sexp ctx, sexp env);
         register_concurrent_bridge_functions(ctx, env);
     }
+    {
+        extern void register_rete_bridge_functions(sexp ctx, sexp env);
+        register_rete_bridge_functions(ctx, env);
+    }
 
     /* 5. Load scheme extras, test framework */
     sexp_load_module_file(ctx, "scheme/extras.scm", env);

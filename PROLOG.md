@@ -424,6 +424,8 @@ filter(function(x) x > 3, candidates);
 
 ## See Also
 
+- [RETE.md](RETE.md) — Forward-chaining rules: `whenever`, Rete algorithm, joins, chaining
+- [AMB.md](AMB.md) — Nondeterministic choice: amb, require, backtracking search
 - [INTRO.md](INTRO.md) — Complete language reference
 - [README.md](README.md) — Project overview and quick start
 - [TESTS.md](TESTS.md) — Built-in test framework

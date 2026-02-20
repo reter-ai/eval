@@ -146,6 +146,7 @@ static const Keyword keywords[] = {
     {"run",         TOK_RUN},
     {"fact",        TOK_FACT},
     {"rule",        TOK_RULE},
+    {"whenever",    TOK_WHENEVER},
     {"true",        TOK_TRUE},
     {"false",       TOK_FALSE},
     {"nil",         TOK_NIL},

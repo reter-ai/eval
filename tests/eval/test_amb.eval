@@ -1,0 +1,98 @@
+test_begin("amb");
+
+// amb_collect — all solutions for sum constraint
+test("collect sum", [[1, 3], [2, 2], [3, 1]],
+    amb_collect(function() {
+        define x = amb(1, 2, 3);
+        define y = amb(1, 2, 3);
+        require(x + y == 4);
+        [x, y];
+    }));
+
+// Single alternative
+test("single", [42], amb_collect(function() amb(42)));
+
+// Backtracking with require
+test("require filter", [2, 3],
+    amb_collect(function() {
+        define x = amb(1, 2, 3);
+        require(x > 1);
+        x;
+    }));
+
+// amb() failure
+test_error("amb fail", function() amb());
+
+// No solutions
+test("no solutions", [],
+    amb_collect(function() {
+        define x = amb(1, 2, 3);
+        require(x > 10);
+        x;
+    }));
+
+// Even numbers
+test("even", [2, 4],
+    amb_collect(function() {
+        define x = amb(1, 2, 3, 4, 5);
+        require(x % 2 == 0);
+        x;
+    }));
+
+// Permutations of [1,2,3]
+test("permutations", 6,
+    length(amb_collect(function() {
+        define a = amb(1, 2, 3);
+        define b = amb(1, 2, 3);
+        define c = amb(1, 2, 3);
+        require(a != b);
+        require(b != c);
+        require(a != c);
+        [a, b, c];
+    })));
+
+// Boolean SAT
+test("sat", [true, true, false],
+    amb_collect(function() {
+        define a = amb(true, false);
+        define b = amb(true, false);
+        define c = amb(true, false);
+        require(a || b);
+        require(b || c);
+        require(!a || !c);
+        [a, b, c];
+    })->first);
+
+// Nested backtracking — strictly increasing
+test("increasing", [1, 2, 3],
+    amb_collect(function() {
+        define a = amb(1, 2, 3);
+        define b = amb(1, 2, 3);
+        define c = amb(1, 2, 3);
+        require(a < b);
+        require(b < c);
+        [a, b, c];
+    })->first);
+
+// Pythagorean triple
+test("pythag", [3, 4, 5],
+    amb_collect(function() {
+        define a = amb(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+        define b = amb(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+        define c = amb(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+        require(a <= b);
+        require(b <= c);
+        require(a * a + b * b == c * c);
+        [a, b, c];
+    })->first);
+
+// Laziness — second branch only evaluated when first fails
+// (amb is a macro, so untried branches don't execute)
+test("lazy", [1],
+    amb_collect(function() {
+        define x = amb(1, 2, 3);
+        require(x == 1);
+        x;
+    }));
+
+define failures = test_end();
