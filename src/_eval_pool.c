@@ -1260,6 +1260,10 @@ void eval_standard_aliases(sexp ctx, sexp env) {
     sexp_load_module_file(ctx, "eval/logic.scm", env);
     env = sexp_context_env(ctx);
 
+    /* Amb: nondeterministic choice with backtracking */
+    sexp_load_module_file(ctx, "eval/amb.scm", env);
+    env = sexp_context_env(ctx);
+
     /* OO string methods: "hello"->upper(), etc. */
     sexp_load_module_file(ctx, "eval/string-oo.scm", env);
     env = sexp_context_env(ctx);

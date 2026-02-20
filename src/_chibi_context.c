@@ -342,6 +342,10 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
     sexp_load_module_file(self->ctx, "eval/logic.scm", self->env);
     self->env = sexp_context_env(self->ctx);
 
+    /* Amb: nondeterministic choice with backtracking */
+    sexp_load_module_file(self->ctx, "eval/amb.scm", self->env);
+    self->env = sexp_context_env(self->ctx);
+
     /* Green-thread-aware channel-recv: retries with thread-yield! like
      * mutex-lock!.  Must come after threads.scm which defines thread-yield!.
      * Overrides the C opcode binding so user code gets the cooperative version. */
