@@ -424,6 +424,56 @@
   (__ad_batch_matmul__ a b))
 
 ;; ================================================================
+;; CNN operations -- Conv2D, MaxPool2D, AvgPool2D
+;; ================================================================
+
+;; Helper: normalize a parameter to (h w) pair
+;; If int, return (x x). If list, return as-is.
+(define (__cnn_pair__ x)
+  (if (pair? x) x (list x x)))
+
+;; conv2d(input, kernel)                         -- stride=1, pad=0, dilation=1
+;; conv2d(input, kernel, stride)                 -- square stride
+;; conv2d(input, kernel, stride, pad)            -- square stride and pad
+;; conv2d(input, kernel, stride, pad, dilation)  -- full control
+;; Each of stride/pad/dilation can be int (square) or list (h w)
+(define (conv2d input kernel . args)
+  (let* ((stride (if (null? args) '(1 1) (__cnn_pair__ (car args))))
+         (pad    (if (or (null? args) (null? (cdr args))) '(0 0)
+                     (__cnn_pair__ (cadr args))))
+         (dil    (if (or (null? args) (null? (cdr args)) (null? (cddr args))) '(1 1)
+                     (__cnn_pair__ (caddr args)))))
+    (__ad_conv2d__ input kernel
+      (list (car stride) (cadr stride)
+            (car pad) (cadr pad)
+            (car dil) (cadr dil)))))
+
+;; max_pool2d(input, ksize)              -- stride=ksize, pad=0
+;; max_pool2d(input, ksize, stride)      -- custom stride
+;; max_pool2d(input, ksize, stride, pad) -- full control
+;; ksize/stride/pad can be int (square) or list (h w)
+(define (max_pool2d input ksize . args)
+  (let* ((ks     (__cnn_pair__ ksize))
+         (stride (if (null? args) ks (__cnn_pair__ (car args))))
+         (pad    (if (or (null? args) (null? (cdr args))) '(0 0)
+                     (__cnn_pair__ (cadr args)))))
+    (__ad_max_pool2d__ input
+      (list (car ks) (cadr ks)
+            (car stride) (cadr stride)
+            (car pad) (cadr pad)))))
+
+;; avg_pool2d -- same signature as max_pool2d
+(define (avg_pool2d input ksize . args)
+  (let* ((ks     (__cnn_pair__ ksize))
+         (stride (if (null? args) ks (__cnn_pair__ (car args))))
+         (pad    (if (or (null? args) (null? (cdr args))) '(0 0)
+                     (__cnn_pair__ (cadr args)))))
+    (__ad_avg_pool2d__ input
+      (list (car ks) (cadr ks)
+            (car stride) (cadr stride)
+            (car pad) (cadr pad)))))
+
+;; ================================================================
 ;; abs — override for AD support
 ;; ================================================================
 (define __prim_abs__ abs)

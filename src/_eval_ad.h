@@ -26,7 +26,10 @@ typedef enum {
     AD_OP_GATHER,         /* 29 — index into tensor along axis (embeddings) */
     AD_OP_LAYER_NORM,     /* 30 — fused layer normalization */
     AD_OP_WHERE,          /* 31 — conditional select (masking) */
-    AD_OP_BATCH_MATMUL    /* 32 — 3D+ batched matrix multiply */
+    AD_OP_BATCH_MATMUL,   /* 32 — 3D+ batched matrix multiply */
+    AD_OP_CONV2D,         /* 33 — 2D convolution (NCHW, im2col+GEMM) */
+    AD_OP_MAX_POOL2D,     /* 34 — 2D max pooling (NCHW) */
+    AD_OP_AVG_POOL2D      /* 35 — 2D average pooling (NCHW) */
 } ADOpKind;
 
 /* ================================================================

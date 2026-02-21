@@ -86,6 +86,12 @@ x->grad           // => [[0.3], [0.6]]
 | `layer_norm(x, gamma, beta)` | Layer normalization (optional epsilon) |
 | `where(cond, a, b)` | Conditional element-wise select |
 | `batch_matmul(a, b)` | Batched matrix multiply (3D+) |
+| `conv2d(input, kernel)` | 2D convolution, NCHW layout (im2col+GEMM) |
+| `conv2d(input, kernel, stride, pad, dilation)` | Conv2D with explicit parameters |
+| `max_pool2d(input, ksize)` | 2D max pooling, NCHW layout |
+| `max_pool2d(input, ksize, stride, pad)` | MaxPool2D with explicit parameters |
+| `avg_pool2d(input, ksize)` | 2D average pooling (count_include_pad=false) |
+| `avg_pool2d(input, ksize, stride, pad)` | AvgPool2D with explicit parameters |
 
 ### Tape Control
 | Function | Description |
@@ -158,6 +164,9 @@ Each tape entry maps to a TensorFlow graph node:
 | `layer_norm` | Native C fallback | Composed normalization |
 | `where` | `SelectV2` | With Cast(cond → bool) |
 | `batch_matmul` | `BatchMatMulV2` | 3D+ batched multiply |
+| `conv2d` | Native C fallback | NCHW im2col+GEMM |
+| `max_pool2d` | Native C fallback | NCHW max pooling |
+| `avg_pool2d` | Native C fallback | NCHW average pooling |
 
 Forward tensor ops (matmul, element-wise, transpose) also use TensorFlow Eager execution for GPU acceleration on tensors with 64+ elements. Smaller tensors use native C to avoid dispatch overhead.
 
@@ -482,6 +491,116 @@ display("W_proj grad shape: "); display(W_proj->shape); newline();
 display("W_proj grad: "); display(W_proj->grad); newline()
 ```
 
+### Conv2D, MaxPool2D, AvgPool2D
+
+Convolutional and pooling operations use **NCHW layout**: `[batch, channels, height, width]`. Convolution uses im2col + GEMM internally.
+
+**Signatures:**
+
+```
+conv2d(input, kernel)                         // stride=1, pad=0, dilation=1
+conv2d(input, kernel, stride)                 // square stride
+conv2d(input, kernel, stride, pad)            // square stride and pad
+conv2d(input, kernel, stride, pad, dilation)  // full control
+
+max_pool2d(input, ksize)                      // stride=ksize, pad=0
+max_pool2d(input, ksize, stride)              // custom stride
+max_pool2d(input, ksize, stride, pad)         // full control
+
+avg_pool2d(input, ksize)                      // same signature as max_pool2d
+avg_pool2d(input, ksize, stride, pad)
+```
+
+Each of `stride`, `pad`, `dilation`, and `ksize` can be an integer (square) or a `(h w)` list for asymmetric settings.
+
+**Input shapes:**
+- **input**: `[N, C_in, H, W]`
+- **kernel** (conv2d only): `[C_out, C_in, kH, kW]`
+
+**Output dimension formulas:**
+- Conv2D: `H_out = (H + 2*pad_h - dil_h*(kH-1) - 1) / stride_h + 1`
+- Pool2D: `H_out = (H + 2*pad_h - kH) / stride_h + 1`
+
+```
+// Conv2D: 1-batch, 1-channel 4x4 input, 1-filter 3x3 kernel
+tape_reset();
+param input = [[[[1.0, 2.0, 3.0, 4.0],
+                  [5.0, 6.0, 7.0, 8.0],
+                  [9.0, 10.0, 11.0, 12.0],
+                  [13.0, 14.0, 15.0, 16.0]]]];
+param kernel = [[[[1.0, 0.0, -1.0],
+                   [1.0, 0.0, -1.0],
+                   [1.0, 0.0, -1.0]]]];
+
+define out = conv2d(input, kernel);       // stride=1, pad=0, dilation=1
+display(out->shape);                      // (1 1 2 2)
+define loss = sum(out);
+backward(loss);
+display(kernel->grad);                    // gradient w.r.t. kernel
+
+// Padded convolution (same-size output)
+tape_reset();
+param I = [[[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]]];
+param K = [[[[1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0]]]];
+define out = conv2d(I, K, 1, 1);          // stride=1, pad=1 => 3x3 output
+display(out->shape);                      // (1 1 3 3) — same spatial size
+```
+
+```
+// MaxPool2D: 2x2 pool on 4x4
+tape_reset();
+param X = [[[[1.0, 2.0, 3.0, 4.0],
+              [5.0, 6.0, 7.0, 8.0],
+              [9.0, 10.0, 11.0, 12.0],
+              [13.0, 14.0, 15.0, 16.0]]]];
+define pooled = max_pool2d(X, 2);         // 2x2 window, stride=2
+display(pooled->data);                    // ((((6.0 8.0) (14.0 16.0))))
+define loss = sum(pooled);
+backward(loss);
+display(X->grad);                         // 1.0 at max positions, 0.0 elsewhere
+```
+
+```
+// AvgPool2D: 2x2 pool on 4x4
+tape_reset();
+param Y = [[[[1.0, 2.0, 3.0, 4.0],
+              [5.0, 6.0, 7.0, 8.0],
+              [9.0, 10.0, 11.0, 12.0],
+              [13.0, 14.0, 15.0, 16.0]]]];
+define avg = avg_pool2d(Y, 2);
+display(avg->data);                       // ((((3.5 5.5) (11.5 13.5))))
+define loss = sum(avg);
+backward(loss);
+display(Y->grad);                         // 0.25 everywhere (1/4 per window)
+```
+
+### CNN Pipeline: Conv, ReLU, Pool
+
+A conv-relu-pool pipeline with end-to-end gradient flow:
+
+```
+tape_reset();
+param inp = [[[[1.0, 2.0, 3.0, 4.0],
+                [5.0, 6.0, 7.0, 8.0],
+                [9.0, 10.0, 11.0, 12.0],
+                [13.0, 14.0, 15.0, 16.0]]]];
+param ker = [[[[1.0, 1.0, 1.0],
+                [1.0, 1.0, 1.0],
+                [1.0, 1.0, 1.0]]]];
+
+// conv -> relu -> max_pool
+define conv_out = conv2d(inp, ker);       // [1,1,2,2]
+define activated = relu(conv_out);        // ReLU activation
+define pooled = max_pool2d(activated, 2); // [1,1,1,1]
+
+display(pooled->data);                    // ((((99.0))))
+define loss = sum(pooled);
+backward(loss);
+display(ker->grad);                       // gradients flow through pool -> relu -> conv
+```
+
+Gradients propagate backward through the entire pipeline: max_pool selects the max position, relu gates the gradient, and conv2d distributes it to both the kernel and input via im2col/col2im.
+
 ### Recurrent Computation (Unrolled RNN)
 
 Manual unrolling of a simple RNN cell:
@@ -565,12 +684,11 @@ The AD tape is thread-local (`__declspec(thread)` on Windows, `__thread` on POSI
 
 Current limitations relative to full ML frameworks:
 
-- **No convolutions**: Conv2D, pooling, and other spatial ops are not available.
 - **CPU-only forward by default**: TFE eager ops provide GPU forward, but data round-trips through CPU memory (no persistent GPU tensors).
 - **Single-precision not supported**: All computation is float64 (double). No float32/float16 mode.
 - **No sparse ops**: Sparse matrix multiply, sparse embeddings, and sparse gradients are not supported.
 
-The 32 differentiable ops (arithmetic, activations, softmax, axis reductions, reshape, slice, concat, gather, layer norm, where, batch matmul) are sufficient for full transformer training including multi-head attention, embedding lookup, masked attention, and feed-forward networks with GELU/SiLU. Production CNN training requires convolution ops.
+The 35 differentiable ops (arithmetic, activations, softmax, axis reductions, reshape, slice, concat, gather, layer norm, where, batch matmul, conv2d, max_pool2d, avg_pool2d) are sufficient for full transformer and CNN training including multi-head attention, embedding lookup, masked attention, feed-forward networks with GELU/SiLU, and convolutional architectures (LeNet, ResNet, etc.).
 
 ## Files
 

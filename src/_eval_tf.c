@@ -453,6 +453,10 @@ static void tf_backward(ADTape *t, int from_idx) {
             /* Fall back to native — composing full layer norm in TF C API is fragile */
             graph_ok = 0;
             break;
+        } else if (e->op == AD_OP_CONV2D || e->op == AD_OP_MAX_POOL2D || e->op == AD_OP_AVG_POOL2D) {
+            /* Fall back to native — TF NCHW Conv2D is GPU-only; NHWC transposes are fragile */
+            graph_ok = 0;
+            break;
         } else if (e->op == AD_OP_WHERE) {
             /* SelectV2 with Cast(cond → bool) */
             TF_Output a1_out = outputs[e->arg1];

@@ -623,6 +623,10 @@ gather(embeddings, [1,3,2]);   // embedding lookup
 layer_norm(x, gamma, beta);   // layer normalization
 where(mask, a, b);            // conditional select
 batch_matmul(a, b);           // 3D+ batched matmul
+conv2d(input, kernel);        // 2D convolution (NCHW)
+conv2d(input, kernel, 1, 1);  // with stride=1, pad=1
+max_pool2d(x, 2);             // 2x2 max pooling
+avg_pool2d(x, 2);             // 2x2 average pooling
 
 // Tape control
 tape_reset();                 // clear tape

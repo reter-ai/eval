@@ -50,7 +50,7 @@ e.eval("""
 - **Logic programming** — miniKanren + Prolog-style: `fact`, `rule`, `run`, `fresh`, `conde`, `===` unification, interleaving search
 - **Forward-chaining rules** — Rete algorithm: `whenever` rules fire automatically when matching facts are asserted, with multi-condition joins and chaining
 - **Category theory** — Maybe/Either/Validation types, Writer/Reader/State monads, `|>` pipe, `>>=` bind, `<>` mappend, `mdo` do-notation, Traversable, lenses, Kleisli composition
-- **Differentiable programming** — forward-mode (dual numbers) and reverse-mode (tape-based) AD with 32 ops: arithmetic, activations (relu, sigmoid, gelu, silu), softmax, axis reductions, reshape, slice, concat, gather, layer norm, where, batch matmul — full transformer training with optional TensorFlow graph-mode GPU acceleration
+- **Differentiable programming** — forward-mode (dual numbers) and reverse-mode (tape-based) AD with 35 ops: arithmetic, activations (relu, sigmoid, gelu, silu), softmax, axis reductions, reshape, slice, concat, gather, layer norm, where, batch matmul, conv2d, max/avg pooling — full transformer and CNN training with optional TensorFlow graph-mode GPU acceleration
 - **Binary serialization** — Cap'n Proto zero-copy serialization with runtime schema parsing, wire-compatible with any language
 - **Scheme power** — access any chibi-scheme primitive via backtick identifiers
 
@@ -1082,11 +1082,15 @@ define attn = softmax(scores);                    // axis-aware, numerically sta
 define normed = layer_norm(input, gamma, beta);   // fused layer normalization
 define activated = gelu(projected);                // GELU activation
 define embedded = gather(embeddings, token_ids);   // differentiable embedding lookup
+
+// CNN building blocks
+define features = conv2d(input, kernel, 1, 1);    // stride=1, pad=1 (same)
+define pooled = max_pool2d(features, 2);           // 2x2 max pooling
 ```
 
-32 differentiable ops including arithmetic, activations (relu, sigmoid, gelu, silu), softmax, axis-aware sum/mean, reshape, slice, concat, gather, layer norm, where, and batch matmul. When TensorFlow's C library is available, the backward pass compiles to a TF computation graph for op fusion and GPU acceleration — fully transparent to user code.
+35 differentiable ops including arithmetic, activations (relu, sigmoid, gelu, silu), softmax, axis-aware sum/mean, reshape, slice, concat, gather, layer norm, where, batch matmul, conv2d, and max/avg pooling. When TensorFlow's C library is available, the backward pass compiles to a TF computation graph for op fusion and GPU acceleration — fully transparent to user code.
 
-See [DIFFERENTIAL.md](DIFFERENTIAL.md) for the full guide including examples (linear regression, MLP, transformer attention, YOLO detection head, RNN), the TF backend architecture, and the complete op reference.
+See [DIFFERENTIAL.md](DIFFERENTIAL.md) for the full guide including examples (linear regression, MLP, transformer attention, YOLO detection head, CNN, RNN), the TF backend architecture, and the complete op reference.
 
 ## Grammar JIT
 

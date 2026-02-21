@@ -87,6 +87,69 @@ static double *tensor_alloc(int size) {
 }
 
 /* ================================================================
+ * im2col / col2im — helpers for Conv2D
+ * ================================================================ */
+
+/* Unfold one batch element [C_in, H, W] into column matrix
+ * [C_in*kH*kW, H_out*W_out] for im2col+GEMM convolution. */
+static void ad_im2col(const double *input, double *col,
+                       int C_in, int H, int W,
+                       int kH, int kW, int H_out, int W_out,
+                       int stride_h, int stride_w,
+                       int pad_h, int pad_w,
+                       int dil_h, int dil_w) {
+    int col_rows = C_in * kH * kW;
+    int col_cols = H_out * W_out;
+    for (int c = 0; c < C_in; c++) {
+        for (int kh = 0; kh < kH; kh++) {
+            for (int kw = 0; kw < kW; kw++) {
+                int row = c * kH * kW + kh * kW + kw;
+                for (int oh = 0; oh < H_out; oh++) {
+                    for (int ow = 0; ow < W_out; ow++) {
+                        int ih = oh * stride_h + kh * dil_h - pad_h;
+                        int iw = ow * stride_w + kw * dil_w - pad_w;
+                        int col_idx = row * col_cols + oh * W_out + ow;
+                        if (ih >= 0 && ih < H && iw >= 0 && iw < W)
+                            col[col_idx] = input[c * H * W + ih * W + iw];
+                        else
+                            col[col_idx] = 0.0;
+                    }
+                }
+            }
+        }
+    }
+    (void)col_rows;
+}
+
+/* Inverse scatter-add from [C_in*kH*kW, H_out*W_out] back to
+ * [C_in, H, W] gradient. Same loop as im2col but accumulates. */
+static void ad_col2im(const double *col, double *d_input,
+                       int C_in, int H, int W,
+                       int kH, int kW, int H_out, int W_out,
+                       int stride_h, int stride_w,
+                       int pad_h, int pad_w,
+                       int dil_h, int dil_w) {
+    int col_cols = H_out * W_out;
+    for (int c = 0; c < C_in; c++) {
+        for (int kh = 0; kh < kH; kh++) {
+            for (int kw = 0; kw < kW; kw++) {
+                int row = c * kH * kW + kh * kW + kw;
+                for (int oh = 0; oh < H_out; oh++) {
+                    for (int ow = 0; ow < W_out; ow++) {
+                        int ih = oh * stride_h + kh * dil_h - pad_h;
+                        int iw = ow * stride_w + kw * dil_w - pad_w;
+                        if (ih >= 0 && ih < H && iw >= 0 && iw < W) {
+                            int col_idx = row * col_cols + oh * W_out + ow;
+                            d_input[c * H * W + ih * W + iw] += col[col_idx];
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* ================================================================
  * Dispatch table — defaults to native C, replaced by TF if available
  * ================================================================ */
 
@@ -750,6 +813,139 @@ void ad_native_backward(ADTape *t, int from_idx) {
                         ad_tensor_ops.matmul(at, g_slice, db, kk, m, n2);
                         for (int j = 0; j < kk * n2; j++) eb->tgrad[b * kk * n2 + j] += db[j];
                         free(at); free(db);
+                    }
+                }
+                break;
+            }
+            case AD_OP_CONV2D: {
+                /* Backward for Conv2D: dinput via col2im, dkernel via matmul */
+                if (a0 < 0 || a1 < 0) break;
+                TapeEntry *inp_e = &t->entries[a0];
+                TapeEntry *ker_e = &t->entries[a1];
+                int N = inp_e->shape[0], C_in = inp_e->shape[1];
+                int H = inp_e->shape[2], W = inp_e->shape[3];
+                int C_out = ker_e->shape[0];
+                int kH = ker_e->shape[2], kW = ker_e->shape[3];
+                int stride_h = cur->aux[0], stride_w = cur->aux[1];
+                int pad_h = cur->aux[2], pad_w = cur->aux[3];
+                int dil_h = cur->aux[4], dil_w = cur->aux[5];
+                int H_out = (H + 2 * pad_h - dil_h * (kH - 1) - 1) / stride_h + 1;
+                int W_out = (W + 2 * pad_w - dil_w * (kW - 1) - 1) / stride_w + 1;
+                int col_rows = C_in * kH * kW;
+                int col_cols = H_out * W_out;
+                int inp_spatial = C_in * H * W;
+                int out_spatial = C_out * H_out * W_out;
+                for (int nn = 0; nn < N; nn++) {
+                    const double *g_n = g + nn * out_spatial;
+                    /* Recompute im2col for this batch element */
+                    double *col = tensor_alloc(col_rows * col_cols);
+                    ad_im2col(inp_e->tdata + nn * inp_spatial, col,
+                              C_in, H, W, kH, kW, H_out, W_out,
+                              stride_h, stride_w, pad_h, pad_w, dil_h, dil_w);
+                    /* dkernel += g_n @ col^T */
+                    if (ker_e->tgrad) {
+                        double *col_T = tensor_alloc(col_cols * col_rows);
+                        ad_tensor_ops.transpose(col, col_T, col_rows, col_cols);
+                        double *dk = tensor_alloc(C_out * col_rows);
+                        ad_tensor_ops.matmul(g_n, col_T, dk, C_out, col_cols, col_rows);
+                        for (int j = 0; j < C_out * col_rows; j++)
+                            ker_e->tgrad[j] += dk[j];
+                        free(col_T); free(dk);
+                    }
+                    /* dinput: dcol = kernel^T @ g_n, then col2im */
+                    if (inp_e->tgrad) {
+                        double *ker_T = tensor_alloc(col_rows * C_out);
+                        ad_tensor_ops.transpose(ker_e->tdata, ker_T, C_out, col_rows);
+                        double *dcol = tensor_alloc(col_rows * col_cols);
+                        ad_tensor_ops.matmul(ker_T, g_n, dcol, col_rows, C_out, col_cols);
+                        ad_col2im(dcol, inp_e->tgrad + nn * inp_spatial,
+                                  C_in, H, W, kH, kW, H_out, W_out,
+                                  stride_h, stride_w, pad_h, pad_w, dil_h, dil_w);
+                        free(ker_T); free(dcol);
+                    }
+                    free(col);
+                }
+                break;
+            }
+            case AD_OP_MAX_POOL2D: {
+                /* Backward: route gradient to argmax positions */
+                if (a0 < 0) break;
+                TapeEntry *inp_e = &t->entries[a0];
+                int N = inp_e->shape[0], C = inp_e->shape[1];
+                int H = inp_e->shape[2], W = inp_e->shape[3];
+                int kH = cur->aux[0], kW = cur->aux[1];
+                int stride_h = cur->aux[2], stride_w = cur->aux[3];
+                int pad_h = cur->aux[4], pad_w = cur->aux[5];
+                int H_out = (H + 2 * pad_h - kH) / stride_h + 1;
+                int W_out = (W + 2 * pad_w - kW) / stride_w + 1;
+                if (!inp_e->tgrad) break;
+                for (int nn = 0; nn < N; nn++) {
+                    for (int c = 0; c < C; c++) {
+                        for (int oh = 0; oh < H_out; oh++) {
+                            for (int ow = 0; ow < W_out; ow++) {
+                                /* Recompute argmax */
+                                double best = -1e308;
+                                int best_ih = 0, best_iw = 0;
+                                for (int kh = 0; kh < kH; kh++) {
+                                    for (int kw = 0; kw < kW; kw++) {
+                                        int ih = oh * stride_h + kh - pad_h;
+                                        int iw = ow * stride_w + kw - pad_w;
+                                        if (ih >= 0 && ih < H && iw >= 0 && iw < W) {
+                                            double v = inp_e->tdata[((nn * C + c) * H + ih) * W + iw];
+                                            if (v > best) {
+                                                best = v;
+                                                best_ih = ih;
+                                                best_iw = iw;
+                                            }
+                                        }
+                                    }
+                                }
+                                int g_idx = ((nn * C + c) * H_out + oh) * W_out + ow;
+                                inp_e->tgrad[((nn * C + c) * H + best_ih) * W + best_iw] += g[g_idx];
+                            }
+                        }
+                    }
+                }
+                break;
+            }
+            case AD_OP_AVG_POOL2D: {
+                /* Backward: distribute gradient equally to valid window positions */
+                if (a0 < 0) break;
+                TapeEntry *inp_e = &t->entries[a0];
+                int N = inp_e->shape[0], C = inp_e->shape[1];
+                int H = inp_e->shape[2], W = inp_e->shape[3];
+                int kH = cur->aux[0], kW = cur->aux[1];
+                int stride_h = cur->aux[2], stride_w = cur->aux[3];
+                int pad_h = cur->aux[4], pad_w = cur->aux[5];
+                int H_out = (H + 2 * pad_h - kH) / stride_h + 1;
+                int W_out = (W + 2 * pad_w - kW) / stride_w + 1;
+                if (!inp_e->tgrad) break;
+                for (int nn = 0; nn < N; nn++) {
+                    for (int c = 0; c < C; c++) {
+                        for (int oh = 0; oh < H_out; oh++) {
+                            for (int ow = 0; ow < W_out; ow++) {
+                                /* Count valid positions */
+                                int count = 0;
+                                for (int kh = 0; kh < kH; kh++) {
+                                    for (int kw = 0; kw < kW; kw++) {
+                                        int ih = oh * stride_h + kh - pad_h;
+                                        int iw = ow * stride_w + kw - pad_w;
+                                        if (ih >= 0 && ih < H && iw >= 0 && iw < W)
+                                            count++;
+                                    }
+                                }
+                                int g_idx = ((nn * C + c) * H_out + oh) * W_out + ow;
+                                double gv = g[g_idx] / count;
+                                for (int kh = 0; kh < kH; kh++) {
+                                    for (int kw = 0; kw < kW; kw++) {
+                                        int ih = oh * stride_h + kh - pad_h;
+                                        int iw = ow * stride_w + kw - pad_w;
+                                        if (ih >= 0 && ih < H && iw >= 0 && iw < W)
+                                            inp_e->tgrad[((nn * C + c) * H + ih) * W + iw] += gv;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 break;
@@ -2092,6 +2288,275 @@ static sexp bridge_ad_batch_matmul(sexp ctx, sexp self, sexp_sint_t n,
 }
 
 /* ================================================================
+ * Bridge: Conv2D
+ * ================================================================ */
+
+/* Helper to extract int from sexp (fixnum) */
+static int sexp_to_int(sexp x) {
+    if (sexp_fixnump(x)) return (int)sexp_unbox_fixnum(x);
+    if (sexp_flonump(x)) return (int)sexp_flonum_value(x);
+    return 0;
+}
+
+/* __ad_conv2d__(input, kernel, config_list) -> Tensor
+ * config_list = (stride_h stride_w pad_h pad_w dil_h dil_w) */
+static sexp bridge_ad_conv2d(sexp ctx, sexp self, sexp_sint_t n,
+                              sexp input, sexp kernel, sexp config) {
+    ADTape *t = ad_global_tape();
+    if (!ad_tensorp(input))
+        return sexp_user_exception(ctx, self, "conv2d: expected tensor for input", input);
+    if (!ad_tensorp(kernel))
+        return sexp_user_exception(ctx, self, "conv2d: expected tensor for kernel", kernel);
+
+    int i_in = unwrap_tensor(input);
+    int i_ker = unwrap_tensor(kernel);
+    TapeEntry *ei = &t->entries[i_in];
+    TapeEntry *ek = &t->entries[i_ker];
+
+    if (ei->ndim != 4)
+        return sexp_user_exception(ctx, self, "conv2d: input must be 4D [N,C,H,W]", input);
+    if (ek->ndim != 4)
+        return sexp_user_exception(ctx, self, "conv2d: kernel must be 4D [Cout,Cin,kH,kW]", kernel);
+
+    /* Parse config list */
+    int cfg[6] = {1, 1, 0, 0, 1, 1};
+    sexp p = config;
+    for (int j = 0; j < 6 && sexp_pairp(p); j++) {
+        cfg[j] = sexp_to_int(sexp_car(p));
+        p = sexp_cdr(p);
+    }
+    int stride_h = cfg[0], stride_w = cfg[1];
+    int pad_h = cfg[2], pad_w = cfg[3];
+    int dil_h = cfg[4], dil_w = cfg[5];
+
+    int N = ei->shape[0], C_in = ei->shape[1];
+    int H = ei->shape[2], W = ei->shape[3];
+    int C_out = ek->shape[0];
+    int kH = ek->shape[2], kW = ek->shape[3];
+
+    if (ek->shape[1] != C_in)
+        return sexp_user_exception(ctx, self, "conv2d: kernel C_in mismatch", kernel);
+
+    int H_out = (H + 2 * pad_h - dil_h * (kH - 1) - 1) / stride_h + 1;
+    int W_out = (W + 2 * pad_w - dil_w * (kW - 1) - 1) / stride_w + 1;
+
+    if (H_out <= 0 || W_out <= 0)
+        return sexp_user_exception(ctx, self, "conv2d: invalid output dimensions", input);
+
+    int out_size = N * C_out * H_out * W_out;
+    int *out_shape = (int *)malloc(4 * sizeof(int));
+    out_shape[0] = N; out_shape[1] = C_out;
+    out_shape[2] = H_out; out_shape[3] = W_out;
+
+    TapeEntry ne = {0};
+    ne.op = AD_OP_CONV2D;
+    ne.arg0 = i_in;
+    ne.arg1 = i_ker;
+    ne.is_tensor = 1;
+    ne.ndim = 4;
+    ne.shape = out_shape;
+    ne.size = out_size;
+    ne.tdata = tensor_alloc(out_size);
+    ne.tgrad = tensor_alloc(out_size);
+    ne.naux = 6;
+    ne.aux = (int *)malloc(6 * sizeof(int));
+    ne.aux[0] = stride_h; ne.aux[1] = stride_w;
+    ne.aux[2] = pad_h; ne.aux[3] = pad_w;
+    ne.aux[4] = dil_h; ne.aux[5] = dil_w;
+
+    /* Forward: per batch element, im2col then GEMM */
+    int col_rows = C_in * kH * kW;
+    int col_cols = H_out * W_out;
+    int inp_spatial = C_in * H * W;
+    int out_spatial = C_out * H_out * W_out;
+
+    for (int nn = 0; nn < N; nn++) {
+        double *col = tensor_alloc(col_rows * col_cols);
+        ad_im2col(ei->tdata + nn * inp_spatial, col,
+                  C_in, H, W, kH, kW, H_out, W_out,
+                  stride_h, stride_w, pad_h, pad_w, dil_h, dil_w);
+        /* kernel [C_out, C_in*kH*kW] @ col [C_in*kH*kW, H_out*W_out]
+         * = out [C_out, H_out*W_out] */
+        ad_tensor_ops.matmul(ek->tdata, col, ne.tdata + nn * out_spatial,
+                             C_out, col_rows, col_cols);
+        free(col);
+    }
+
+    int idx = tape_push(t, ne);
+    return wrap_tensor(ctx, idx);
+}
+
+/* ================================================================
+ * Bridge: MaxPool2D
+ * ================================================================ */
+
+/* __ad_max_pool2d__(input, config_list) -> Tensor
+ * config_list = (kH kW stride_h stride_w pad_h pad_w) */
+static sexp bridge_ad_max_pool2d(sexp ctx, sexp self, sexp_sint_t n,
+                                  sexp input, sexp config) {
+    ADTape *t = ad_global_tape();
+    if (!ad_tensorp(input))
+        return sexp_user_exception(ctx, self, "max_pool2d: expected tensor", input);
+
+    int i_in = unwrap_tensor(input);
+    TapeEntry *ei = &t->entries[i_in];
+
+    if (ei->ndim != 4)
+        return sexp_user_exception(ctx, self, "max_pool2d: input must be 4D [N,C,H,W]", input);
+
+    /* Parse config list */
+    int cfg[6] = {2, 2, 2, 2, 0, 0};
+    sexp p = config;
+    for (int j = 0; j < 6 && sexp_pairp(p); j++) {
+        cfg[j] = sexp_to_int(sexp_car(p));
+        p = sexp_cdr(p);
+    }
+    int kH = cfg[0], kW = cfg[1];
+    int stride_h = cfg[2], stride_w = cfg[3];
+    int pad_h = cfg[4], pad_w = cfg[5];
+
+    int N = ei->shape[0], C = ei->shape[1];
+    int H = ei->shape[2], W = ei->shape[3];
+    int H_out = (H + 2 * pad_h - kH) / stride_h + 1;
+    int W_out = (W + 2 * pad_w - kW) / stride_w + 1;
+
+    if (H_out <= 0 || W_out <= 0)
+        return sexp_user_exception(ctx, self, "max_pool2d: invalid output dimensions", input);
+
+    int out_size = N * C * H_out * W_out;
+    int *out_shape = (int *)malloc(4 * sizeof(int));
+    out_shape[0] = N; out_shape[1] = C;
+    out_shape[2] = H_out; out_shape[3] = W_out;
+
+    TapeEntry ne = {0};
+    ne.op = AD_OP_MAX_POOL2D;
+    ne.arg0 = i_in;
+    ne.arg1 = -1;
+    ne.is_tensor = 1;
+    ne.ndim = 4;
+    ne.shape = out_shape;
+    ne.size = out_size;
+    ne.tdata = tensor_alloc(out_size);
+    ne.tgrad = tensor_alloc(out_size);
+    ne.naux = 6;
+    ne.aux = (int *)malloc(6 * sizeof(int));
+    ne.aux[0] = kH; ne.aux[1] = kW;
+    ne.aux[2] = stride_h; ne.aux[3] = stride_w;
+    ne.aux[4] = pad_h; ne.aux[5] = pad_w;
+
+    /* Forward: max over each pooling window */
+    for (int nn = 0; nn < N; nn++) {
+        for (int c = 0; c < C; c++) {
+            for (int oh = 0; oh < H_out; oh++) {
+                for (int ow = 0; ow < W_out; ow++) {
+                    double best = -1e308;
+                    for (int kh = 0; kh < kH; kh++) {
+                        for (int kw = 0; kw < kW; kw++) {
+                            int ih = oh * stride_h + kh - pad_h;
+                            int iw = ow * stride_w + kw - pad_w;
+                            if (ih >= 0 && ih < H && iw >= 0 && iw < W) {
+                                double v = ei->tdata[((nn * C + c) * H + ih) * W + iw];
+                                if (v > best) best = v;
+                            }
+                        }
+                    }
+                    ne.tdata[((nn * C + c) * H_out + oh) * W_out + ow] = best;
+                }
+            }
+        }
+    }
+
+    int idx = tape_push(t, ne);
+    return wrap_tensor(ctx, idx);
+}
+
+/* ================================================================
+ * Bridge: AvgPool2D
+ * ================================================================ */
+
+/* __ad_avg_pool2d__(input, config_list) -> Tensor
+ * config_list = (kH kW stride_h stride_w pad_h pad_w) */
+static sexp bridge_ad_avg_pool2d(sexp ctx, sexp self, sexp_sint_t n,
+                                  sexp input, sexp config) {
+    ADTape *t = ad_global_tape();
+    if (!ad_tensorp(input))
+        return sexp_user_exception(ctx, self, "avg_pool2d: expected tensor", input);
+
+    int i_in = unwrap_tensor(input);
+    TapeEntry *ei = &t->entries[i_in];
+
+    if (ei->ndim != 4)
+        return sexp_user_exception(ctx, self, "avg_pool2d: input must be 4D [N,C,H,W]", input);
+
+    /* Parse config list */
+    int cfg[6] = {2, 2, 2, 2, 0, 0};
+    sexp p = config;
+    for (int j = 0; j < 6 && sexp_pairp(p); j++) {
+        cfg[j] = sexp_to_int(sexp_car(p));
+        p = sexp_cdr(p);
+    }
+    int kH = cfg[0], kW = cfg[1];
+    int stride_h = cfg[2], stride_w = cfg[3];
+    int pad_h = cfg[4], pad_w = cfg[5];
+
+    int N = ei->shape[0], C = ei->shape[1];
+    int H = ei->shape[2], W = ei->shape[3];
+    int H_out = (H + 2 * pad_h - kH) / stride_h + 1;
+    int W_out = (W + 2 * pad_w - kW) / stride_w + 1;
+
+    if (H_out <= 0 || W_out <= 0)
+        return sexp_user_exception(ctx, self, "avg_pool2d: invalid output dimensions", input);
+
+    int out_size = N * C * H_out * W_out;
+    int *out_shape = (int *)malloc(4 * sizeof(int));
+    out_shape[0] = N; out_shape[1] = C;
+    out_shape[2] = H_out; out_shape[3] = W_out;
+
+    TapeEntry ne = {0};
+    ne.op = AD_OP_AVG_POOL2D;
+    ne.arg0 = i_in;
+    ne.arg1 = -1;
+    ne.is_tensor = 1;
+    ne.ndim = 4;
+    ne.shape = out_shape;
+    ne.size = out_size;
+    ne.tdata = tensor_alloc(out_size);
+    ne.tgrad = tensor_alloc(out_size);
+    ne.naux = 6;
+    ne.aux = (int *)malloc(6 * sizeof(int));
+    ne.aux[0] = kH; ne.aux[1] = kW;
+    ne.aux[2] = stride_h; ne.aux[3] = stride_w;
+    ne.aux[4] = pad_h; ne.aux[5] = pad_w;
+
+    /* Forward: average over valid window positions */
+    for (int nn = 0; nn < N; nn++) {
+        for (int c = 0; c < C; c++) {
+            for (int oh = 0; oh < H_out; oh++) {
+                for (int ow = 0; ow < W_out; ow++) {
+                    double sum_val = 0.0;
+                    int count = 0;
+                    for (int kh = 0; kh < kH; kh++) {
+                        for (int kw = 0; kw < kW; kw++) {
+                            int ih = oh * stride_h + kh - pad_h;
+                            int iw = ow * stride_w + kw - pad_w;
+                            if (ih >= 0 && ih < H && iw >= 0 && iw < W) {
+                                sum_val += ei->tdata[((nn * C + c) * H + ih) * W + iw];
+                                count++;
+                            }
+                        }
+                    }
+                    ne.tdata[((nn * C + c) * H_out + oh) * W_out + ow] =
+                        count > 0 ? sum_val / count : 0.0;
+                }
+            }
+        }
+    }
+
+    int idx = tape_push(t, ne);
+    return wrap_tensor(ctx, idx);
+}
+
+/* ================================================================
  * Bridge: Dual number operations
  * ================================================================ */
 
@@ -2191,6 +2656,9 @@ void register_ad_bridge_functions(sexp ctx, sexp env) {
     sexp_define_foreign(ctx, env, "__ad_layer_norm__", 4, bridge_ad_layer_norm);
     sexp_define_foreign(ctx, env, "__ad_where__", 3, bridge_ad_where);
     sexp_define_foreign(ctx, env, "__ad_batch_matmul__", 2, bridge_ad_batch_matmul);
+    sexp_define_foreign(ctx, env, "__ad_conv2d__", 3, bridge_ad_conv2d);
+    sexp_define_foreign(ctx, env, "__ad_max_pool2d__", 2, bridge_ad_max_pool2d);
+    sexp_define_foreign(ctx, env, "__ad_avg_pool2d__", 2, bridge_ad_avg_pool2d);
 
     /* Dual */
     sexp_define_foreign(ctx, env, "__ad_make_dual__", 2, bridge_ad_make_dual);
@@ -2238,4 +2706,7 @@ void register_ad_bridge_functions(sexp ctx, sexp env) {
     sexp_env_define(ctx, env, sexp_intern(ctx, "AD_OP_LAYER_NORM", -1), sexp_make_fixnum(AD_OP_LAYER_NORM));
     sexp_env_define(ctx, env, sexp_intern(ctx, "AD_OP_WHERE", -1), sexp_make_fixnum(AD_OP_WHERE));
     sexp_env_define(ctx, env, sexp_intern(ctx, "AD_OP_BATCH_MATMUL", -1), sexp_make_fixnum(AD_OP_BATCH_MATMUL));
+    sexp_env_define(ctx, env, sexp_intern(ctx, "AD_OP_CONV2D", -1), sexp_make_fixnum(AD_OP_CONV2D));
+    sexp_env_define(ctx, env, sexp_intern(ctx, "AD_OP_MAX_POOL2D", -1), sexp_make_fixnum(AD_OP_MAX_POOL2D));
+    sexp_env_define(ctx, env, sexp_intern(ctx, "AD_OP_AVG_POOL2D", -1), sexp_make_fixnum(AD_OP_AVG_POOL2D));
 }
