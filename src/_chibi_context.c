@@ -226,6 +226,16 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
     }
 #endif
 
+    /* Register Arrow types (must be same order as workers for tag consistency) */
+#ifdef EVAL_HAVE_ARROW
+    {
+        extern void register_arrow_table_type(sexp ctx);
+        extern void register_arrow_array_type(sexp ctx);
+        register_arrow_table_type(self->ctx);
+        register_arrow_array_type(self->ctx);
+    }
+#endif
+
     /* Register concurrent container types (must be same order as workers) */
     {
         extern void register_concurrent_types(sexp ctx);
@@ -273,6 +283,14 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
     {
         extern void register_capnp_bridge_functions(sexp ctx, sexp env);
         register_capnp_bridge_functions(self->ctx, self->env);
+    }
+#endif
+
+    /* Register Arrow bridge functions */
+#ifdef EVAL_HAVE_ARROW
+    {
+        extern void register_arrow_bridge_functions(sexp ctx, sexp env);
+        register_arrow_bridge_functions(self->ctx, self->env);
     }
 #endif
 
@@ -539,6 +557,12 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
     /* Cap'n Proto OO wrappers: Schema("capnp text") constructor */
 #ifdef EVAL_HAVE_CAPNP
     sexp_load_module_file(self->ctx, "eval/capnp-rt.scm", self->env);
+    self->env = sexp_context_env(self->ctx);
+#endif
+
+    /* Arrow OO wrappers: Table(...), read_csv(...), etc. */
+#ifdef EVAL_HAVE_ARROW
+    sexp_load_module_file(self->ctx, "eval/arrow-oo.scm", self->env);
     self->env = sexp_context_env(self->ctx);
 #endif
 

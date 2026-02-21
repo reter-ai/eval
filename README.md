@@ -52,6 +52,7 @@ e.eval("""
 - **Category theory** — Maybe/Either/Validation types, Writer/Reader/State monads, `|>` pipe, `>>=` bind, `<>` mappend, `mdo` do-notation, Traversable, lenses, Kleisli composition
 - **Differentiable programming** — forward-mode (dual numbers) and reverse-mode (tape-based) AD with 35 ops: arithmetic, activations (relu, sigmoid, gelu, silu), softmax, axis reductions, reshape, slice, concat, gather, layer norm, where, batch matmul, conv2d, max/avg pooling — full transformer and CNN training with optional TensorFlow graph-mode GPU acceleration
 - **Binary serialization** — Cap'n Proto zero-copy serialization with runtime schema parsing, wire-compatible with any language
+- **Columnar data** — Apache Arrow tables with filter, sort, group-by, join, and CSV/Parquet/IPC file I/O via `Table(dict(x: [1,2,3]))->filter("x", >, 1)`
 - **Scheme power** — access any chibi-scheme primitive via backtick identifiers
 
 ## Installation
@@ -949,7 +950,7 @@ with(pool = TaskPool(4)) {
 
 Each worker runs green threads, so multiple tasks on the same worker execute concurrently. See [TASKS.md](TASKS.md) for the full guide.
 
-See [ASYNC.md](ASYNC.md) for the full async programming guide, [TASKS.md](TASKS.md) for the TaskPool guide, [THREADS.md](THREADS.md) for the complete threads and continuations guide, [MULTITHREADING.md](MULTITHREADING.md) for OO synchronization wrappers, [CONCURRENT.md](CONCURRENT.md) for thread-safe containers, [GENERATORS.md](GENERATORS.md) for generators and lazy sequences, [FSTRINGS.md](FSTRINGS.md) for interpolated strings, [UNITS.md](UNITS.md) for quantities/units/currency, [DECIMALSANDDATES.md](DECIMALSANDDATES.md) for decimals/dates, [NETWORKING.md](NETWORKING.md) for TCP/HTTP networking, [FILESYS.md](FILESYS.md) for filesystem operations, [LISTS.md](LISTS.md)/[VECTORS.md](VECTORS.md) for collection methods, [CATEGORY.md](CATEGORY.md) for category theory (Maybe, Either, monads, lenses), [BINARY.md](BINARY.md) for Cap'n Proto binary serialization, [GRAMMARS.md](GRAMMARS.md) for runtime parser generation, [AMB.md](AMB.md) for nondeterministic choice, [PROLOG.md](PROLOG.md) for logic programming, [RETE.md](RETE.md) for forward-chaining rules, [TESTS.md](TESTS.md) for the built-in test framework, and [DIFFERENTIAL.md](DIFFERENTIAL.md) for differentiable programming (AD, tensors, TF backend).
+See [ASYNC.md](ASYNC.md) for the full async programming guide, [TASKS.md](TASKS.md) for the TaskPool guide, [THREADS.md](THREADS.md) for the complete threads and continuations guide, [MULTITHREADING.md](MULTITHREADING.md) for OO synchronization wrappers, [CONCURRENT.md](CONCURRENT.md) for thread-safe containers, [GENERATORS.md](GENERATORS.md) for generators and lazy sequences, [FSTRINGS.md](FSTRINGS.md) for interpolated strings, [UNITS.md](UNITS.md) for quantities/units/currency, [DECIMALSANDDATES.md](DECIMALSANDDATES.md) for decimals/dates, [NETWORKING.md](NETWORKING.md) for TCP/HTTP networking, [FILESYS.md](FILESYS.md) for filesystem operations, [LISTS.md](LISTS.md)/[VECTORS.md](VECTORS.md) for collection methods, [CATEGORY.md](CATEGORY.md) for category theory (Maybe, Either, monads, lenses), [BINARY.md](BINARY.md) for Cap'n Proto binary serialization, [ARROW.md](ARROW.md) for Apache Arrow columnar data, [GRAMMARS.md](GRAMMARS.md) for runtime parser generation, [AMB.md](AMB.md) for nondeterministic choice, [PROLOG.md](PROLOG.md) for logic programming, [RETE.md](RETE.md) for forward-chaining rules, [TESTS.md](TESTS.md) for the built-in test framework, and [DIFFERENTIAL.md](DIFFERENTIAL.md) for differentiable programming (AD, tensors, TF backend).
 
 ## Category theory
 
@@ -1057,6 +1058,42 @@ define result = with(r = s->Person->mmap("person.bin")) {
 Full Cap'n Proto schema syntax supported — all integer widths, floats, booleans, text, data, lists, enums, multiple structs per schema. Messages are wire-compatible with any Cap'n Proto implementation (C++, Rust, Go, Java, Python, etc.). Memory-mapped files give instant access to large datasets with zero parsing overhead.
 
 See [BINARY.md](BINARY.md) for the full guide including all supported types, memory-mapped files, RAII cleanup, and wire compatibility details.
+
+## Arrow columnar data
+
+[Apache Arrow](https://arrow.apache.org/) tables for analytics — create tables from dicts, filter/sort/group/join with vectorized compute, and read/write CSV, Parquet, and Arrow IPC:
+
+```javascript
+// Create a table from column vectors
+define t = Table(dict(
+    name:   ["Alice", "Bob", "Charlie", "Diana"],
+    dept:   ["eng", "sales", "eng", "sales"],
+    salary: [120, 80, 110, 90]
+));
+
+// Filter → sort → top result (chained operations)
+t->filter("salary", >, 100)->sort("salary", "desc")->head(1)
+  ->column("name")->ref(0);    // => "Alice"
+
+// Group-by aggregation
+t->group_by("dept")->mean("salary");    // mean salary per department
+
+// Column stats
+t->column("salary")->sum;     // => 400
+t->column("salary")->mean;    // => 100.0
+
+// File I/O — CSV, Parquet, Arrow IPC
+t->to_parquet("data.parquet");
+define t2 = read_parquet("data.parquet");
+
+// Join two tables
+define reviews = Table(dict(name: ["Alice", "Bob"], score: [92, 78]));
+t->join(reviews, "name");    // inner join on name
+```
+
+Tables support `->filter`, `->sort`, `->head`, `->tail`, `->slice`, `->select`, `->drop`, `->rename`, `->join`, `->group_by`, and file I/O (`->to_csv`, `->to_parquet`, `->to_ipc`). Arrays (columns) support `->sum`, `->mean`, `->min`, `->max`, `->ref`, `->to_list`, `->unique`, and `->sort`.
+
+See [ARROW.md](ARROW.md) for the full guide including all table/array operations, group-by aggregations, file format details, and the complete API reference.
 
 ## Differentiable programming
 
@@ -1247,6 +1284,7 @@ eval tests/eval/test_taskpool.eval
 eval tests/eval/test_logic.eval
 eval tests/eval/test_amb.eval
 eval tests/eval/test_rete.eval
+eval tests/eval/test_arrow.eval
 ```
 
 ## Testing
@@ -1322,3 +1360,4 @@ Third-party components are included under their own licenses. See [THIRD-PARTY-N
 - **re2c** — Public Domain
 - **LLVM/Clang** (optional) — Apache 2.0 with LLVM Exceptions
 - **Cap'n Proto** (optional) — MIT License
+- **Apache Arrow** (optional) — Apache 2.0

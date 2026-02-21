@@ -2411,6 +2411,7 @@ See [CATEGORY.md](CATEGORY.md) for the full guide including Reader monad, Traver
 - [REACTIVE.md](REACTIVE.md) — Signals, computed values, effects, scopes, resources
 - [TESTS.md](TESTS.md) — Built-in test framework: test, test_assert, test_error, test_group
 - [BINARY.md](BINARY.md) — Cap'n Proto binary serialization: Schema, build, read, save, mmap, RAII cleanup
+- [ARROW.md](ARROW.md) — Apache Arrow columnar data: Table, filter, sort, group-by, join, CSV/Parquet/IPC I/O
 - [GRAMMARS.md](GRAMMARS.md) — Grammar JIT: runtime parser generation from Lark EBNF
 - [AMB.md](AMB.md) — Nondeterministic choice: amb, require, amb_collect, backtracking search
 - [PROLOG.md](PROLOG.md) — Logic programming: facts, rules, unification, run, fresh, conde

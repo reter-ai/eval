@@ -8,7 +8,12 @@
       "default-features": false
     },
     "capnproto",
-    "tensorflow"
+    "tensorflow",
+    {
+      "name": "arrow",
+      "features": ["parquet", "compute", "csv"],
+      "default-features": false
+    }
   ],
   "builtin-baseline": "b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01"
 }

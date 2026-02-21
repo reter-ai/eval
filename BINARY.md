@@ -386,6 +386,7 @@ All Cap'n Proto code is conditionally compiled behind `EVAL_HAVE_CAPNP`. The res
 
 ## See also
 
+- [ARROW.md](ARROW.md) — Apache Arrow columnar data: tables, filter/sort/group-by, CSV/Parquet/IPC I/O
 - [GRAMMARS.md](GRAMMARS.md) — Grammar JIT: another compile-time feature for runtime parser generation
 - [NETWORKING.md](NETWORKING.md) — TCP sockets and HTTP for sending serialized data over the wire
 - [ASYNC.md](ASYNC.md) — Thread pools and channels for parallel processing of binary messages

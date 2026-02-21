@@ -280,6 +280,14 @@ static sexp init_context(const char *extra_module_dir) {
         register_capnp_reader_type(ctx);
     }
 #endif
+#ifdef EVAL_HAVE_ARROW
+    {
+        extern void register_arrow_table_type(sexp ctx);
+        extern void register_arrow_array_type(sexp ctx);
+        register_arrow_table_type(ctx);
+        register_arrow_array_type(ctx);
+    }
+#endif
     {
         extern void register_concurrent_types(sexp ctx);
         register_concurrent_types(ctx);
@@ -311,6 +319,12 @@ static sexp init_context(const char *extra_module_dir) {
     {
         extern void register_capnp_bridge_functions(sexp ctx, sexp env);
         register_capnp_bridge_functions(ctx, env);
+    }
+#endif
+#ifdef EVAL_HAVE_ARROW
+    {
+        extern void register_arrow_bridge_functions(sexp ctx, sexp env);
+        register_arrow_bridge_functions(ctx, env);
     }
 #endif
     {

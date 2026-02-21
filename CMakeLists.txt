@@ -313,6 +313,31 @@ else()
     set(CAPNP_LIBS "")
 endif()
 
+# ---------- Apache Arrow (optional columnar data / Parquet / CSV) ----------
+find_package(Arrow CONFIG QUIET)
+find_package(ArrowCompute CONFIG QUIET)
+find_package(Parquet CONFIG QUIET)
+if(Arrow_FOUND)
+    message(STATUS "Found Apache Arrow — columnar data processing enabled")
+    set(ARROW_SOURCES src/_eval_arrow.cpp)
+    set(ARROW_DEFS EVAL_HAVE_ARROW=1)
+    set(ARROW_LIBS Arrow::arrow_shared)
+    if(ArrowCompute_FOUND)
+        message(STATUS "  Compute kernels enabled")
+        list(APPEND ARROW_LIBS ArrowCompute::arrow_compute_shared)
+    endif()
+    if(Parquet_FOUND)
+        message(STATUS "  Parquet I/O enabled")
+        list(APPEND ARROW_LIBS Parquet::parquet_shared)
+        list(APPEND ARROW_DEFS EVAL_HAVE_PARQUET=1)
+    endif()
+else()
+    message(STATUS "Apache Arrow not found — columnar data disabled")
+    set(ARROW_SOURCES "")
+    set(ARROW_DEFS "")
+    set(ARROW_LIBS "")
+endif()
+
 # ---------- TensorFlow C API (optional GPU-accelerated tensor ops) ----------
 find_path(TF_INCLUDE_DIR tensorflow/c/c_api.h
     HINTS ${CMAKE_SOURCE_DIR}/vcpkg_installed/x64-windows/include
@@ -366,7 +391,7 @@ if(BUILD_PYTHON_MODULE)
         list(APPEND EXT_SOURCES src/_eval_stub_libs.c)
     endif()
 
-    python_add_library(_chibi MODULE ${CHIBI_SOURCES} ${CHIBI_LIB_SOURCES} ${EXT_SOURCES} ${GRAMMAR_SOURCES} ${CAPNP_SOURCES} ${TF_SOURCES})
+    python_add_library(_chibi MODULE ${CHIBI_SOURCES} ${CHIBI_LIB_SOURCES} ${EXT_SOURCES} ${GRAMMAR_SOURCES} ${CAPNP_SOURCES} ${ARROW_SOURCES} ${TF_SOURCES})
 
     target_include_directories(_chibi PRIVATE ${CHIBI_INCLUDE_DIRS} ${CMAKE_BINARY_DIR} ${GRAMMAR_JIT_INCLUDES} ${TF_INCLUDES})
     target_link_libraries(_chibi PRIVATE re2c_core)
@@ -377,14 +402,14 @@ if(BUILD_PYTHON_MODULE)
         )
     endif()
 
-    target_compile_definitions(_chibi PRIVATE ${CHIBI_COMPILE_DEFS} ${GRAMMAR_JIT_DEFS} ${CAPNP_DEFS} ${TF_DEFS})
+    target_compile_definitions(_chibi PRIVATE ${CHIBI_COMPILE_DEFS} ${GRAMMAR_JIT_DEFS} ${CAPNP_DEFS} ${ARROW_DEFS} ${TF_DEFS})
 
     if(HAVE_STUB_LIBS)
         target_compile_definitions(_chibi PRIVATE EVAL_HAVE_STUB_LIBS=1)
     endif()
 
     if(WIN32)
-        target_link_libraries(_chibi PRIVATE ws2_32 ${GRAMMAR_JIT_LIBS} ${CAPNP_LIBS} ${TF_LIBS})
+        target_link_libraries(_chibi PRIVATE ws2_32 ${GRAMMAR_JIT_LIBS} ${CAPNP_LIBS} ${ARROW_LIBS} ${TF_LIBS})
         target_compile_definitions(_chibi PRIVATE
             _CRT_SECURE_NO_WARNINGS
             SEXP_USE_STRING_STREAMS=0
@@ -394,7 +419,7 @@ if(BUILD_PYTHON_MODULE)
             target_link_options(_chibi PRIVATE /DELAYLOAD:tensorflow.dll)
         endif()
     elseif(UNIX)
-        target_link_libraries(_chibi PRIVATE re2c_core m ${GRAMMAR_JIT_LIBS} ${CAPNP_LIBS} ${TF_LIBS})
+        target_link_libraries(_chibi PRIVATE re2c_core m ${GRAMMAR_JIT_LIBS} ${CAPNP_LIBS} ${ARROW_LIBS} ${TF_LIBS})
     endif()
 
     if(BUILD_GRAMMAR_JIT)
@@ -404,6 +429,11 @@ if(BUILD_PYTHON_MODULE)
 
     if(CapnProto_FOUND)
         set_source_files_properties(src/_capnp_bridge.cpp PROPERTIES
+            COMPILE_FLAGS "$<IF:$<CXX_COMPILER_ID:MSVC>,/std:c++17,-std=c++17>")
+    endif()
+
+    if(Arrow_FOUND)
+        set_source_files_properties(src/_eval_arrow.cpp PROPERTIES
             COMPILE_FLAGS "$<IF:$<CXX_COMPILER_ID:MSVC>,/std:c++17,-std=c++17>")
     endif()
 
@@ -450,6 +480,7 @@ if(BUILD_EVAL_STANDALONE)
         ${STANDALONE_SOURCES}
         ${GRAMMAR_SOURCES}
         ${CAPNP_SOURCES}
+        ${ARROW_SOURCES}
         ${TF_SOURCES}
     )
 
@@ -467,6 +498,7 @@ if(BUILD_EVAL_STANDALONE)
         ${CHIBI_COMPILE_DEFS}
         ${GRAMMAR_JIT_DEFS}
         ${CAPNP_DEFS}
+        ${ARROW_DEFS}
         ${TF_DEFS}
         EVAL_STANDALONE=1
     )
@@ -476,7 +508,7 @@ if(BUILD_EVAL_STANDALONE)
     endif()
 
     if(WIN32)
-        target_link_libraries(eval_standalone PRIVATE re2c_core ws2_32 ${GRAMMAR_JIT_LIBS} ${CAPNP_LIBS} ${TF_LIBS})
+        target_link_libraries(eval_standalone PRIVATE re2c_core ws2_32 ${GRAMMAR_JIT_LIBS} ${CAPNP_LIBS} ${ARROW_LIBS} ${TF_LIBS})
         target_compile_definitions(eval_standalone PRIVATE
             _CRT_SECURE_NO_WARNINGS
             SEXP_USE_STRING_STREAMS=0
@@ -488,7 +520,7 @@ if(BUILD_EVAL_STANDALONE)
             target_link_options(eval_standalone PRIVATE /DELAYLOAD:tensorflow.dll)
         endif()
     elseif(UNIX)
-        target_link_libraries(eval_standalone PRIVATE re2c_core m pthread ${GRAMMAR_JIT_LIBS} ${CAPNP_LIBS} ${TF_LIBS})
+        target_link_libraries(eval_standalone PRIVATE re2c_core m pthread ${GRAMMAR_JIT_LIBS} ${CAPNP_LIBS} ${ARROW_LIBS} ${TF_LIBS})
     endif()
 
     if(BUILD_GRAMMAR_JIT)
@@ -498,6 +530,11 @@ if(BUILD_EVAL_STANDALONE)
 
     if(CapnProto_FOUND)
         set_source_files_properties(src/_capnp_bridge.cpp PROPERTIES
+            COMPILE_FLAGS "$<IF:$<CXX_COMPILER_ID:MSVC>,/std:c++17,-std=c++17>")
+    endif()
+
+    if(Arrow_FOUND)
+        set_source_files_properties(src/_eval_arrow.cpp PROPERTIES
             COMPILE_FLAGS "$<IF:$<CXX_COMPILER_ID:MSVC>,/std:c++17,-std=c++17>")
     endif()
 

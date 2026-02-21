@@ -1,0 +1,239 @@
+// ============================================================
+// Apache Arrow Columnar Data Test Suite
+// Requires Arrow C++ library to be compiled in.
+// ============================================================
+
+test_begin("Arrow");
+
+// ============================================================
+// Section 1: Table creation from dict
+// ============================================================
+define t = Table(dict(x: [1, 2, 3], y: [4.0, 5.0, 6.0]));
+test_assert("table created", t != false);
+test("num_rows", 3, t->num_rows);
+test("num_columns", 2, t->num_columns);
+test("columns", list("x", "y"), t->columns);
+
+// Table with string column
+define ts = Table(dict(name: ["Alice", "Bob", "Charlie"], age: [30, 25, 35]));
+test("string table rows", 3, ts->num_rows);
+test("string table cols", 2, ts->num_columns);
+test("string table col count", 2, length(ts->columns));
+
+// Single column table
+define t1 = Table(dict(a: [10, 20, 30]));
+test("single col rows", 3, t1->num_rows);
+test("single col cols", 1, t1->num_columns);
+
+// ============================================================
+// Section 2: Column access and properties
+// ============================================================
+define col_x = t->column("x");
+test_assert("column x retrieved", col_x != false);
+test("column length", 3, col_x->length);
+test("column sum", 6, col_x->sum);
+test("column mean", 2.0, col_x->mean);
+test("column min", 1, col_x->min);
+test("column max", 3, col_x->max);
+test("column count", 3, col_x->count);
+test("null count", 0, col_x->null_count);
+
+define col_y = t->column("y");
+test("column y sum", 15.0, col_y->sum);
+test("column y mean", 5.0, col_y->mean);
+test("column y min", 4.0, col_y->min);
+test("column y max", 6.0, col_y->max);
+
+// Column by index
+define col_0 = t->column(0);
+test("col by index length", 3, col_0->length);
+
+// ============================================================
+// Section 3: Array element access
+// ============================================================
+test("array ref 0", 1, col_x->ref(0));
+test("array ref 1", 2, col_x->ref(1));
+test("array ref 2", 3, col_x->ref(2));
+
+define col_name = ts->column("name");
+test("string ref 0", "Alice", col_name->ref(0));
+test("string ref 1", "Bob", col_name->ref(1));
+test("string ref 2", "Charlie", col_name->ref(2));
+
+// ============================================================
+// Section 4: Array to list
+// ============================================================
+test("int to list", list(1, 2, 3), col_x->to_list());
+test("float to list", list(4.0, 5.0, 6.0), col_y->to_list());
+test("string to list", list("Alice", "Bob", "Charlie"), col_name->to_list());
+
+// ============================================================
+// Section 5: Filter operations
+// ============================================================
+define f1 = t->filter("x", >, 1);
+test("filter > rows", 2, f1->num_rows);
+test("filter > first x", 2, f1->column("x")->ref(0));
+
+define f2 = t->filter("x", <, 3);
+test("filter < rows", 2, f2->num_rows);
+
+define f3 = t->filter("x", >=, 2);
+test("filter >= rows", 2, f3->num_rows);
+
+define f4 = t->filter("x", <=, 2);
+test("filter <= rows", 2, f4->num_rows);
+
+define f5 = t->filter("y", >, 4.5);
+test("filter float > rows", 2, f5->num_rows);
+
+// ============================================================
+// Section 6: Sort
+// ============================================================
+define sorted_asc = t->sort("x", "asc");
+test("sort asc first", 1, sorted_asc->column("x")->ref(0));
+test("sort asc last", 3, sorted_asc->column("x")->ref(2));
+
+define sorted_desc = t->sort("x", "desc");
+test("sort desc first", 3, sorted_desc->column("x")->ref(0));
+test("sort desc last", 1, sorted_desc->column("x")->ref(2));
+
+// Sort string column
+define sorted_name = ts->sort("name", "asc");
+test("sort string first", "Alice", sorted_name->column("name")->ref(0));
+test("sort string last", "Charlie", sorted_name->column("name")->ref(2));
+
+// ============================================================
+// Section 7: Head, Tail, Slice
+// ============================================================
+test("head 2 rows", 2, t->head(2)->num_rows);
+test("head 1 row", 1, t->head(1)->num_rows);
+test("head first val", 1, t->head(2)->column("x")->ref(0));
+
+test("tail 2 rows", 2, t->tail(2)->num_rows);
+test("tail last val", 3, t->tail(1)->column("x")->ref(0));
+
+test("slice rows", 2, t->slice(1, 2)->num_rows);
+test("slice first", 2, t->slice(1, 2)->column("x")->ref(0));
+test("slice second", 3, t->slice(1, 2)->column("x")->ref(1));
+
+// ============================================================
+// Section 8: Select and Drop
+// ============================================================
+define sel = t->select(list("x"));
+test("select num_cols", 1, sel->num_columns);
+test("select columns", list("x"), sel->columns);
+test("select rows preserved", 3, sel->num_rows);
+
+define drp = t->drop("y");
+test("drop num_cols", 1, drp->num_columns);
+test("drop columns", list("x"), drp->columns);
+
+// Select multiple columns
+define sel2 = ts->select(list("name", "age"));
+test("select multi cols", 2, sel2->num_columns);
+
+// ============================================================
+// Section 9: Rename
+// ============================================================
+define renamed = t->rename("x", "value");
+test("rename columns", list("value", "y"), renamed->columns);
+test("rename preserves rows", 3, renamed->num_rows);
+test("rename preserves data", 1, renamed->column("value")->ref(0));
+
+// ============================================================
+// Section 10: Schema
+// ============================================================
+define sch = t->schema;
+test_assert("schema is list", pair?(sch));
+test("schema length", 2, length(sch));
+
+// ============================================================
+// Section 11: Table to_string
+// ============================================================
+define str = t->to_string();
+test_assert("to_string is string", string?(str));
+test_assert("to_string has content", str->length > 0);
+
+// ============================================================
+// Section 12: Array unique and sort
+// ============================================================
+define dup_t = Table(dict(v: [3, 1, 2, 1, 3, 2]));
+define dup_col = dup_t->column("v");
+test("dup length", 6, dup_col->length);
+
+define uniq = dup_col->unique();
+test("unique length", 3, uniq->length);
+
+define arr_sorted = dup_col->sort("asc");
+test("array sort first", 1, arr_sorted->ref(0));
+test("array sort last", 3, arr_sorted->ref(5));
+
+// ============================================================
+// Section 13: is_null
+// ============================================================
+test("is_null false", false, col_x->is_null(0));
+
+// ============================================================
+// Section 14: Group-by aggregation
+// ============================================================
+define gt = Table(dict(dept: ["eng", "eng", "sales", "sales", "eng"],
+                       salary: [100, 120, 80, 90, 110]));
+
+define g_sum = gt->group_by("dept")->sum("salary");
+test("group-by sum rows", 2, g_sum->num_rows);
+test("group-by sum cols", 2, g_sum->num_columns);
+
+define g_count = gt->group_by("dept")->count();
+test("group-by count rows", 2, g_count->num_rows);
+test("group-by count cols", 2, g_count->num_columns);
+
+define g_mean = gt->group_by("dept")->mean("salary");
+test("group-by mean rows", 2, g_mean->num_rows);
+
+// ============================================================
+// Section 15: CSV round-trip
+// ============================================================
+define csv_path = "__test_arrow_roundtrip.csv";
+t->to_csv(csv_path);
+define t_csv = read_csv(csv_path);
+test("csv roundtrip rows", 3, t_csv->num_rows);
+test("csv roundtrip cols", 2, t_csv->num_columns);
+
+// ============================================================
+// Section 16: IPC round-trip
+// ============================================================
+define ipc_path = "__test_arrow_roundtrip.arrow";
+t->to_ipc(ipc_path);
+define t_ipc = read_ipc(ipc_path);
+test("ipc roundtrip rows", 3, t_ipc->num_rows);
+test("ipc roundtrip cols", 2, t_ipc->num_columns);
+test("ipc roundtrip data", 1, t_ipc->column("x")->ref(0));
+
+// ============================================================
+// Section 17: Parquet round-trip
+// ============================================================
+define pq_path = "__test_arrow_roundtrip.parquet";
+t->to_parquet(pq_path);
+define t_pq = read_parquet(pq_path);
+test("parquet roundtrip rows", 3, t_pq->num_rows);
+test("parquet roundtrip cols", 2, t_pq->num_columns);
+test("parquet roundtrip data", 1, t_pq->column("x")->ref(0));
+
+// ============================================================
+// Section 18: Join
+// ============================================================
+define left = Table(dict(id: [1, 2, 3], name: ["Alice", "Bob", "Charlie"]));
+define right = Table(dict(id: [2, 3, 4], score: [85, 92, 78]));
+define joined = left->join(right, "id");
+test("join rows", 2, joined->num_rows);
+test_assert("join has name col", member("name", joined->columns) != false);
+test_assert("join has score col", member("score", joined->columns) != false);
+
+// ============================================================
+// Section 19: Chained operations
+// ============================================================
+define result = t->filter("x", >, 1)->sort("x", "desc")->head(1);
+test("chained rows", 1, result->num_rows);
+test("chained value", 3, result->column("x")->ref(0));
+
+test_end();

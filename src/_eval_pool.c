@@ -1303,6 +1303,12 @@ void eval_standard_aliases(sexp ctx, sexp env) {
     env = sexp_context_env(ctx);
 #endif
 
+    /* Arrow OO wrappers: Table(...), read_csv(...), etc. */
+#ifdef EVAL_HAVE_ARROW
+    sexp_load_module_file(ctx, "eval/arrow-oo.scm", env);
+    env = sexp_context_env(ctx);
+#endif
+
     /* Category theory: Maybe, Either, Validation, Writer, Reader, State, Monoid, Lenses */
     sexp_load_module_file(ctx, "eval/monad.scm", env);
     env = sexp_context_env(ctx);
@@ -1440,6 +1446,14 @@ static EVAL_THREAD_FUNC worker_main(void *arg) {
         register_capnp_reader_type(ctx);
     }
 #endif
+#ifdef EVAL_HAVE_ARROW
+    {
+        extern void register_arrow_table_type(sexp ctx);
+        extern void register_arrow_array_type(sexp ctx);
+        register_arrow_table_type(ctx);
+        register_arrow_array_type(ctx);
+    }
+#endif
     {
         extern void register_concurrent_types(sexp ctx);
         register_concurrent_types(ctx);
@@ -1471,6 +1485,12 @@ static EVAL_THREAD_FUNC worker_main(void *arg) {
     {
         extern void register_capnp_bridge_functions(sexp ctx, sexp env);
         register_capnp_bridge_functions(ctx, env);
+    }
+#endif
+#ifdef EVAL_HAVE_ARROW
+    {
+        extern void register_arrow_bridge_functions(sexp ctx, sexp env);
+        register_arrow_bridge_functions(ctx, env);
     }
 #endif
     {
