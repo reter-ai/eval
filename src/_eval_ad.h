@@ -14,7 +14,19 @@ typedef enum {
     AD_OP_ADD, AD_OP_SUB, AD_OP_MUL, AD_OP_DIV, AD_OP_POW, AD_OP_NEG,
     AD_OP_SIN, AD_OP_COS, AD_OP_TAN, AD_OP_EXP, AD_OP_LOG, AD_OP_SQRT,
     AD_OP_TANH, AD_OP_SIGMOID, AD_OP_RELU, AD_OP_ABS,
-    AD_OP_MATMUL, AD_OP_SUM, AD_OP_MEAN, AD_OP_TRANSPOSE
+    AD_OP_MATMUL, AD_OP_SUM, AD_OP_MEAN, AD_OP_TRANSPOSE,
+    AD_OP_SOFTMAX,        /* 21 — axis-aware fused softmax */
+    AD_OP_GELU,           /* 22 — element-wise GELU activation */
+    AD_OP_SILU,           /* 23 — element-wise SiLU/Swish activation */
+    AD_OP_SUM_AXIS,       /* 24 — sum along specific axis */
+    AD_OP_MEAN_AXIS,      /* 25 — mean along specific axis */
+    AD_OP_RESHAPE,        /* 26 — reshape tensor (same data, new shape) */
+    AD_OP_SLICE,          /* 27 — extract subtensor by begin+size */
+    AD_OP_CONCAT,         /* 28 — concatenate along axis (N inputs) */
+    AD_OP_GATHER,         /* 29 — index into tensor along axis (embeddings) */
+    AD_OP_LAYER_NORM,     /* 30 — fused layer normalization */
+    AD_OP_WHERE,          /* 31 — conditional select (masking) */
+    AD_OP_BATCH_MATMUL    /* 32 — 3D+ batched matrix multiply */
 } ADOpKind;
 
 /* ================================================================
@@ -28,6 +40,9 @@ typedef struct {
     /* Scalar fields */
     double value, grad;
     double cached0, cached1; /* cached values for backward */
+    /* Auxiliary parameters (axis, shape, extra tape indices) */
+    int *aux;               /* auxiliary int params */
+    int naux;               /* number of entries in aux */
     /* Tensor fields (NULL for scalars) */
     double *tdata;          /* tensor data (flat, row-major) */
     double *tgrad;          /* tensor gradient (same shape) */

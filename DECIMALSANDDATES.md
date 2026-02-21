@@ -1,6 +1,6 @@
-# Decimals, Dates, and Money
+# Decimals and Dates
 
-Eval provides built-in types for exact decimal arithmetic, date/time manipulation, and currency handling. All types use the `->` operator for method dispatch and integrate with f-strings.
+Eval provides built-in types for exact decimal arithmetic and date/time manipulation. All types use the `->` operator for method dispatch and integrate with f-strings.
 
 ```
 define price = Decimal("19.99");
@@ -13,10 +13,12 @@ define now = DateTime->now();
 f"Today is {now->format("%A, %B %d, %Y")}";
 // => "Today is Thursday, February 20, 2026"
 
-define m = Money("19.99", "USD");
-f"{m->mul(3)->format()} {m->currency}";
-// => "59.97 USD"
+define m = Qty("19.99", "USD");
+f"{m->format()}";
+// => "19.99 USD"
 ```
+
+For quantities with units (including currency), see [UNITS.md](UNITS.md).
 
 ## Decimal
 
@@ -400,83 +402,11 @@ td1->eq(TimeDelta(3600)); // true
 
 ---
 
-## Money
-
-A convenience type combining a Decimal amount with a currency code string. Money is a pure Scheme closure (no C type) that wraps Decimal for currency-safe arithmetic.
-
-### Creating Money
-
-```
-Money("19.99", "USD")
-Money(100, "EUR")
-Money(Decimal("49.95"), "GBP")
-```
-
-The first argument is coerced to Decimal if it isn't one already.
-
-### Properties
-
-```
-define m = Money("19.99", "USD");
-m->amount;                // Decimal("19.99")
-m->currency;              // "USD"
-```
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `->amount` | Decimal | The underlying Decimal value |
-| `->currency` | string | Currency code (e.g. "USD") |
-
-### Arithmetic
-
-Money arithmetic enforces currency matching — adding USD to EUR is an error:
-
-```
-define m1 = Money("19.99", "USD");
-define m2 = Money("5.50", "USD");
-
-m1->add(m2);              // Money("25.49", "USD")
-m1->sub(m2);              // Money("14.49", "USD")
-m1->mul(3);               // Money("59.97", "USD")
-m1->div(4);               // Money("5.00", "USD") (default 2 decimal places)
-
-// Currency mismatch → error
-m1->add(Money("10", "EUR"));
-// ERROR: Money: cannot add different currencies
-```
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `->add(money)` | Money | Add (same currency only) |
-| `->sub(money)` | Money | Subtract (same currency only) |
-| `->mul(factor)` | Money | Multiply by number |
-| `->div(divisor)` | Money | Divide by number (2 decimal places) |
-| `->round(places)` | Money | Round to N decimal places |
-
-### Formatting and comparison
-
-```
-define m = Money("19.99", "USD");
-m->format();              // "19.99"
-
-define m2 = Money("25.00", "USD");
-m->lt(m2);                // true
-m->gt(m2);                // false
-m->eq(Money("19.99", "USD"));  // true
-```
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `->format()` | string | Amount rounded to 2 decimal places |
-| `->lt(other)` | boolean | Less than (by amount) |
-| `->gt(other)` | boolean | Greater than |
-| `->eq(other)` | boolean | Equal |
-
 ---
 
 ## Recipes
 
-### Invoice calculation
+### Invoice calculation (Decimal)
 
 ```
 define items = [
@@ -496,6 +426,8 @@ f"Subtotal: ${subtotal->format(2)}";   // "Subtotal: $79.42"
 f"Tax:      ${tax->format(2)}";        // "Tax:      $6.35"
 f"Total:    ${total->format(2)}";      // "Total:    $85.77"
 ```
+
+For currency-aware arithmetic with dimensional safety, see `Qty` in [UNITS.md](UNITS.md).
 
 ### Date range iteration
 
@@ -526,9 +458,11 @@ f"Took {elapsed->total_seconds} seconds";
 ### Currency conversion
 
 ```
-define usd = Money("100.00", "USD");
+define usd = Qty("100.00", "USD");
 define rate = Decimal("0.92");
-define eur = Money(usd->amount->mul(rate), "EUR");
-f"{usd->format()} USD = {eur->format()} EUR";
+define eur = Qty(usd->value->mul(rate), "EUR");
+f"{usd->format()} = {eur->format()}";
 // => "100.00 USD = 92.00 EUR"
 ```
+
+See [UNITS.md](UNITS.md) for the full Qty reference including physical units and dimensional analysis.

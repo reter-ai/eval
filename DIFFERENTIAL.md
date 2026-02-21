@@ -66,6 +66,8 @@ x->grad           // => [[0.3], [0.6]]
 | `sigmoid(x)` | Logistic sigmoid |
 | `relu(x)` | Rectified linear unit |
 | `abs(x)` | Absolute value |
+| `gelu(x)` | Gaussian error linear unit |
+| `silu(x)` | SiLU / Swish activation |
 
 ### Tensor-Specific
 | Function | Description |
@@ -73,7 +75,17 @@ x->grad           // => [[0.3], [0.6]]
 | `a @ b` | Matrix multiplication |
 | `transpose(x)` | Matrix transpose (2D) |
 | `sum(x)` | Sum all elements to scalar |
+| `sum(x, axis)` | Sum along specific axis |
 | `mean(x)` | Mean of all elements |
+| `mean(x, axis)` | Mean along specific axis |
+| `softmax(x)` / `softmax(x, axis)` | Axis-aware softmax (default: last dim) |
+| `reshape(x, shape)` | Reshape tensor (same data, new shape) |
+| `tensor_slice(x, begin, size)` | Extract subtensor by begin+size lists |
+| `concat(tensors)` / `concat(tensors, axis)` | Concatenate tensors along axis (default: 0) |
+| `gather(x, indices)` / `gather(x, indices, axis)` | Index-select along axis (embedding lookup) |
+| `layer_norm(x, gamma, beta)` | Layer normalization (optional epsilon) |
+| `where(cond, a, b)` | Conditional element-wise select |
+| `batch_matmul(a, b)` | Batched matrix multiply (3D+) |
 
 ### Tape Control
 | Function | Description |
@@ -134,6 +146,18 @@ Each tape entry maps to a TensorFlow graph node:
 | `transpose` | `Transpose` | perm=[1,0] |
 | `sum` | `Sum` | Reduce all axes |
 | `mean` | `Mean` | Reduce all axes |
+| `gelu` | `Tanh` + `Mul` + `Add` + `Pow` | Composed (no atomic TF GELU) |
+| `silu` | `Mul(x, Sigmoid(x))` | Composed |
+| `softmax` | `Softmax` | Axis-aware |
+| `sum(x, axis)` | `Sum` | With reduction_indices |
+| `mean(x, axis)` | `Mean` | With reduction_indices |
+| `reshape` | `Reshape` | With int32 shape const |
+| `tensor_slice` | `Slice` | With begin + size consts |
+| `concat` | `ConcatV2` | N inputs + axis const |
+| `gather` | `GatherV2` | With indices + axis consts |
+| `layer_norm` | Native C fallback | Composed normalization |
+| `where` | `SelectV2` | With Cast(cond → bool) |
+| `batch_matmul` | `BatchMatMulV2` | 3D+ batched multiply |
 
 Forward tensor ops (matmul, element-wise, transpose) also use TensorFlow Eager execution for GPU acceleration on tensors with 64+ elements. Smaller tensors use native C to avoid dispatch overhead.
 
@@ -158,6 +182,17 @@ Without TensorFlow, everything works identically using native C:
 ```
 -- TensorFlow not found - using native tensor ops
 ```
+
+### Delay-Load (Optional TF at Runtime)
+
+On Windows (MSVC), TensorFlow is linked with `/DELAYLOAD`. The binary runs without `tensorflow.dll` — all ops use native C. If `tensorflow.dll` is found next to the executable at runtime, TF acceleration activates automatically:
+
+```
+With tensorflow.dll:    TF graph-mode backward + TFE eager forward
+Without tensorflow.dll: Native C backward + native C forward (same results)
+```
+
+This means a single binary works everywhere. Drop `tensorflow.dll` alongside it for GPU acceleration; remove it for a dependency-free deployment.
 
 ## Examples
 
@@ -228,17 +263,11 @@ display("W2 grad: "); display(W2->grad); newline()
 
 ### Softmax and Cross-Entropy
 
-Softmax is composed from `exp`, `sum`, and division with broadcasting:
+Built-in axis-aware softmax with numerically stable max-subtraction:
 
 ```
-define softmax = function(logits) {
-    define ex = exp(logits);
-    define s = sum(ex);
-    ex / s
-};
-
 param logits = [[2.0, 1.0, 0.1]];
-define probs = softmax(logits);
+define probs = softmax(logits);          // row-wise softmax (default: last axis)
 display(probs->data); newline();
 // => ((0.6590 0.2424 0.0986))
 
@@ -253,20 +282,13 @@ display(logits->grad); newline();
 
 ### Transformer Self-Attention
 
-A single-head self-attention layer. Softmax, matmul, transpose, and scaling
-are all differentiable:
+A single-head self-attention layer using built-in row-wise softmax:
 
 ```
 // Self-attention: Attention(Q,K,V) = softmax(Q @ K^T / sqrt(d_k)) @ V
 //
 // input: [seq_len, d_model] = [3, 4]
 // W_q, W_k, W_v: [d_model, d_k] = [4, 2]
-
-define softmax = function(logits) {
-    define ex = exp(logits);
-    define s = sum(ex);
-    ex / s
-};
 
 param W_q = [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6], [0.7, 0.8]];
 param W_k = [[0.2, 0.1], [0.4, 0.3], [0.6, 0.5], [0.8, 0.7]];
@@ -288,9 +310,8 @@ define V = input @ W_v;           // [3, 2]
 // Attention scores: Q @ K^T / sqrt(d_k)
 define scores = (Q @ transpose(K)) / sqrt(d_k);   // [3, 3]
 
-// Softmax over each row (note: this applies softmax globally,
-// a row-wise softmax would need per-row ops — see Limitations)
-define attn = softmax(scores);     // [3, 3]
+// Row-wise softmax (axis -1 = last dimension, the default)
+define attn = softmax(scores);     // [3, 3] — proper per-row softmax
 
 // Weighted values
 define out = attn @ V;             // [3, 2]
@@ -306,6 +327,97 @@ display("W_v grad: "); display(W_v->grad); newline()
 ```
 
 All weight gradients (`W_q->grad`, `W_k->grad`, `W_v->grad`) are computed in a single `backward(loss)` call. With TensorFlow, this entire gradient computation executes as one optimized TF graph.
+
+### Multi-Head Attention with Reshape
+
+Using reshape, gather, layer normalization, and GELU — the full transformer building blocks:
+
+```
+// Multi-head attention: split d_model into heads, attend, recombine
+// input: [seq_len, d_model] = [4, 8], heads = 2, d_k = 4
+
+param W_qkv = [[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
+               [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.1],
+               [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.1, 0.2],
+               [0.4, 0.5, 0.6, 0.7, 0.8, 0.1, 0.2, 0.3],
+               [0.5, 0.6, 0.7, 0.8, 0.1, 0.2, 0.3, 0.4],
+               [0.6, 0.7, 0.8, 0.1, 0.2, 0.3, 0.4, 0.5],
+               [0.7, 0.8, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+               [0.8, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]];
+
+param gamma = [[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]];
+param beta  = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]];
+
+define input = tensor([[1.0, 0.5, 0.3, 0.2, 0.8, 0.1, 0.4, 0.6],
+                       [0.2, 0.8, 0.1, 0.7, 0.3, 0.9, 0.5, 0.2],
+                       [0.6, 0.3, 0.7, 0.1, 0.5, 0.4, 0.2, 0.8],
+                       [0.4, 0.6, 0.2, 0.9, 0.1, 0.7, 0.8, 0.3]]);
+
+// Layer norm → project → attention → GELU FFN
+define normed = layer_norm(input, gamma, beta);
+define projected = normed @ W_qkv;
+
+// Reshape for head splitting: [4, 8] → [4, 2, 4] (seq, heads, d_k)
+define heads = reshape(projected, [4, 2, 4]);
+
+// GELU activation in feed-forward network
+define ffn_out = gelu(projected);
+define loss = sum(ffn_out);
+backward(loss);
+
+display("FFN output shape: "); display(ffn_out->shape); newline();
+display("W_qkv grad: "); display(W_qkv->grad); newline()
+```
+
+### Embedding Lookup with Gather
+
+Differentiable embedding lookup using `gather` — gradients scatter back to the selected rows:
+
+```
+// Vocabulary embedding: 5 tokens, embedding dim = 3
+param embeddings = [[0.1, 0.2, 0.3],
+                    [0.4, 0.5, 0.6],
+                    [0.7, 0.8, 0.9],
+                    [1.0, 1.1, 1.2],
+                    [1.3, 1.4, 1.5]];
+
+// Token indices for sequence "the cat sat" → [1, 3, 2]
+define token_ids = [1, 3, 2];
+define embedded = gather(embeddings, token_ids);
+// => [[0.4, 0.5, 0.6], [1.0, 1.1, 1.2], [0.7, 0.8, 0.9]]
+
+define loss = sum(embedded);
+backward(loss);
+
+display("Embedded: "); display(embedded->data); newline();
+display("Embedding grad: "); display(embeddings->grad); newline();
+// Only rows 1, 2, 3 receive gradient; rows 0, 4 stay zero
+```
+
+### Conditional Masking with Where
+
+Apply attention masks using `where` — gradients flow only through the selected branch:
+
+```
+param scores = [[1.0, 2.0, 3.0],
+                [4.0, 5.0, 6.0]];
+
+// Mask: 1 = attend, 0 = mask out
+define mask = tensor([[1.0, 1.0, 0.0],
+                      [1.0, 0.0, 0.0]]);
+
+// Replace masked positions with -1e9 (effectively -inf for softmax)
+define masked = where(mask, scores, tensor([[-1e9, -1e9, -1e9],
+                                             [-1e9, -1e9, -1e9]]));
+
+define attn = softmax(masked);
+define loss = sum(attn);
+backward(loss);
+
+display("Masked attention: "); display(attn->data); newline();
+display("Scores grad: "); display(scores->grad); newline();
+// Masked positions get zero gradient
+```
 
 ### YOLO-Style Detection Head
 
@@ -453,16 +565,12 @@ The AD tape is thread-local (`__declspec(thread)` on Windows, `__thread` on POSI
 
 Current limitations relative to full ML frameworks:
 
-- **No row-wise softmax**: `softmax` applies globally across all elements, not per-row. A true transformer attention layer needs per-row softmax over the sequence dimension. This can be worked around by manually looping over rows, but is not yet a single differentiable op.
-- **No reshape/view**: Tensors cannot be reshaped without creating new allocations. Operations like "split attention heads" from `[batch, seq, d_model]` to `[batch, heads, seq, d_k]` are not supported.
-- **No slicing/indexing**: Cannot extract or assign to sub-tensors (e.g., `x[0:3, :]`).
-- **No concatenation**: Cannot join tensors along an axis.
-- **2D tensors only for matmul/transpose**: Batched matmul and higher-dimensional transpose are not supported.
 - **No convolutions**: Conv2D, pooling, and other spatial ops are not available.
 - **CPU-only forward by default**: TFE eager ops provide GPU forward, but data round-trips through CPU memory (no persistent GPU tensors).
 - **Single-precision not supported**: All computation is float64 (double). No float32/float16 mode.
+- **No sparse ops**: Sparse matrix multiply, sparse embeddings, and sparse gradients are not supported.
 
-These are sufficient for fully-connected networks, attention mechanisms (with global softmax), and educational/research use. Production transformer or CNN training requires additional ops.
+The 32 differentiable ops (arithmetic, activations, softmax, axis reductions, reshape, slice, concat, gather, layer norm, where, batch matmul) are sufficient for full transformer training including multi-head attention, embedding lookup, masked attention, and feed-forward networks with GELU/SiLU. Production CNN training requires convolution ops.
 
 ## Files
 

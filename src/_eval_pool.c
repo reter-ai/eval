@@ -1285,8 +1285,12 @@ void eval_standard_aliases(sexp ctx, sexp env) {
     sexp_load_module_file(ctx, "eval/decimal-oo.scm", env);
     env = sexp_context_env(ctx);
 
-    /* Money wrapper (pure Scheme, uses Decimal) */
-    sexp_load_module_file(ctx, "eval/money-oo.scm", env);
+    /* Quantity type: dimensional analysis, unit conversion (replaces Money) */
+    sexp_load_module_file(ctx, "eval/quantity-oo.scm", env);
+    env = sexp_context_env(ctx);
+
+    /* SI + currency unit definitions */
+    sexp_load_module_file(ctx, "eval/units-defs.scm", env);
     env = sexp_context_env(ctx);
 
     /* Grammar/Parser OO wrappers */
@@ -1449,6 +1453,10 @@ static EVAL_THREAD_FUNC worker_main(void *arg) {
         register_decimal_type(ctx, env);
     }
     {
+        extern void register_quantity_type(sexp ctx, sexp env);
+        register_quantity_type(ctx, env);
+    }
+    {
         extern void register_ad_types(sexp ctx);
         register_ad_types(ctx);
     }
@@ -1480,6 +1488,10 @@ static EVAL_THREAD_FUNC worker_main(void *arg) {
     {
         extern void register_decimal_bridge_functions(sexp ctx, sexp env);
         register_decimal_bridge_functions(ctx, env);
+    }
+    {
+        extern void register_quantity_bridge_functions(sexp ctx, sexp env);
+        register_quantity_bridge_functions(ctx, env);
     }
     {
         extern void register_ad_bridge_functions(sexp ctx, sexp env);

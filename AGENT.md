@@ -246,7 +246,7 @@ define naturals = generator() {
 
 ## Arrow Methods
 
-Method dispatch via `->` is type-aware. Lists, strings, vectors, dicts, DateTime, Date, TimeDelta, Decimal, and Money each have their own method set.
+Method dispatch via `->` is type-aware. Lists, strings, vectors, dicts, DateTime, Date, TimeDelta, Decimal, and Qty (Quantity) each have their own method set.
 
 ### List Methods
 
@@ -458,7 +458,7 @@ define w = watch(count, function(new_val, old_val) { ... });
 dispose(w);
 ```
 
-### DateTime, Decimal & Money
+### DateTime, Decimal & Qty
 
 ```
 // DateTime: timestamps with timezone
@@ -478,9 +478,19 @@ TimeDelta(1, 2, 30, 0)->total_seconds;  // 95400
 Decimal("0.1")->add(Decimal("0.2"))->to_string();  // "0.3"
 Decimal("10")->div(Decimal("3"), 4)->to_string();   // "3.3333"
 
-// Money: currency-safe
-Money("19.99", "USD")->mul(3)->format();  // "59.97"
-Money("10", "USD")->add(Money("5", "EUR"));  // ERROR
+// Qty (Quantity): dimensional analysis + unit conversion
+Qty(100, "km") / Qty(2, "hr");          // Qty(50, "km/hr")
+Qty(5, "m") + Qty(3, "m");              // Qty(8, "m")
+Qty(5, "m") + Qty(3, "s");              // ERROR: incompatible dimensions
+Qty(1, "mile")->to("km");               // Qty(1.609344, "km")
+Qty(5, "m") ** 2;                        // Qty(25, "m^2")
+Qty(10, "m") * 5;                        // Qty(50, "m")
+
+// Currency (auto-Decimal, Money is alias for Qty)
+Qty("19.99", "USD") + Qty("1.50", "USD");  // Qty(21.49, "USD")
+Qty("19.99", "USD") * 3;                    // Qty(59.97, "USD")
+Qty(5, "USD") + Qty(5, "EUR");              // ERROR: incompatible dimensions
+Money("19.99", "USD") + Money("5", "USD");  // backward-compatible alias
 ```
 
 ### Logic Programming (miniKanren)
@@ -583,6 +593,46 @@ q->pop();                        // blocking
 
 define s = ConcurrentStack();
 s->push(1); s->pop();
+```
+
+### Differentiable Programming (AD)
+
+```
+// Reverse-mode AD: param creates differentiable variables
+param W = [[0.1, 0.2], [0.3, 0.4]];
+param x = [[1.0], [2.0]];
+define loss = sum(W @ x);
+backward(loss);
+W->grad;           // accumulated gradients
+
+// Forward-mode: composable derivatives via dual numbers
+define df = grad(function(x) x * x);
+df(3.0);           // => 6.0
+
+// Key ops (all differentiable with backward support)
+softmax(logits);              // axis-aware, numerically stable
+softmax(logits, 0);           // softmax along axis 0
+gelu(x);                      // GELU activation
+silu(x);                      // SiLU/Swish activation
+sum(x, 1);                    // sum along axis 1
+mean(x, 0);                   // mean along axis 0
+reshape(x, [2, 3]);           // reshape tensor
+tensor_slice(x, [0,1], [2,2]); // extract subtensor
+concat([a, b, c], 0);         // concatenate along axis
+gather(embeddings, [1,3,2]);   // embedding lookup
+layer_norm(x, gamma, beta);   // layer normalization
+where(mask, a, b);            // conditional select
+batch_matmul(a, b);           // 3D+ batched matmul
+
+// Tape control
+tape_reset();                 // clear tape
+zero_grad();                  // zero gradients
+no_grad(function() ...);      // untracked computation
+
+// Optimizer
+define opt = SGD([W, x], 0.01);
+opt->step();
+opt->zero_grad();
 ```
 
 ### Grammar JIT

@@ -319,14 +319,18 @@
                (__ad_make_dual__ 0.0 0.0))))
         (else (relu (exact->inexact x)))))
 
-;; Tensor reductions
-(define (sum x)
-  (cond ((__ad_tensor_p__ x) (__ad_tensor_reduce__ x AD_OP_SUM))
+;; Tensor reductions — sum/mean with optional axis argument
+(define (sum x . args)
+  (cond ((__ad_tensor_p__ x)
+         (if (null? args) (__ad_tensor_reduce__ x AD_OP_SUM)
+             (__ad_sum_axis__ x (car args))))
         ((pair? x) (apply + x))
         (else x)))
 
-(define (mean x)
-  (cond ((__ad_tensor_p__ x) (__ad_tensor_reduce__ x AD_OP_MEAN))
+(define (mean x . args)
+  (cond ((__ad_tensor_p__ x)
+         (if (null? args) (__ad_tensor_reduce__ x AD_OP_MEAN)
+             (__ad_mean_axis__ x (car args))))
         ((pair? x) (/ (apply + x) (length x)))
         (else x)))
 
@@ -334,6 +338,90 @@
   (if (__ad_tensor_p__ x)
       (__ad_tensor_unary__ x AD_OP_TRANSPOSE)
       x))
+
+;; ================================================================
+;; New tensor operations — activations, shape, compound
+;; ================================================================
+
+;; GELU activation
+(define (gelu x)
+  (cond ((number? x)
+         (let* ((x3 (* x x x))
+                (inner (* 0.7978845608028654 (+ x (* 0.044715 x3))))
+                (th (tanh inner)))
+           (* 0.5 x (+ 1.0 th))))
+        ((__ad_var_p__ x) (__ad_unary__ x AD_OP_GELU))
+        ((__ad_tensor_p__ x) (__ad_tensor_unary__ x AD_OP_GELU))
+        ((__ad_dual_p__ x)
+         (let ((v (__dv__ x)) (d (__dd__ x)))
+           (let* ((gv (gelu v))
+                  (vv (value_of v))
+                  (x3 (* vv vv vv))
+                  (inner (* 0.7978845608028654 (+ vv (* 0.044715 x3))))
+                  (th (tanh inner))
+                  (sech2 (- 1.0 (* th th)))
+                  (d_inner (* 0.7978845608028654 (+ 1.0 (* 0.134145 vv vv))))
+                  (dg (+ (* 0.5 (+ 1.0 th)) (* 0.5 vv sech2 d_inner))))
+             (__ad_make_dual__ gv (__ad_mul__ d dg)))))
+        (else (gelu (exact->inexact x)))))
+
+;; SiLU/Swish activation
+(define (silu x)
+  (cond ((number? x)
+         (let ((s (/ 1.0 (+ 1.0 (exp (- x))))))
+           (* x s)))
+        ((__ad_var_p__ x) (__ad_unary__ x AD_OP_SILU))
+        ((__ad_tensor_p__ x) (__ad_tensor_unary__ x AD_OP_SILU))
+        ((__ad_dual_p__ x)
+         (let ((v (__dv__ x)) (d (__dd__ x)))
+           (let* ((sv (silu v))
+                  (vv (value_of v))
+                  (sig (/ 1.0 (+ 1.0 (exp (- vv)))))
+                  (dg (+ sig (* vv sig (- 1.0 sig)))))
+             (__ad_make_dual__ sv (__ad_mul__ d dg)))))
+        (else (silu (exact->inexact x)))))
+
+;; Softmax — axis-aware (default: last dim = -1)
+(define (softmax x . args)
+  (if (__ad_tensor_p__ x)
+      (__ad_softmax__ x (if (null? args) -1 (car args)))
+      x))
+
+;; Reshape
+(define (reshape x shape_list)
+  (if (__ad_tensor_p__ x)
+      (__ad_reshape__ x shape_list)
+      x))
+
+;; Slice
+(define (tensor_slice x begin_list size_list)
+  (if (__ad_tensor_p__ x)
+      (__ad_slice__ x begin_list size_list)
+      x))
+
+;; Concat — default axis 0
+(define (concat tensors . args)
+  (__ad_concat__ tensors (if (null? args) 0 (car args))))
+
+;; Gather — default axis 0
+(define (gather x indices . args)
+  (if (__ad_tensor_p__ x)
+      (__ad_gather__ x indices (if (null? args) 0 (car args)))
+      x))
+
+;; Layer norm — default eps 1e-5
+(define (layer_norm x gamma beta . args)
+  (if (__ad_tensor_p__ x)
+      (__ad_layer_norm__ x gamma beta (if (null? args) 1e-5 (car args)))
+      x))
+
+;; Where — conditional select
+(define (where cond_t a b)
+  (__ad_where__ cond_t a b))
+
+;; Batch matmul
+(define (batch_matmul a b)
+  (__ad_batch_matmul__ a b))
 
 ;; ================================================================
 ;; abs — override for AD support

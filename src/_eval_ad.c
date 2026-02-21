@@ -56,6 +56,7 @@ static void tape_reset(ADTape *t) {
         free(t->entries[i].tdata);
         free(t->entries[i].tgrad);
         free(t->entries[i].shape);
+        free(t->entries[i].aux);
     }
     free(t->entries);
     t->entries = NULL;
@@ -145,6 +146,20 @@ void ad_native_unary_ew(const double *a, double *out, int size, ADOpKind op) {
         case AD_OP_SIGMOID: { double s = 1.0 / (1.0 + exp(-v)); out[i] = s; } break;
         case AD_OP_RELU:    out[i] = v > 0 ? v : 0; break;
         case AD_OP_ABS:     out[i] = fabs(v); break;
+        case AD_OP_GELU: {
+            /* GELU: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3))) */
+            double x3 = v * v * v;
+            double inner = 0.7978845608028654 * (v + 0.044715 * x3);
+            double th = tanh(inner);
+            out[i] = 0.5 * v * (1.0 + th);
+            break;
+        }
+        case AD_OP_SILU: {
+            /* SiLU: x * sigmoid(x) */
+            double s = 1.0 / (1.0 + exp(-v));
+            out[i] = v * s;
+            break;
+        }
         default:            out[i] = v; break;
         }
     }
@@ -245,6 +260,24 @@ void ad_native_backward(ADTape *t, int from_idx) {
                 break;
             case AD_OP_ABS:
                 if (a0 >= 0) t->entries[a0].grad += t->entries[a0].value >= 0 ? g : -g;
+                break;
+            case AD_OP_GELU:
+                if (a0 >= 0) {
+                    double x = t->entries[a0].value;
+                    double x3 = x * x * x;
+                    double inner = 0.7978845608028654 * (x + 0.044715 * x3);
+                    double th = tanh(inner);
+                    double sech2 = 1.0 - th * th;
+                    double d_inner = 0.7978845608028654 * (1.0 + 0.134145 * x * x);
+                    t->entries[a0].grad += g * (0.5 * (1.0 + th) + 0.5 * x * sech2 * d_inner);
+                }
+                break;
+            case AD_OP_SILU:
+                if (a0 >= 0) {
+                    double x = t->entries[a0].value;
+                    double s = 1.0 / (1.0 + exp(-x));
+                    t->entries[a0].grad += g * (s + x * s * (1.0 - s));
+                }
                 break;
             default: break;
             }
@@ -429,6 +462,298 @@ void ad_native_backward(ADTape *t, int from_idx) {
                 }
                 break;
             }
+            case AD_OP_GELU:
+                if (a0 >= 0 && t->entries[a0].tgrad) {
+                    TapeEntry *e0 = &t->entries[a0];
+                    for (int k = 0; k < e0->size; k++) {
+                        double x = e0->tdata[k];
+                        double x3 = x * x * x;
+                        double inner = 0.7978845608028654 * (x + 0.044715 * x3);
+                        double th = tanh(inner);
+                        double sech2 = 1.0 - th * th;
+                        double d_inner = 0.7978845608028654 * (1.0 + 0.134145 * x * x);
+                        e0->tgrad[k] += g[k] * (0.5 * (1.0 + th) + 0.5 * x * sech2 * d_inner);
+                    }
+                }
+                break;
+            case AD_OP_SILU:
+                if (a0 >= 0 && t->entries[a0].tgrad) {
+                    TapeEntry *e0 = &t->entries[a0];
+                    for (int k = 0; k < e0->size; k++) {
+                        double x = e0->tdata[k];
+                        double s = 1.0 / (1.0 + exp(-x));
+                        e0->tgrad[k] += g[k] * (s + x * s * (1.0 - s));
+                    }
+                }
+                break;
+            case AD_OP_SOFTMAX: {
+                /* Backward: s_i * (g_i - sum_j(g_j * s_j)) per slice */
+                if (a0 >= 0 && t->entries[a0].tgrad) {
+                    TapeEntry *e0 = &t->entries[a0];
+                    int axis = cur->aux ? cur->aux[0] : (cur->ndim - 1);
+                    int outer = 1, axis_size = cur->shape[axis], inner = 1;
+                    for (int d = 0; d < axis; d++) outer *= cur->shape[d];
+                    for (int d = axis + 1; d < cur->ndim; d++) inner *= cur->shape[d];
+                    for (int o = 0; o < outer; o++) {
+                        for (int j = 0; j < inner; j++) {
+                            /* Compute dot = sum_k(g_k * s_k) for this slice */
+                            double dot = 0.0;
+                            for (int a = 0; a < axis_size; a++) {
+                                int idx = (o * axis_size + a) * inner + j;
+                                dot += g[idx] * cur->tdata[idx];
+                            }
+                            for (int a = 0; a < axis_size; a++) {
+                                int idx = (o * axis_size + a) * inner + j;
+                                e0->tgrad[idx] += cur->tdata[idx] * (g[idx] - dot);
+                            }
+                        }
+                    }
+                }
+                break;
+            }
+            case AD_OP_SUM_AXIS: {
+                /* Backward: broadcast gradient back along the reduced axis */
+                if (a0 >= 0 && t->entries[a0].tgrad) {
+                    TapeEntry *e0 = &t->entries[a0];
+                    int axis = cur->aux ? cur->aux[0] : 0;
+                    int outer = 1, axis_size = e0->shape[axis], inner = 1;
+                    for (int d = 0; d < axis; d++) outer *= e0->shape[d];
+                    for (int d = axis + 1; d < e0->ndim; d++) inner *= e0->shape[d];
+                    for (int o = 0; o < outer; o++) {
+                        for (int j = 0; j < inner; j++) {
+                            double gv = g[o * inner + j];
+                            for (int a = 0; a < axis_size; a++) {
+                                e0->tgrad[(o * axis_size + a) * inner + j] += gv;
+                            }
+                        }
+                    }
+                }
+                break;
+            }
+            case AD_OP_MEAN_AXIS: {
+                if (a0 >= 0 && t->entries[a0].tgrad) {
+                    TapeEntry *e0 = &t->entries[a0];
+                    int axis = cur->aux ? cur->aux[0] : 0;
+                    int outer = 1, axis_size = e0->shape[axis], inner = 1;
+                    for (int d = 0; d < axis; d++) outer *= e0->shape[d];
+                    for (int d = axis + 1; d < e0->ndim; d++) inner *= e0->shape[d];
+                    double inv_n = 1.0 / axis_size;
+                    for (int o = 0; o < outer; o++) {
+                        for (int j = 0; j < inner; j++) {
+                            double gv = g[o * inner + j] * inv_n;
+                            for (int a = 0; a < axis_size; a++) {
+                                e0->tgrad[(o * axis_size + a) * inner + j] += gv;
+                            }
+                        }
+                    }
+                }
+                break;
+            }
+            case AD_OP_RESHAPE: {
+                /* Backward: copy gradient flat (same layout, just different shape) */
+                if (a0 >= 0 && t->entries[a0].tgrad) {
+                    for (int k = 0; k < t->entries[a0].size; k++)
+                        t->entries[a0].tgrad[k] += g[k];
+                }
+                break;
+            }
+            case AD_OP_SLICE: {
+                /* Backward: scatter gradient back to original positions */
+                if (a0 >= 0 && t->entries[a0].tgrad) {
+                    TapeEntry *e0 = &t->entries[a0];
+                    int ndim = e0->ndim;
+                    int *begin = cur->aux;
+                    int *size = cur->aux + ndim;
+                    /* Iterate over output (slice) elements */
+                    int out_size = cur->size;
+                    for (int flat = 0; flat < out_size; flat++) {
+                        /* Convert flat index to multi-dim in output shape */
+                        int rem = flat;
+                        int src_flat = 0;
+                        int src_stride = 1;
+                        /* Compute strides for input */
+                        int strides[8];
+                        strides[ndim - 1] = 1;
+                        for (int d = ndim - 2; d >= 0; d--)
+                            strides[d] = strides[d + 1] * e0->shape[d + 1];
+                        /* Map output flat index to input flat index */
+                        src_flat = 0;
+                        for (int d = 0; d < ndim; d++) {
+                            int out_stride = 1;
+                            for (int dd = d + 1; dd < ndim; dd++) out_stride *= size[dd];
+                            int coord = rem / out_stride;
+                            rem %= out_stride;
+                            src_flat += (begin[d] + coord) * strides[d];
+                        }
+                        e0->tgrad[src_flat] += g[flat];
+                    }
+                }
+                break;
+            }
+            case AD_OP_CONCAT: {
+                /* Backward: slice gradient into chunks for each input */
+                if (!cur->aux) break;
+                int axis = cur->aux[0];
+                int n_inputs = cur->aux[1];
+                int outer = 1, inner = 1;
+                for (int d = 0; d < axis; d++) outer *= cur->shape[d];
+                for (int d = axis + 1; d < cur->ndim; d++) inner *= cur->shape[d];
+                int offset = 0;
+                for (int inp = 0; inp < n_inputs; inp++) {
+                    int ti = cur->aux[2 + inp];
+                    if (ti >= 0 && t->entries[ti].tgrad) {
+                        TapeEntry *ei = &t->entries[ti];
+                        int ai_size = ei->shape[axis];
+                        for (int o = 0; o < outer; o++) {
+                            for (int a = 0; a < ai_size; a++) {
+                                for (int j = 0; j < inner; j++) {
+                                    int src_idx = (o * cur->shape[axis] + offset + a) * inner + j;
+                                    int dst_idx = (o * ai_size + a) * inner + j;
+                                    ei->tgrad[dst_idx] += g[src_idx];
+                                }
+                            }
+                        }
+                        offset += ai_size;
+                    }
+                }
+                break;
+            }
+            case AD_OP_GATHER: {
+                /* Backward: scatter-add gradient to indexed positions */
+                if (a0 >= 0 && t->entries[a0].tgrad) {
+                    TapeEntry *e0 = &t->entries[a0];
+                    int axis = cur->aux[0];
+                    int n_idx = cur->aux[1];
+                    int outer = 1, inner = 1;
+                    for (int d = 0; d < axis; d++) outer *= e0->shape[d];
+                    for (int d = axis + 1; d < e0->ndim; d++) inner *= e0->shape[d];
+                    for (int o = 0; o < outer; o++) {
+                        for (int ii = 0; ii < n_idx; ii++) {
+                            int src_a = cur->aux[2 + ii];
+                            for (int j = 0; j < inner; j++) {
+                                int g_idx = (o * n_idx + ii) * inner + j;
+                                int s_idx = (o * e0->shape[axis] + src_a) * inner + j;
+                                e0->tgrad[s_idx] += g[g_idx];
+                            }
+                        }
+                    }
+                }
+                break;
+            }
+            case AD_OP_LAYER_NORM: {
+                /* Backward for layer norm: grad flows to input, gamma, beta */
+                if (!cur->aux) break;
+                TapeEntry *input_e = &t->entries[a0];
+                TapeEntry *gamma_e = (a1 >= 0) ? &t->entries[a1] : NULL;
+                int beta_idx = cur->aux[0];
+                TapeEntry *beta_e = (beta_idx >= 0) ? &t->entries[beta_idx] : NULL;
+                double eps;
+                memcpy(&eps, &cur->aux[1], sizeof(double));
+
+                int last_dim = input_e->shape[input_e->ndim - 1];
+                int n_slices = input_e->size / last_dim;
+
+                for (int s = 0; s < n_slices; s++) {
+                    const double *x_row = input_e->tdata + s * last_dim;
+                    const double *g_row = g + s * last_dim;
+
+                    /* Recompute mean, var for this slice */
+                    double mean_v = 0.0;
+                    for (int j = 0; j < last_dim; j++) mean_v += x_row[j];
+                    mean_v /= last_dim;
+                    double var_v = 0.0;
+                    for (int j = 0; j < last_dim; j++) {
+                        double d = x_row[j] - mean_v;
+                        var_v += d * d;
+                    }
+                    var_v /= last_dim;
+                    double inv_std = 1.0 / sqrt(var_v + eps);
+
+                    /* Compute x_hat and accumulate */
+                    double sum_dxhat = 0.0, sum_dxhat_xhat = 0.0;
+                    for (int j = 0; j < last_dim; j++) {
+                        double x_hat = (x_row[j] - mean_v) * inv_std;
+                        double dxhat = g_row[j] * (gamma_e ? gamma_e->tdata[j] : 1.0);
+                        sum_dxhat += dxhat;
+                        sum_dxhat_xhat += dxhat * x_hat;
+                    }
+
+                    /* dx */
+                    if (input_e->tgrad) {
+                        for (int j = 0; j < last_dim; j++) {
+                            double x_hat = (x_row[j] - mean_v) * inv_std;
+                            double dxhat = g_row[j] * (gamma_e ? gamma_e->tdata[j] : 1.0);
+                            input_e->tgrad[s * last_dim + j] +=
+                                inv_std / last_dim * (last_dim * dxhat - sum_dxhat - x_hat * sum_dxhat_xhat);
+                        }
+                    }
+                    /* dgamma */
+                    if (gamma_e && gamma_e->tgrad) {
+                        for (int j = 0; j < last_dim; j++) {
+                            double x_hat = (x_row[j] - mean_v) * inv_std;
+                            gamma_e->tgrad[j] += g_row[j] * x_hat;
+                        }
+                    }
+                    /* dbeta */
+                    if (beta_e && beta_e->tgrad) {
+                        for (int j = 0; j < last_dim; j++) {
+                            beta_e->tgrad[j] += g_row[j];
+                        }
+                    }
+                }
+                break;
+            }
+            case AD_OP_WHERE: {
+                /* Backward: da += cond ? g : 0, db += cond ? 0 : g */
+                TapeEntry *cond_e = &t->entries[a0];
+                if (a1 >= 0 && t->entries[a1].tgrad) {
+                    for (int k = 0; k < cur->size; k++) {
+                        double c = cond_e->tdata[k % cond_e->size];
+                        t->entries[a1].tgrad[k % t->entries[a1].size] += (c != 0.0) ? g[k] : 0.0;
+                    }
+                }
+                if (cur->aux) {
+                    int b_idx = cur->aux[0];
+                    if (b_idx >= 0 && t->entries[b_idx].tgrad) {
+                        TapeEntry *eb = &t->entries[b_idx];
+                        for (int k = 0; k < cur->size; k++) {
+                            double c = cond_e->tdata[k % cond_e->size];
+                            eb->tgrad[k % eb->size] += (c == 0.0) ? g[k] : 0.0;
+                        }
+                    }
+                }
+                break;
+            }
+            case AD_OP_BATCH_MATMUL: {
+                /* Batched: dA = dC @ B^T, dB = A^T @ dC per batch slice */
+                if (a0 < 0 || a1 < 0) break;
+                TapeEntry *ea = &t->entries[a0];
+                TapeEntry *eb = &t->entries[a1];
+                int nd = ea->ndim;
+                int m = ea->shape[nd - 2], kk = ea->shape[nd - 1];
+                int n2 = eb->shape[nd - 1];
+                int batch = ea->size / (m * kk);
+                for (int b = 0; b < batch; b++) {
+                    const double *g_slice = g + b * m * n2;
+                    if (ea->tgrad) {
+                        double *bt = tensor_alloc(kk * n2);
+                        ad_tensor_ops.transpose(eb->tdata + b * kk * n2, bt, kk, n2);
+                        double *da = tensor_alloc(m * kk);
+                        ad_tensor_ops.matmul(g_slice, bt, da, m, n2, kk);
+                        for (int j = 0; j < m * kk; j++) ea->tgrad[b * m * kk + j] += da[j];
+                        free(bt); free(da);
+                    }
+                    if (eb->tgrad) {
+                        double *at = tensor_alloc(kk * m);
+                        ad_tensor_ops.transpose(ea->tdata + b * m * kk, at, m, kk);
+                        double *db = tensor_alloc(kk * n2);
+                        ad_tensor_ops.matmul(at, g_slice, db, kk, m, n2);
+                        for (int j = 0; j < kk * n2; j++) eb->tgrad[b * kk * n2 + j] += db[j];
+                        free(at); free(db);
+                    }
+                }
+                break;
+            }
             default: break;
             }
         }
@@ -456,7 +781,16 @@ void register_ad_types(sexp ctx) {
     ad_tensor_ops.backward  = ad_native_backward;
 
 #ifdef EVAL_HAVE_TF
+    /* Delay-loaded on Windows: catch missing tensorflow.dll gracefully */
+#if defined(_WIN32) && defined(_MSC_VER)
+    __try {
+        eval_tf_init();
+    } __except(EXCEPTION_EXECUTE_HANDLER) {
+        /* tensorflow.dll not found — keep native C ops */
+    }
+#else
     eval_tf_init();
+#endif
 #endif
 
     sexp_gc_var2(name, type);
@@ -699,6 +1033,17 @@ static sexp bridge_ad_unary(sexp ctx, sexp self, sexp_sint_t n,
     case AD_OP_SIGMOID: ne.value = 1.0 / (1.0 + exp(-va)); break;
     case AD_OP_RELU:    ne.value = va > 0 ? va : 0; break;
     case AD_OP_ABS:     ne.value = fabs(va); break;
+    case AD_OP_GELU: {
+        double x3 = va * va * va;
+        double inner = 0.7978845608028654 * (va + 0.044715 * x3);
+        ne.value = 0.5 * va * (1.0 + tanh(inner));
+        break;
+    }
+    case AD_OP_SILU: {
+        double s = 1.0 / (1.0 + exp(-va));
+        ne.value = va * s;
+        break;
+    }
     default:            ne.value = va; break;
     }
 
@@ -1109,6 +1454,644 @@ static sexp bridge_ad_tensor_reduce(sexp ctx, sexp self, sexp_sint_t n,
 }
 
 /* ================================================================
+ * Bridge: Softmax (axis-aware)
+ * ================================================================ */
+
+/* __ad_softmax__(tensor, axis) -> Tensor */
+static sexp bridge_ad_softmax(sexp ctx, sexp self, sexp_sint_t n,
+                               sexp a, sexp axis_s) {
+    ADTape *t = ad_global_tape();
+    if (!ad_tensorp(a))
+        return sexp_user_exception(ctx, self, "softmax: expected tensor", a);
+    int ia = unwrap_tensor(a);
+    TapeEntry *ea = &t->entries[ia];
+    int axis = (int)sexp_unbox_fixnum(axis_s);
+    if (axis < 0) axis += ea->ndim;
+
+    int outer = 1, axis_size = ea->shape[axis], inner = 1;
+    for (int d = 0; d < axis; d++) outer *= ea->shape[d];
+    for (int d = axis + 1; d < ea->ndim; d++) inner *= ea->shape[d];
+
+    TapeEntry ne = {0};
+    ne.op = AD_OP_SOFTMAX;
+    ne.arg0 = ia; ne.arg1 = -1;
+    ne.is_tensor = 1;
+    ne.ndim = ea->ndim;
+    ne.shape = shape_dup(ea->shape, ea->ndim);
+    ne.size = ea->size;
+    ne.tdata = tensor_alloc(ne.size);
+    ne.tgrad = tensor_alloc(ne.size);
+    ne.naux = 1;
+    ne.aux = (int *)malloc(sizeof(int));
+    ne.aux[0] = axis;
+
+    /* Forward: per-slice exp(x - max) / sum(exp(x - max)) */
+    for (int o = 0; o < outer; o++) {
+        for (int j = 0; j < inner; j++) {
+            /* Find max for numerical stability */
+            double mx = -1e308;
+            for (int ai = 0; ai < axis_size; ai++) {
+                int idx = (o * axis_size + ai) * inner + j;
+                if (ea->tdata[idx] > mx) mx = ea->tdata[idx];
+            }
+            double sum_exp = 0.0;
+            for (int ai = 0; ai < axis_size; ai++) {
+                int idx = (o * axis_size + ai) * inner + j;
+                double e = exp(ea->tdata[idx] - mx);
+                ne.tdata[idx] = e;
+                sum_exp += e;
+            }
+            for (int ai = 0; ai < axis_size; ai++) {
+                int idx = (o * axis_size + ai) * inner + j;
+                ne.tdata[idx] /= sum_exp;
+            }
+        }
+    }
+
+    int idx = tape_push(t, ne);
+    return wrap_tensor(ctx, idx);
+}
+
+/* ================================================================
+ * Bridge: Axis-aware sum/mean
+ * ================================================================ */
+
+/* __ad_sum_axis__(tensor, axis) -> Tensor */
+static sexp bridge_ad_sum_axis(sexp ctx, sexp self, sexp_sint_t n,
+                                sexp a, sexp axis_s) {
+    ADTape *t = ad_global_tape();
+    if (!ad_tensorp(a))
+        return sexp_user_exception(ctx, self, "sum_axis: expected tensor", a);
+    int ia = unwrap_tensor(a);
+    TapeEntry *ea = &t->entries[ia];
+    int axis = (int)sexp_unbox_fixnum(axis_s);
+    if (axis < 0) axis += ea->ndim;
+
+    int outer = 1, axis_size = ea->shape[axis], inner = 1;
+    for (int d = 0; d < axis; d++) outer *= ea->shape[d];
+    for (int d = axis + 1; d < ea->ndim; d++) inner *= ea->shape[d];
+
+    /* Output shape: input shape with axis removed */
+    int out_ndim = ea->ndim - 1;
+    if (out_ndim < 1) out_ndim = 1;
+    int *out_shape = (int *)malloc(out_ndim * sizeof(int));
+    if (ea->ndim == 1) {
+        out_shape[0] = 1;
+    } else {
+        int si = 0;
+        for (int d = 0; d < ea->ndim; d++)
+            if (d != axis) out_shape[si++] = ea->shape[d];
+    }
+    int out_size = outer * inner;
+    if (out_size < 1) out_size = 1;
+
+    TapeEntry ne = {0};
+    ne.op = AD_OP_SUM_AXIS;
+    ne.arg0 = ia; ne.arg1 = -1;
+    ne.is_tensor = 1;
+    ne.ndim = out_ndim;
+    ne.shape = out_shape;
+    ne.size = out_size;
+    ne.tdata = tensor_alloc(out_size);
+    ne.tgrad = tensor_alloc(out_size);
+    ne.naux = 1;
+    ne.aux = (int *)malloc(sizeof(int));
+    ne.aux[0] = axis;
+
+    for (int o = 0; o < outer; o++) {
+        for (int j = 0; j < inner; j++) {
+            double s = 0.0;
+            for (int ai = 0; ai < axis_size; ai++)
+                s += ea->tdata[(o * axis_size + ai) * inner + j];
+            ne.tdata[o * inner + j] = s;
+        }
+    }
+
+    int idx = tape_push(t, ne);
+    return wrap_tensor(ctx, idx);
+}
+
+/* __ad_mean_axis__(tensor, axis) -> Tensor */
+static sexp bridge_ad_mean_axis(sexp ctx, sexp self, sexp_sint_t n,
+                                 sexp a, sexp axis_s) {
+    ADTape *t = ad_global_tape();
+    if (!ad_tensorp(a))
+        return sexp_user_exception(ctx, self, "mean_axis: expected tensor", a);
+    int ia = unwrap_tensor(a);
+    TapeEntry *ea = &t->entries[ia];
+    int axis = (int)sexp_unbox_fixnum(axis_s);
+    if (axis < 0) axis += ea->ndim;
+
+    int outer = 1, axis_size = ea->shape[axis], inner = 1;
+    for (int d = 0; d < axis; d++) outer *= ea->shape[d];
+    for (int d = axis + 1; d < ea->ndim; d++) inner *= ea->shape[d];
+
+    int out_ndim = ea->ndim - 1;
+    if (out_ndim < 1) out_ndim = 1;
+    int *out_shape = (int *)malloc(out_ndim * sizeof(int));
+    if (ea->ndim == 1) {
+        out_shape[0] = 1;
+    } else {
+        int si = 0;
+        for (int d = 0; d < ea->ndim; d++)
+            if (d != axis) out_shape[si++] = ea->shape[d];
+    }
+    int out_size = outer * inner;
+    if (out_size < 1) out_size = 1;
+
+    TapeEntry ne = {0};
+    ne.op = AD_OP_MEAN_AXIS;
+    ne.arg0 = ia; ne.arg1 = -1;
+    ne.is_tensor = 1;
+    ne.ndim = out_ndim;
+    ne.shape = out_shape;
+    ne.size = out_size;
+    ne.tdata = tensor_alloc(out_size);
+    ne.tgrad = tensor_alloc(out_size);
+    ne.naux = 1;
+    ne.aux = (int *)malloc(sizeof(int));
+    ne.aux[0] = axis;
+
+    double inv_n = 1.0 / axis_size;
+    for (int o = 0; o < outer; o++) {
+        for (int j = 0; j < inner; j++) {
+            double s = 0.0;
+            for (int ai = 0; ai < axis_size; ai++)
+                s += ea->tdata[(o * axis_size + ai) * inner + j];
+            ne.tdata[o * inner + j] = s * inv_n;
+        }
+    }
+
+    int idx = tape_push(t, ne);
+    return wrap_tensor(ctx, idx);
+}
+
+/* ================================================================
+ * Bridge: Reshape
+ * ================================================================ */
+
+/* __ad_reshape__(tensor, shape_list) -> Tensor */
+static sexp bridge_ad_reshape(sexp ctx, sexp self, sexp_sint_t n,
+                               sexp a, sexp shape_list) {
+    ADTape *t = ad_global_tape();
+    if (!ad_tensorp(a))
+        return sexp_user_exception(ctx, self, "reshape: expected tensor", a);
+    int ia = unwrap_tensor(a);
+    TapeEntry *ea = &t->entries[ia];
+
+    /* Parse new shape from list */
+    int new_ndim = 0;
+    int new_shape[8];
+    sexp p = shape_list;
+    while (sexp_pairp(p) && new_ndim < 8) {
+        new_shape[new_ndim++] = (int)sexp_unbox_fixnum(sexp_car(p));
+        p = sexp_cdr(p);
+    }
+    int new_size = shape_total(new_shape, new_ndim);
+    if (new_size != ea->size)
+        return sexp_user_exception(ctx, self, "reshape: size mismatch", a);
+
+    TapeEntry ne = {0};
+    ne.op = AD_OP_RESHAPE;
+    ne.arg0 = ia; ne.arg1 = -1;
+    ne.is_tensor = 1;
+    ne.ndim = new_ndim;
+    ne.shape = shape_dup(new_shape, new_ndim);
+    ne.size = new_size;
+    ne.tdata = tensor_alloc(new_size);
+    memcpy(ne.tdata, ea->tdata, new_size * sizeof(double));
+    ne.tgrad = tensor_alloc(new_size);
+    /* Store original shape in aux for backward */
+    ne.naux = ea->ndim;
+    ne.aux = (int *)malloc(ea->ndim * sizeof(int));
+    memcpy(ne.aux, ea->shape, ea->ndim * sizeof(int));
+
+    int idx = tape_push(t, ne);
+    return wrap_tensor(ctx, idx);
+}
+
+/* ================================================================
+ * Bridge: Slice
+ * ================================================================ */
+
+/* __ad_slice__(tensor, begin_list, size_list) -> Tensor */
+static sexp bridge_ad_slice(sexp ctx, sexp self, sexp_sint_t n,
+                             sexp a, sexp begin_list, sexp size_list) {
+    ADTape *t = ad_global_tape();
+    if (!ad_tensorp(a))
+        return sexp_user_exception(ctx, self, "slice: expected tensor", a);
+    int ia = unwrap_tensor(a);
+    TapeEntry *ea = &t->entries[ia];
+    int ndim = ea->ndim;
+
+    int begin[8], sz[8];
+    sexp p = begin_list;
+    for (int d = 0; d < ndim && sexp_pairp(p); d++) {
+        begin[d] = (int)sexp_unbox_fixnum(sexp_car(p));
+        p = sexp_cdr(p);
+    }
+    p = size_list;
+    for (int d = 0; d < ndim && sexp_pairp(p); d++) {
+        sz[d] = (int)sexp_unbox_fixnum(sexp_car(p));
+        p = sexp_cdr(p);
+    }
+
+    int out_size = shape_total(sz, ndim);
+
+    TapeEntry ne = {0};
+    ne.op = AD_OP_SLICE;
+    ne.arg0 = ia; ne.arg1 = -1;
+    ne.is_tensor = 1;
+    ne.ndim = ndim;
+    ne.shape = shape_dup(sz, ndim);
+    ne.size = out_size;
+    ne.tdata = tensor_alloc(out_size);
+    ne.tgrad = tensor_alloc(out_size);
+    ne.naux = 2 * ndim;
+    ne.aux = (int *)malloc(2 * ndim * sizeof(int));
+    memcpy(ne.aux, begin, ndim * sizeof(int));
+    memcpy(ne.aux + ndim, sz, ndim * sizeof(int));
+
+    /* Forward: stride-based copy */
+    int in_strides[8], out_strides[8];
+    in_strides[ndim - 1] = 1;
+    out_strides[ndim - 1] = 1;
+    for (int d = ndim - 2; d >= 0; d--) {
+        in_strides[d] = in_strides[d + 1] * ea->shape[d + 1];
+        out_strides[d] = out_strides[d + 1] * sz[d + 1];
+    }
+
+    for (int flat = 0; flat < out_size; flat++) {
+        int rem = flat;
+        int src_flat = 0;
+        for (int d = 0; d < ndim; d++) {
+            int coord = rem / out_strides[d];
+            rem %= out_strides[d];
+            src_flat += (begin[d] + coord) * in_strides[d];
+        }
+        ne.tdata[flat] = ea->tdata[src_flat];
+    }
+
+    int idx = tape_push(t, ne);
+    return wrap_tensor(ctx, idx);
+}
+
+/* ================================================================
+ * Bridge: Concat
+ * ================================================================ */
+
+/* __ad_concat__(tensor_list, axis) -> Tensor */
+static sexp bridge_ad_concat(sexp ctx, sexp self, sexp_sint_t n,
+                              sexp tensor_list, sexp axis_s) {
+    ADTape *t = ad_global_tape();
+    int axis = (int)sexp_unbox_fixnum(axis_s);
+
+    /* Count inputs and collect tape indices */
+    int n_inputs = 0;
+    int tape_indices[64];
+    sexp p = tensor_list;
+    while (sexp_pairp(p) && n_inputs < 64) {
+        sexp ti = sexp_car(p);
+        if (!ad_tensorp(ti))
+            return sexp_user_exception(ctx, self, "concat: expected tensor list", ti);
+        tape_indices[n_inputs++] = unwrap_tensor(ti);
+        p = sexp_cdr(p);
+    }
+    if (n_inputs < 1)
+        return sexp_user_exception(ctx, self, "concat: empty list", tensor_list);
+
+    TapeEntry *e0 = &t->entries[tape_indices[0]];
+    int ndim = e0->ndim;
+    if (axis < 0) axis += ndim;
+
+    /* Compute output shape: sum along axis */
+    int out_shape[8];
+    memcpy(out_shape, e0->shape, ndim * sizeof(int));
+    int total_axis = e0->shape[axis];
+    for (int i = 1; i < n_inputs; i++) {
+        total_axis += t->entries[tape_indices[i]].shape[axis];
+    }
+    out_shape[axis] = total_axis;
+    int out_size = shape_total(out_shape, ndim);
+
+    int outer = 1, inner = 1;
+    for (int d = 0; d < axis; d++) outer *= out_shape[d];
+    for (int d = axis + 1; d < ndim; d++) inner *= out_shape[d];
+
+    TapeEntry ne = {0};
+    ne.op = AD_OP_CONCAT;
+    ne.arg0 = tape_indices[0]; ne.arg1 = -1;
+    ne.is_tensor = 1;
+    ne.ndim = ndim;
+    ne.shape = shape_dup(out_shape, ndim);
+    ne.size = out_size;
+    ne.tdata = tensor_alloc(out_size);
+    ne.tgrad = tensor_alloc(out_size);
+    ne.naux = 2 + n_inputs;
+    ne.aux = (int *)malloc(ne.naux * sizeof(int));
+    ne.aux[0] = axis;
+    ne.aux[1] = n_inputs;
+    for (int i = 0; i < n_inputs; i++) ne.aux[2 + i] = tape_indices[i];
+
+    /* Forward: copy data along axis */
+    int offset = 0;
+    for (int inp = 0; inp < n_inputs; inp++) {
+        TapeEntry *ei = &t->entries[tape_indices[inp]];
+        int ai_size = ei->shape[axis];
+        for (int o = 0; o < outer; o++) {
+            for (int a = 0; a < ai_size; a++) {
+                for (int j = 0; j < inner; j++) {
+                    int dst_idx = (o * total_axis + offset + a) * inner + j;
+                    int src_idx = (o * ai_size + a) * inner + j;
+                    ne.tdata[dst_idx] = ei->tdata[src_idx];
+                }
+            }
+        }
+        offset += ai_size;
+    }
+
+    int idx = tape_push(t, ne);
+    return wrap_tensor(ctx, idx);
+}
+
+/* ================================================================
+ * Bridge: Gather
+ * ================================================================ */
+
+/* __ad_gather__(tensor, indices_list, axis) -> Tensor */
+static sexp bridge_ad_gather(sexp ctx, sexp self, sexp_sint_t n,
+                              sexp a, sexp indices_list, sexp axis_s) {
+    ADTape *t = ad_global_tape();
+    if (!ad_tensorp(a))
+        return sexp_user_exception(ctx, self, "gather: expected tensor", a);
+    int ia = unwrap_tensor(a);
+    TapeEntry *ea = &t->entries[ia];
+    int axis = (int)sexp_unbox_fixnum(axis_s);
+    if (axis < 0) axis += ea->ndim;
+
+    /* Parse indices */
+    int n_idx = 0;
+    int indices[512];
+    sexp p = indices_list;
+    while (sexp_pairp(p) && n_idx < 512) {
+        indices[n_idx++] = (int)sexp_unbox_fixnum(sexp_car(p));
+        p = sexp_cdr(p);
+    }
+
+    int outer = 1, inner = 1;
+    for (int d = 0; d < axis; d++) outer *= ea->shape[d];
+    for (int d = axis + 1; d < ea->ndim; d++) inner *= ea->shape[d];
+
+    /* Output shape: replace axis dim with n_idx */
+    int out_shape[8];
+    memcpy(out_shape, ea->shape, ea->ndim * sizeof(int));
+    out_shape[axis] = n_idx;
+    int out_size = shape_total(out_shape, ea->ndim);
+
+    TapeEntry ne = {0};
+    ne.op = AD_OP_GATHER;
+    ne.arg0 = ia; ne.arg1 = -1;
+    ne.is_tensor = 1;
+    ne.ndim = ea->ndim;
+    ne.shape = shape_dup(out_shape, ea->ndim);
+    ne.size = out_size;
+    ne.tdata = tensor_alloc(out_size);
+    ne.tgrad = tensor_alloc(out_size);
+    ne.naux = 2 + n_idx;
+    ne.aux = (int *)malloc(ne.naux * sizeof(int));
+    ne.aux[0] = axis;
+    ne.aux[1] = n_idx;
+    for (int i = 0; i < n_idx; i++) ne.aux[2 + i] = indices[i];
+
+    /* Forward: index-select along axis */
+    for (int o = 0; o < outer; o++) {
+        for (int ii = 0; ii < n_idx; ii++) {
+            int src_a = indices[ii];
+            for (int j = 0; j < inner; j++) {
+                int dst = (o * n_idx + ii) * inner + j;
+                int src = (o * ea->shape[axis] + src_a) * inner + j;
+                ne.tdata[dst] = ea->tdata[src];
+            }
+        }
+    }
+
+    int idx = tape_push(t, ne);
+    return wrap_tensor(ctx, idx);
+}
+
+/* ================================================================
+ * Bridge: Layer Norm
+ * ================================================================ */
+
+/* __ad_layer_norm__(input, gamma, beta, eps) -> Tensor */
+static sexp bridge_ad_layer_norm(sexp ctx, sexp self, sexp_sint_t n,
+                                  sexp input, sexp gamma, sexp beta, sexp eps_s) {
+    ADTape *t = ad_global_tape();
+    if (!ad_tensorp(input))
+        return sexp_user_exception(ctx, self, "layer_norm: expected tensor", input);
+    int i_in = unwrap_tensor(input);
+    TapeEntry *ei = &t->entries[i_in];
+
+    int i_gamma = -1;
+    if (ad_tensorp(gamma)) i_gamma = unwrap_tensor(gamma);
+
+    int i_beta = -1;
+    if (ad_tensorp(beta)) i_beta = unwrap_tensor(beta);
+
+    double eps = 1e-5;
+    if (sexp_flonump(eps_s)) eps = sexp_flonum_value(eps_s);
+    else if (sexp_fixnump(eps_s)) eps = (double)sexp_unbox_fixnum(eps_s);
+
+    int last_dim = ei->shape[ei->ndim - 1];
+    int n_slices = ei->size / last_dim;
+
+    TapeEntry ne = {0};
+    ne.op = AD_OP_LAYER_NORM;
+    ne.arg0 = i_in;
+    ne.arg1 = i_gamma;
+    ne.is_tensor = 1;
+    ne.ndim = ei->ndim;
+    ne.shape = shape_dup(ei->shape, ei->ndim);
+    ne.size = ei->size;
+    ne.tdata = tensor_alloc(ne.size);
+    ne.tgrad = tensor_alloc(ne.size);
+    /* aux: [beta_tape_idx, eps_lo, eps_hi] — eps as double via memcpy */
+    ne.naux = 3;
+    ne.aux = (int *)malloc(3 * sizeof(int));
+    ne.aux[0] = i_beta;
+    memcpy(&ne.aux[1], &eps, sizeof(double));
+
+    TapeEntry *eg = (i_gamma >= 0) ? &t->entries[i_gamma] : NULL;
+    TapeEntry *eb = (i_beta >= 0) ? &t->entries[i_beta] : NULL;
+
+    /* Forward: (x - mean) / sqrt(var + eps) * gamma + beta */
+    for (int s = 0; s < n_slices; s++) {
+        const double *x_row = ei->tdata + s * last_dim;
+        double *y_row = ne.tdata + s * last_dim;
+        double mean_v = 0.0;
+        for (int j = 0; j < last_dim; j++) mean_v += x_row[j];
+        mean_v /= last_dim;
+        double var_v = 0.0;
+        for (int j = 0; j < last_dim; j++) {
+            double d = x_row[j] - mean_v;
+            var_v += d * d;
+        }
+        var_v /= last_dim;
+        double inv_std = 1.0 / sqrt(var_v + eps);
+        for (int j = 0; j < last_dim; j++) {
+            double x_hat = (x_row[j] - mean_v) * inv_std;
+            double g_val = eg ? eg->tdata[j] : 1.0;
+            double b_val = eb ? eb->tdata[j] : 0.0;
+            y_row[j] = x_hat * g_val + b_val;
+        }
+    }
+
+    int idx = tape_push(t, ne);
+    return wrap_tensor(ctx, idx);
+}
+
+/* ================================================================
+ * Bridge: Where (conditional select)
+ * ================================================================ */
+
+/* __ad_where__(cond, a, b) -> Tensor */
+static sexp bridge_ad_where(sexp ctx, sexp self, sexp_sint_t n,
+                             sexp cond, sexp a, sexp b) {
+    ADTape *t = ad_global_tape();
+    if (!ad_tensorp(cond))
+        return sexp_user_exception(ctx, self, "where: expected tensor for cond", cond);
+    int i_cond = unwrap_tensor(cond);
+
+    int i_a;
+    if (ad_tensorp(a)) {
+        i_a = unwrap_tensor(a);
+    } else {
+        double va = sexp_to_double(a);
+        double *d = tensor_alloc(1);
+        d[0] = va;
+        int *s = (int *)malloc(sizeof(int));
+        s[0] = 1;
+        TapeEntry e = {0};
+        e.op = AD_OP_LEAF; e.arg0 = e.arg1 = -1;
+        e.is_tensor = 1; e.tdata = d; e.tgrad = tensor_alloc(1);
+        e.shape = s; e.ndim = 1; e.size = 1;
+        i_a = tape_push(t, e);
+    }
+
+    int i_b;
+    if (ad_tensorp(b)) {
+        i_b = unwrap_tensor(b);
+    } else {
+        double vb = sexp_to_double(b);
+        double *d = tensor_alloc(1);
+        d[0] = vb;
+        int *s = (int *)malloc(sizeof(int));
+        s[0] = 1;
+        TapeEntry e = {0};
+        e.op = AD_OP_LEAF; e.arg0 = e.arg1 = -1;
+        e.is_tensor = 1; e.tdata = d; e.tgrad = tensor_alloc(1);
+        e.shape = s; e.ndim = 1; e.size = 1;
+        i_b = tape_push(t, e);
+    }
+
+    /* Re-fetch after potential realloc */
+    TapeEntry *ec = &t->entries[i_cond];
+    TapeEntry *ea = &t->entries[i_a];
+    TapeEntry *eb_e = &t->entries[i_b];
+
+    /* Output shape: max of all sizes */
+    int out_size = ec->size;
+    if (ea->size > out_size) out_size = ea->size;
+    if (eb_e->size > out_size) out_size = eb_e->size;
+
+    int out_ndim;
+    int *out_shape;
+    if (ec->size == out_size) { out_ndim = ec->ndim; out_shape = shape_dup(ec->shape, ec->ndim); }
+    else if (ea->size == out_size) { out_ndim = ea->ndim; out_shape = shape_dup(ea->shape, ea->ndim); }
+    else { out_ndim = eb_e->ndim; out_shape = shape_dup(eb_e->shape, eb_e->ndim); }
+
+    TapeEntry ne = {0};
+    ne.op = AD_OP_WHERE;
+    ne.arg0 = i_cond;
+    ne.arg1 = i_a;
+    ne.is_tensor = 1;
+    ne.ndim = out_ndim;
+    ne.shape = out_shape;
+    ne.size = out_size;
+    ne.tdata = tensor_alloc(out_size);
+    ne.tgrad = tensor_alloc(out_size);
+    ne.naux = 1;
+    ne.aux = (int *)malloc(sizeof(int));
+    ne.aux[0] = i_b;
+
+    /* Forward: cond != 0 ? a : b */
+    for (int k = 0; k < out_size; k++) {
+        double cv = ec->tdata[k % ec->size];
+        ne.tdata[k] = (cv != 0.0) ? ea->tdata[k % ea->size] : eb_e->tdata[k % eb_e->size];
+    }
+
+    int idx = tape_push(t, ne);
+    return wrap_tensor(ctx, idx);
+}
+
+/* ================================================================
+ * Bridge: Batch MatMul
+ * ================================================================ */
+
+/* __ad_batch_matmul__(a, b) -> Tensor */
+static sexp bridge_ad_batch_matmul(sexp ctx, sexp self, sexp_sint_t n,
+                                    sexp a, sexp b) {
+    ADTape *t = ad_global_tape();
+    if (!ad_tensorp(a) || !ad_tensorp(b))
+        return sexp_user_exception(ctx, self, "batch_matmul: expected tensors", a);
+    int ia = unwrap_tensor(a);
+    int ib = unwrap_tensor(b);
+    TapeEntry *ea = &t->entries[ia];
+    TapeEntry *eb = &t->entries[ib];
+
+    if (ea->ndim < 3 || eb->ndim < 3)
+        return sexp_user_exception(ctx, self, "batch_matmul: need 3D+ tensors", a);
+
+    int nd = ea->ndim;
+    int m = ea->shape[nd - 2], kk = ea->shape[nd - 1];
+    int n2 = eb->shape[nd - 1];
+    if (kk != eb->shape[nd - 2])
+        return sexp_user_exception(ctx, self, "batch_matmul: shape mismatch", a);
+
+    /* Compute batch dims */
+    int batch = 1;
+    for (int d = 0; d < nd - 2; d++) batch *= ea->shape[d];
+
+    int out_size = batch * m * n2;
+    int *out_shape = (int *)malloc(nd * sizeof(int));
+    for (int d = 0; d < nd - 2; d++) out_shape[d] = ea->shape[d];
+    out_shape[nd - 2] = m;
+    out_shape[nd - 1] = n2;
+
+    TapeEntry ne = {0};
+    ne.op = AD_OP_BATCH_MATMUL;
+    ne.arg0 = ia;
+    ne.arg1 = ib;
+    ne.is_tensor = 1;
+    ne.ndim = nd;
+    ne.shape = out_shape;
+    ne.size = out_size;
+    ne.tdata = tensor_alloc(out_size);
+    ne.tgrad = tensor_alloc(out_size);
+
+    /* Forward: per-batch matmul */
+    for (int bi = 0; bi < batch; bi++) {
+        ad_tensor_ops.matmul(ea->tdata + bi * m * kk,
+                             eb->tdata + bi * kk * n2,
+                             ne.tdata + bi * m * n2,
+                             m, kk, n2);
+    }
+
+    int idx = tape_push(t, ne);
+    return wrap_tensor(ctx, idx);
+}
+
+/* ================================================================
  * Bridge: Dual number operations
  * ================================================================ */
 
@@ -1197,6 +2180,18 @@ void register_ad_bridge_functions(sexp ctx, sexp env) {
     sexp_define_foreign(ctx, env, "__ad_tensor_unary__", 2, bridge_ad_tensor_unary);
     sexp_define_foreign(ctx, env, "__ad_tensor_reduce__", 2, bridge_ad_tensor_reduce);
 
+    /* New tensor ops */
+    sexp_define_foreign(ctx, env, "__ad_softmax__", 2, bridge_ad_softmax);
+    sexp_define_foreign(ctx, env, "__ad_sum_axis__", 2, bridge_ad_sum_axis);
+    sexp_define_foreign(ctx, env, "__ad_mean_axis__", 2, bridge_ad_mean_axis);
+    sexp_define_foreign(ctx, env, "__ad_reshape__", 2, bridge_ad_reshape);
+    sexp_define_foreign(ctx, env, "__ad_slice__", 3, bridge_ad_slice);
+    sexp_define_foreign(ctx, env, "__ad_concat__", 2, bridge_ad_concat);
+    sexp_define_foreign(ctx, env, "__ad_gather__", 3, bridge_ad_gather);
+    sexp_define_foreign(ctx, env, "__ad_layer_norm__", 4, bridge_ad_layer_norm);
+    sexp_define_foreign(ctx, env, "__ad_where__", 3, bridge_ad_where);
+    sexp_define_foreign(ctx, env, "__ad_batch_matmul__", 2, bridge_ad_batch_matmul);
+
     /* Dual */
     sexp_define_foreign(ctx, env, "__ad_make_dual__", 2, bridge_ad_make_dual);
     sexp_define_foreign(ctx, env, "__ad_dual_p__", 1, bridge_ad_dual_p);
@@ -1231,4 +2226,16 @@ void register_ad_bridge_functions(sexp ctx, sexp env) {
     sexp_env_define(ctx, env, sexp_intern(ctx, "AD_OP_SUM", -1), sexp_make_fixnum(AD_OP_SUM));
     sexp_env_define(ctx, env, sexp_intern(ctx, "AD_OP_MEAN", -1), sexp_make_fixnum(AD_OP_MEAN));
     sexp_env_define(ctx, env, sexp_intern(ctx, "AD_OP_TRANSPOSE", -1), sexp_make_fixnum(AD_OP_TRANSPOSE));
+    sexp_env_define(ctx, env, sexp_intern(ctx, "AD_OP_SOFTMAX", -1), sexp_make_fixnum(AD_OP_SOFTMAX));
+    sexp_env_define(ctx, env, sexp_intern(ctx, "AD_OP_GELU", -1), sexp_make_fixnum(AD_OP_GELU));
+    sexp_env_define(ctx, env, sexp_intern(ctx, "AD_OP_SILU", -1), sexp_make_fixnum(AD_OP_SILU));
+    sexp_env_define(ctx, env, sexp_intern(ctx, "AD_OP_SUM_AXIS", -1), sexp_make_fixnum(AD_OP_SUM_AXIS));
+    sexp_env_define(ctx, env, sexp_intern(ctx, "AD_OP_MEAN_AXIS", -1), sexp_make_fixnum(AD_OP_MEAN_AXIS));
+    sexp_env_define(ctx, env, sexp_intern(ctx, "AD_OP_RESHAPE", -1), sexp_make_fixnum(AD_OP_RESHAPE));
+    sexp_env_define(ctx, env, sexp_intern(ctx, "AD_OP_SLICE", -1), sexp_make_fixnum(AD_OP_SLICE));
+    sexp_env_define(ctx, env, sexp_intern(ctx, "AD_OP_CONCAT", -1), sexp_make_fixnum(AD_OP_CONCAT));
+    sexp_env_define(ctx, env, sexp_intern(ctx, "AD_OP_GATHER", -1), sexp_make_fixnum(AD_OP_GATHER));
+    sexp_env_define(ctx, env, sexp_intern(ctx, "AD_OP_LAYER_NORM", -1), sexp_make_fixnum(AD_OP_LAYER_NORM));
+    sexp_env_define(ctx, env, sexp_intern(ctx, "AD_OP_WHERE", -1), sexp_make_fixnum(AD_OP_WHERE));
+    sexp_env_define(ctx, env, sexp_intern(ctx, "AD_OP_BATCH_MATMUL", -1), sexp_make_fixnum(AD_OP_BATCH_MATMUL));
 }

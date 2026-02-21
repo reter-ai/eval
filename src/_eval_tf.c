@@ -137,6 +137,16 @@ static void tf_backward(ADTape *t, int from_idx) {
         TapeEntry *e = &t->entries[i];
         if (e->arg0 >= 0) reachable[e->arg0] = 1;
         if (e->arg1 >= 0) reachable[e->arg1] = 1;
+        /* Multi-input ops: mark aux tape indices as reachable */
+        if (e->op == AD_OP_CONCAT && e->aux) {
+            int ni = e->aux[1];
+            for (int j = 0; j < ni; j++)
+                if (e->aux[2 + j] >= 0) reachable[e->aux[2 + j]] = 1;
+        } else if (e->op == AD_OP_WHERE && e->aux) {
+            if (e->aux[0] >= 0) reachable[e->aux[0]] = 1;
+        } else if (e->op == AD_OP_LAYER_NORM && e->aux) {
+            if (e->aux[0] >= 0) reachable[e->aux[0]] = 1;
+        }
     }
 
     TF_Status *status = TF_NewStatus();
@@ -266,6 +276,210 @@ static void tf_backward(ADTape *t, int from_idx) {
             TF_OperationDescription *desc = TF_NewOperation(graph, reduce_op, name_buf);
             TF_AddInput(desc, a0_out);
             TF_AddInput(desc, axes_out);
+            TF_Operation *op = TF_FinishOperation(desc, status);
+            outputs[i] = (TF_Output){op, 0};
+        } else if (e->op == AD_OP_SOFTMAX) {
+            /* TF Softmax op */
+            TF_OperationDescription *desc = TF_NewOperation(graph, "Softmax", name_buf);
+            TF_AddInput(desc, a0_out);
+            TF_Operation *op = TF_FinishOperation(desc, status);
+            outputs[i] = (TF_Output){op, 0};
+        } else if (e->op == AD_OP_GELU) {
+            /* Compose: 0.5 * x * (1 + Tanh(sqrt(2/pi) * (x + 0.044715 * x^3))) */
+            char nb[64];
+            /* x^3 */
+            snprintf(nb, sizeof(nb), "c3_%d", i);
+            TF_Tensor *ct3 = tf_scalar_tensor(3.0);
+            TF_Output three = tf_add_const(graph, status, nb, ct3);
+            TF_DeleteTensor(ct3);
+            snprintf(nb, sizeof(nb), "pow3_%d", i);
+            TF_Output x3 = tf_add_binary(graph, status, "Pow", nb, a0_out, three);
+            /* 0.044715 * x^3 */
+            snprintf(nb, sizeof(nb), "c044_%d", i);
+            TF_Tensor *ct044 = tf_scalar_tensor(0.044715);
+            TF_Output k044 = tf_add_const(graph, status, nb, ct044);
+            TF_DeleteTensor(ct044);
+            snprintf(nb, sizeof(nb), "kx3_%d", i);
+            TF_Output kx3 = tf_add_binary(graph, status, "Mul", nb, k044, x3);
+            /* x + 0.044715*x^3 */
+            snprintf(nb, sizeof(nb), "xpkx3_%d", i);
+            TF_Output xpkx3 = tf_add_binary(graph, status, "AddV2", nb, a0_out, kx3);
+            /* sqrt(2/pi) * (...) */
+            snprintf(nb, sizeof(nb), "csqrt2pi_%d", i);
+            TF_Tensor *ctsq = tf_scalar_tensor(0.7978845608028654);
+            TF_Output sq2pi = tf_add_const(graph, status, nb, ctsq);
+            TF_DeleteTensor(ctsq);
+            snprintf(nb, sizeof(nb), "inner_%d", i);
+            TF_Output inner = tf_add_binary(graph, status, "Mul", nb, sq2pi, xpkx3);
+            /* tanh */
+            snprintf(nb, sizeof(nb), "th_%d", i);
+            TF_Output th = tf_add_unary(graph, status, "Tanh", nb, inner);
+            /* 1 + tanh(...) */
+            snprintf(nb, sizeof(nb), "c1_%d", i);
+            TF_Tensor *ct1 = tf_scalar_tensor(1.0);
+            TF_Output one = tf_add_const(graph, status, nb, ct1);
+            TF_DeleteTensor(ct1);
+            snprintf(nb, sizeof(nb), "onepth_%d", i);
+            TF_Output onepth = tf_add_binary(graph, status, "AddV2", nb, one, th);
+            /* 0.5 * x */
+            snprintf(nb, sizeof(nb), "chalf_%d", i);
+            TF_Tensor *cth = tf_scalar_tensor(0.5);
+            TF_Output half = tf_add_const(graph, status, nb, cth);
+            TF_DeleteTensor(cth);
+            snprintf(nb, sizeof(nb), "halfx_%d", i);
+            TF_Output halfx = tf_add_binary(graph, status, "Mul", nb, half, a0_out);
+            /* result */
+            outputs[i] = tf_add_binary(graph, status, "Mul", name_buf, halfx, onepth);
+        } else if (e->op == AD_OP_SILU) {
+            /* Mul(x, Sigmoid(x)) */
+            char nb[64];
+            snprintf(nb, sizeof(nb), "sig_%d", i);
+            TF_Output sig = tf_add_unary(graph, status, "Sigmoid", nb, a0_out);
+            outputs[i] = tf_add_binary(graph, status, "Mul", name_buf, a0_out, sig);
+        } else if (e->op == AD_OP_SUM_AXIS || e->op == AD_OP_MEAN_AXIS) {
+            /* Reduce along specific axis */
+            const char *reduce_op = (e->op == AD_OP_SUM_AXIS) ? "Sum" : "Mean";
+            int axis = e->aux ? e->aux[0] : 0;
+            char ax_name[64];
+            snprintf(ax_name, sizeof(ax_name), "ax%d", i);
+            int64_t ax_dims[1] = {1};
+            TF_Tensor *ax_t = TF_AllocateTensor(TF_INT32, ax_dims, 1, sizeof(int32_t));
+            *(int32_t *)TF_TensorData(ax_t) = (int32_t)axis;
+            TF_Output ax_out = tf_add_const(graph, status, ax_name, ax_t);
+            TF_DeleteTensor(ax_t);
+            if (TF_GetCode(status) != TF_OK) { graph_ok = 0; break; }
+            TF_OperationDescription *desc = TF_NewOperation(graph, reduce_op, name_buf);
+            TF_AddInput(desc, a0_out);
+            TF_AddInput(desc, ax_out);
+            TF_Operation *op = TF_FinishOperation(desc, status);
+            outputs[i] = (TF_Output){op, 0};
+        } else if (e->op == AD_OP_RESHAPE) {
+            /* Reshape with shape const */
+            char sh_name[64];
+            snprintf(sh_name, sizeof(sh_name), "sh%d", i);
+            int64_t sh_dims[1] = {e->ndim};
+            TF_Tensor *sh_t = TF_AllocateTensor(TF_INT32, sh_dims, 1,
+                                                  e->ndim * sizeof(int32_t));
+            {
+                int32_t *sp = (int32_t *)TF_TensorData(sh_t);
+                for (int j = 0; j < e->ndim; j++) sp[j] = (int32_t)e->shape[j];
+            }
+            TF_Output sh_out = tf_add_const(graph, status, sh_name, sh_t);
+            TF_DeleteTensor(sh_t);
+            if (TF_GetCode(status) != TF_OK) { graph_ok = 0; break; }
+            TF_OperationDescription *desc = TF_NewOperation(graph, "Reshape", name_buf);
+            TF_AddInput(desc, a0_out);
+            TF_AddInput(desc, sh_out);
+            TF_Operation *op = TF_FinishOperation(desc, status);
+            outputs[i] = (TF_Output){op, 0};
+        } else if (e->op == AD_OP_SLICE) {
+            /* Slice with begin + size consts */
+            int ndim = e->ndim;
+            char bn[64], sn[64];
+            snprintf(bn, sizeof(bn), "begin%d", i);
+            snprintf(sn, sizeof(sn), "size%d", i);
+            int64_t dims1[1] = {ndim};
+            TF_Tensor *b_t = TF_AllocateTensor(TF_INT32, dims1, 1, ndim * sizeof(int32_t));
+            TF_Tensor *s_t = TF_AllocateTensor(TF_INT32, dims1, 1, ndim * sizeof(int32_t));
+            {
+                int32_t *bp = (int32_t *)TF_TensorData(b_t);
+                int32_t *sp = (int32_t *)TF_TensorData(s_t);
+                for (int j = 0; j < ndim; j++) {
+                    bp[j] = (int32_t)e->aux[j];
+                    sp[j] = (int32_t)e->aux[ndim + j];
+                }
+            }
+            TF_Output b_out = tf_add_const(graph, status, bn, b_t);
+            TF_DeleteTensor(b_t);
+            TF_Output s_out = tf_add_const(graph, status, sn, s_t);
+            TF_DeleteTensor(s_t);
+            if (TF_GetCode(status) != TF_OK) { graph_ok = 0; break; }
+            TF_OperationDescription *desc = TF_NewOperation(graph, "Slice", name_buf);
+            TF_AddInput(desc, a0_out);
+            TF_AddInput(desc, b_out);
+            TF_AddInput(desc, s_out);
+            TF_Operation *op = TF_FinishOperation(desc, status);
+            outputs[i] = (TF_Output){op, 0};
+        } else if (e->op == AD_OP_CONCAT) {
+            /* ConcatV2 with N inputs + axis const */
+            int ni = e->aux[1];
+            char ax_name[64];
+            snprintf(ax_name, sizeof(ax_name), "cax%d", i);
+            int64_t ax_dims[1] = {0};  /* scalar */
+            TF_Tensor *ax_t = TF_AllocateTensor(TF_INT32, NULL, 0, sizeof(int32_t));
+            *(int32_t *)TF_TensorData(ax_t) = (int32_t)e->aux[0];
+            TF_Output ax_out = tf_add_const(graph, status, ax_name, ax_t);
+            TF_DeleteTensor(ax_t);
+            if (TF_GetCode(status) != TF_OK) { graph_ok = 0; break; }
+            TF_OperationDescription *desc = TF_NewOperation(graph, "ConcatV2", name_buf);
+            /* Add input list of N tensors */
+            TF_Output *inp_list = (TF_Output *)malloc(ni * sizeof(TF_Output));
+            for (int j = 0; j < ni; j++) inp_list[j] = outputs[e->aux[2 + j]];
+            TF_AddInputList(desc, inp_list, ni);
+            free(inp_list);
+            /* Add axis input */
+            TF_AddInput(desc, ax_out);
+            TF_SetAttrInt(desc, "N", ni);
+            TF_Operation *op = TF_FinishOperation(desc, status);
+            outputs[i] = (TF_Output){op, 0};
+        } else if (e->op == AD_OP_GATHER) {
+            /* GatherV2 with indices + axis consts */
+            int n_idx = e->aux[1];
+            char idx_name[64], ax_name[64];
+            snprintf(idx_name, sizeof(idx_name), "gidx%d", i);
+            snprintf(ax_name, sizeof(ax_name), "gax%d", i);
+            int64_t idx_dims[1] = {n_idx};
+            TF_Tensor *idx_t = TF_AllocateTensor(TF_INT32, idx_dims, 1,
+                                                   n_idx * sizeof(int32_t));
+            {
+                int32_t *ip = (int32_t *)TF_TensorData(idx_t);
+                for (int j = 0; j < n_idx; j++) ip[j] = (int32_t)e->aux[2 + j];
+            }
+            TF_Output idx_out = tf_add_const(graph, status, idx_name, idx_t);
+            TF_DeleteTensor(idx_t);
+            TF_Tensor *ax_t = TF_AllocateTensor(TF_INT32, NULL, 0, sizeof(int32_t));
+            *(int32_t *)TF_TensorData(ax_t) = (int32_t)e->aux[0];
+            TF_Output ax_out = tf_add_const(graph, status, ax_name, ax_t);
+            TF_DeleteTensor(ax_t);
+            if (TF_GetCode(status) != TF_OK) { graph_ok = 0; break; }
+            TF_OperationDescription *desc = TF_NewOperation(graph, "GatherV2", name_buf);
+            TF_AddInput(desc, a0_out);
+            TF_AddInput(desc, idx_out);
+            TF_AddInput(desc, ax_out);
+            TF_Operation *op = TF_FinishOperation(desc, status);
+            outputs[i] = (TF_Output){op, 0};
+        } else if (e->op == AD_OP_LAYER_NORM) {
+            /* Compose: Mean, Sub, Rsqrt(var+eps), Mul, Add */
+            /* Fall back to native — composing full layer norm in TF C API is fragile */
+            graph_ok = 0;
+            break;
+        } else if (e->op == AD_OP_WHERE) {
+            /* SelectV2 with Cast(cond → bool) */
+            TF_Output a1_out = outputs[e->arg1];
+            int b_idx = e->aux[0];
+            TF_Output b_out = outputs[b_idx];
+            /* Cast cond to bool: cond != 0 */
+            char cast_name[64];
+            snprintf(cast_name, sizeof(cast_name), "cast%d", i);
+            TF_OperationDescription *cdesc = TF_NewOperation(graph, "Cast", cast_name);
+            TF_AddInput(cdesc, a0_out);
+            TF_SetAttrType(cdesc, "SrcT", TF_DOUBLE);
+            TF_SetAttrType(cdesc, "DstT", TF_BOOL);
+            TF_Operation *cop = TF_FinishOperation(cdesc, status);
+            if (TF_GetCode(status) != TF_OK) { graph_ok = 0; break; }
+            TF_Output cond_bool = {cop, 0};
+            TF_OperationDescription *desc = TF_NewOperation(graph, "SelectV2", name_buf);
+            TF_AddInput(desc, cond_bool);
+            TF_AddInput(desc, a1_out);
+            TF_AddInput(desc, b_out);
+            TF_Operation *op = TF_FinishOperation(desc, status);
+            outputs[i] = (TF_Output){op, 0};
+        } else if (e->op == AD_OP_BATCH_MATMUL) {
+            /* BatchMatMulV2 */
+            TF_Output a1_out = outputs[e->arg1];
+            TF_OperationDescription *desc = TF_NewOperation(graph, "BatchMatMulV2", name_buf);
+            TF_AddInput(desc, a0_out);
+            TF_AddInput(desc, a1_out);
             TF_Operation *op = TF_FinishOperation(desc, status);
             outputs[i] = (TF_Output){op, 0};
         } else {
@@ -672,6 +886,11 @@ static void tf_transpose(const double *a, double *b, int m, int n) {
  * ================================================================ */
 
 void eval_tf_init(void) {
+    /* Probe TF availability — triggers delay-load on Windows.
+     * If tensorflow.dll is missing, this call raises a structured
+     * exception caught by the SEH handler in register_ad_types(). */
+    (void)TF_Version();
+
     /* Replace backward with graph-mode version */
     ad_tensor_ops.backward  = tf_backward;
     /* Replace forward ops with TFE eager versions */

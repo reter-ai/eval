@@ -42,13 +42,15 @@ e.eval("""
 - **Networking** — TCP sockets, HTTP client/server with OO wrappers, RAII, and reactive signals
 - **Standalone CLI** — single binary, all scheme files embedded, runs anywhere with no dependencies
 - **Python interop** — call Python from Eval, call Eval from Python, share data bidirectionally
-- **Decimal & Money** — arbitrary-precision `Decimal("0.1")->add(Decimal("0.2"))` is exactly `0.3`, `Money("19.99", "USD")` with currency-safe arithmetic
+- **Quantities & Units** — `Qty(100, "km") / Qty(2, "hr")` with dimensional analysis, unit conversion, SI units, currency (`Qty("19.99", "USD")` with exact Decimal arithmetic)
+- **Decimal** — arbitrary-precision `Decimal("0.1")->add(Decimal("0.2"))` is exactly `0.3`
 - **DateTime & Date** — `DateTime->now()`, `DateTime->parse("2026-02-20T10:30:00Z")`, timezone conversion, `Date->today()`, `TimeDelta` arithmetic
 - **Full numeric tower** — integers, floats, bignums, rationals
 - **Nondeterministic choice** — `amb` operator with backtracking search, `require` constraints, `amb_collect` for all solutions
 - **Logic programming** — miniKanren + Prolog-style: `fact`, `rule`, `run`, `fresh`, `conde`, `===` unification, interleaving search
 - **Forward-chaining rules** — Rete algorithm: `whenever` rules fire automatically when matching facts are asserted, with multi-condition joins and chaining
 - **Category theory** — Maybe/Either/Validation types, Writer/Reader/State monads, `|>` pipe, `>>=` bind, `<>` mappend, `mdo` do-notation, Traversable, lenses, Kleisli composition
+- **Differentiable programming** — forward-mode (dual numbers) and reverse-mode (tape-based) AD with 32 ops: arithmetic, activations (relu, sigmoid, gelu, silu), softmax, axis reductions, reshape, slice, concat, gather, layer norm, where, batch matmul — full transformer training with optional TensorFlow graph-mode GPU acceleration
 - **Binary serialization** — Cap'n Proto zero-copy serialization with runtime schema parsing, wire-compatible with any language
 - **Scheme power** — access any chibi-scheme primitive via backtick identifiers
 
@@ -693,9 +695,32 @@ with(pool = TaskPool(4)) {
 
 All containers support RAII via `with`, non-blocking variants (`try_pop`, `try_push`), and green-thread-aware blocking. See [CONCURRENT.md](CONCURRENT.md) for the full guide.
 
-## Decimals, dates, and money
+## Quantities and units
 
-Exact decimal arithmetic, date/time handling, and currency-safe money type:
+Dimensional analysis with automatic unit tracking, conversion, and dimensional safety:
+
+```
+// Physical quantities with unit arithmetic
+define d = Qty(100, "km");
+define t = Qty(2, "hr");
+define speed = d / t;                                  // Qty(50, "km/hr")
+speed->to("m/s");                                      // Qty(13.889, "m/s")
+
+// Dimensional safety
+Qty(5, "m") + Qty(3, "m");                            // Qty(8, "m")
+Qty(5, "m") + Qty(3, "s");                            // ERROR: incompatible dimensions
+
+// Currency — auto-Decimal, cross-currency protection
+define price = Qty("19.99", "USD");
+price + Qty("1.50", "USD");                            // Qty(21.49, "USD")
+price + Qty(5, "EUR");                                 // ERROR: incompatible dimensions
+```
+
+SI units (length, mass, time, etc.), derived units (newton, joule, watt), and 10 currencies built in. See [UNITS.md](UNITS.md) for the full guide.
+
+## Decimals, dates, and time
+
+Exact decimal arithmetic and date/time handling:
 
 ```
 // Decimal: arbitrary precision, no floating-point errors
@@ -710,11 +735,6 @@ dt->add(TimeDelta(3600))->iso();                       // +1 hour
 
 // Date: calendar dates
 Date(2026, 2, 20)->add_days(7)->format("%B %d, %Y");  // "February 27, 2026"
-
-// Money: Decimal + currency with mismatch protection
-define m = Money("19.99", "USD");
-m->mul(3)->format();                                   // "59.97"
-m->add(Money("10", "EUR"));                           // ERROR: different currencies
 ```
 
 All types integrate with f-strings: `f"total: {Decimal("1.23")}"`. See [DECIMALSANDDATES.md](DECIMALSANDDATES.md) for the full guide.
@@ -929,7 +949,7 @@ with(pool = TaskPool(4)) {
 
 Each worker runs green threads, so multiple tasks on the same worker execute concurrently. See [TASKS.md](TASKS.md) for the full guide.
 
-See [ASYNC.md](ASYNC.md) for the full async programming guide, [TASKS.md](TASKS.md) for the TaskPool guide, [THREADS.md](THREADS.md) for the complete threads and continuations guide, [MULTITHREADING.md](MULTITHREADING.md) for OO synchronization wrappers, [CONCURRENT.md](CONCURRENT.md) for thread-safe containers, [GENERATORS.md](GENERATORS.md) for generators and lazy sequences, [FSTRINGS.md](FSTRINGS.md) for interpolated strings, [DECIMALSANDDATES.md](DECIMALSANDDATES.md) for decimals/dates/money, [NETWORKING.md](NETWORKING.md) for TCP/HTTP networking, [FILESYS.md](FILESYS.md) for filesystem operations, [LISTS.md](LISTS.md)/[VECTORS.md](VECTORS.md) for collection methods, [CATEGORY.md](CATEGORY.md) for category theory (Maybe, Either, monads, lenses), [BINARY.md](BINARY.md) for Cap'n Proto binary serialization, [GRAMMARS.md](GRAMMARS.md) for runtime parser generation, [AMB.md](AMB.md) for nondeterministic choice, [PROLOG.md](PROLOG.md) for logic programming, [RETE.md](RETE.md) for forward-chaining rules, and [TESTS.md](TESTS.md) for the built-in test framework.
+See [ASYNC.md](ASYNC.md) for the full async programming guide, [TASKS.md](TASKS.md) for the TaskPool guide, [THREADS.md](THREADS.md) for the complete threads and continuations guide, [MULTITHREADING.md](MULTITHREADING.md) for OO synchronization wrappers, [CONCURRENT.md](CONCURRENT.md) for thread-safe containers, [GENERATORS.md](GENERATORS.md) for generators and lazy sequences, [FSTRINGS.md](FSTRINGS.md) for interpolated strings, [UNITS.md](UNITS.md) for quantities/units/currency, [DECIMALSANDDATES.md](DECIMALSANDDATES.md) for decimals/dates, [NETWORKING.md](NETWORKING.md) for TCP/HTTP networking, [FILESYS.md](FILESYS.md) for filesystem operations, [LISTS.md](LISTS.md)/[VECTORS.md](VECTORS.md) for collection methods, [CATEGORY.md](CATEGORY.md) for category theory (Maybe, Either, monads, lenses), [BINARY.md](BINARY.md) for Cap'n Proto binary serialization, [GRAMMARS.md](GRAMMARS.md) for runtime parser generation, [AMB.md](AMB.md) for nondeterministic choice, [PROLOG.md](PROLOG.md) for logic programming, [RETE.md](RETE.md) for forward-chaining rules, [TESTS.md](TESTS.md) for the built-in test framework, and [DIFFERENTIAL.md](DIFFERENTIAL.md) for differentiable programming (AD, tensors, TF backend).
 
 ## Category theory
 
@@ -1037,6 +1057,36 @@ define result = with(r = s->Person->mmap("person.bin")) {
 Full Cap'n Proto schema syntax supported — all integer widths, floats, booleans, text, data, lists, enums, multiple structs per schema. Messages are wire-compatible with any Cap'n Proto implementation (C++, Rust, Go, Java, Python, etc.). Memory-mapped files give instant access to large datasets with zero parsing overhead.
 
 See [BINARY.md](BINARY.md) for the full guide including all supported types, memory-mapped files, RAII cleanup, and wire compatibility details.
+
+## Differentiable programming
+
+Forward-mode (dual numbers) and reverse-mode (tape-based) automatic differentiation with optional TensorFlow GPU acceleration:
+
+```javascript
+// Reverse-mode: tensors with automatic gradients
+param W = [[0.1, 0.2], [0.3, 0.4]];
+param x = [[1.0], [2.0]];
+define y = W @ x;
+define loss = sum(y);
+backward(loss);
+W->grad;           // => [[1.0, 2.0], [1.0, 2.0]]
+
+// Forward-mode: composable higher-order derivatives
+define f = function(x) x * x + 2.0 * x;
+grad(f)(3.0);      // => 8.0  (first derivative)
+grad(grad(f))(3.0) // => 2.0  (second derivative)
+
+// Transformer building blocks — all differentiable
+define scores = Q @ transpose(K) / sqrt(d_k);
+define attn = softmax(scores);                    // axis-aware, numerically stable
+define normed = layer_norm(input, gamma, beta);   // fused layer normalization
+define activated = gelu(projected);                // GELU activation
+define embedded = gather(embeddings, token_ids);   // differentiable embedding lookup
+```
+
+32 differentiable ops including arithmetic, activations (relu, sigmoid, gelu, silu), softmax, axis-aware sum/mean, reshape, slice, concat, gather, layer norm, where, and batch matmul. When TensorFlow's C library is available, the backward pass compiles to a TF computation graph for op fusion and GPU acceleration — fully transparent to user code.
+
+See [DIFFERENTIAL.md](DIFFERENTIAL.md) for the full guide including examples (linear regression, MLP, transformer attention, YOLO detection head, RNN), the TF backend architecture, and the complete op reference.
 
 ## Grammar JIT
 

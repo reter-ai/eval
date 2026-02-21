@@ -244,6 +244,12 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
         register_decimal_type(self->ctx, self->env);
     }
 
+    /* Register Quantity type (magnitude + unit-map) */
+    {
+        extern void register_quantity_type(sexp ctx, sexp env);
+        register_quantity_type(self->ctx, self->env);
+    }
+
     /* Register AD types (Var, Dual, Tensor) */
     {
         extern void register_ad_types(sexp ctx);
@@ -292,6 +298,12 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
     {
         extern void register_decimal_bridge_functions(sexp ctx, sexp env);
         register_decimal_bridge_functions(self->ctx, self->env);
+    }
+
+    /* Register Quantity bridge functions */
+    {
+        extern void register_quantity_bridge_functions(sexp ctx, sexp env);
+        register_quantity_bridge_functions(self->ctx, self->env);
     }
 
     /* Register AD bridge functions */
@@ -512,8 +524,12 @@ static int ChibiContext_init(ChibiContextObject *self, PyObject *args, PyObject 
     sexp_load_module_file(self->ctx, "eval/decimal-oo.scm", self->env);
     self->env = sexp_context_env(self->ctx);
 
-    /* Money wrapper (pure Scheme, uses Decimal) */
-    sexp_load_module_file(self->ctx, "eval/money-oo.scm", self->env);
+    /* Quantity type: dimensional analysis, unit conversion (replaces Money) */
+    sexp_load_module_file(self->ctx, "eval/quantity-oo.scm", self->env);
+    self->env = sexp_context_env(self->ctx);
+
+    /* SI + currency unit definitions */
+    sexp_load_module_file(self->ctx, "eval/units-defs.scm", self->env);
     self->env = sexp_context_env(self->ctx);
 
     /* Grammar/Parser OO wrappers: Grammar("lark EBNF") constructor */

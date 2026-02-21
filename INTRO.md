@@ -1314,18 +1314,19 @@ current_clock_second()   // seconds since epoch (float)
 current_second()         // alias
 ```
 
-### DateTime, Date, Decimal, Money
+### DateTime, Date, Decimal, Qty
 
-Eval has built-in types for timestamps, calendar dates, exact decimals, and currency. All use `->` method dispatch:
+Eval has built-in types for timestamps, calendar dates, exact decimals, and quantities with units. All use `->` method dispatch:
 
 ```
 DateTime->now()->format("%Y-%m-%d");        // "2026-02-20"
 Date->today()->add_days(7);                 // Date (one week from now)
 Decimal("0.1")->add(Decimal("0.2"));        // Decimal("0.3") — exact
-Money("19.99", "USD")->mul(3)->format();    // "59.97"
+Qty(100, "km") / Qty(2, "hr");             // Qty(50, "km/hr")
+Qty("19.99", "USD") + Qty("1.50", "USD");  // Qty(21.49, "USD")
 ```
 
-See [DECIMALSANDDATES.md](DECIMALSANDDATES.md) for the complete reference.
+See [DECIMALSANDDATES.md](DECIMALSANDDATES.md) for Decimal/DateTime/Date and [UNITS.md](UNITS.md) for quantities, units, and currency.
 
 ### Environment variables
 
@@ -2399,7 +2400,8 @@ See [CATEGORY.md](CATEGORY.md) for the full guide including Reader monad, Traver
 - [LISTS.md](LISTS.md) — List methods: map, filter, sort, fold, join, take, drop, and more
 - [VECTORS.md](VECTORS.md) — Vector methods: map, filter, sort, fold, set, to_list, and more
 - [DICTS.md](DICTS.md) — Dict methods: get, set, map, filter, fold, merge, and more
-- [DECIMALSANDDATES.md](DECIMALSANDDATES.md) — Decimal, DateTime, Date, TimeDelta, Money types
+- [UNITS.md](UNITS.md) — Quantities, units, dimensional analysis, currency (Qty)
+- [DECIMALSANDDATES.md](DECIMALSANDDATES.md) — Decimal, DateTime, Date, TimeDelta types
 - [NETWORKING.md](NETWORKING.md) — TCP sockets, HTTP client/server, OO wrappers, non-blocking I/O
 - [FILESYS.md](FILESYS.md) — File I/O, directory operations, metadata, path utilities
 - [ASYNC.md](ASYNC.md) — Async/await, thread pools, channels, pipelines

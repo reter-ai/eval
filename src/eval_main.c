@@ -293,6 +293,10 @@ static sexp init_context(const char *extra_module_dir) {
         register_decimal_type(ctx, env);
     }
     {
+        extern void register_quantity_type(sexp ctx, sexp env);
+        register_quantity_type(ctx, env);
+    }
+    {
         extern void register_ad_types(sexp ctx);
         register_ad_types(ctx);
     }
@@ -324,6 +328,10 @@ static sexp init_context(const char *extra_module_dir) {
     {
         extern void register_decimal_bridge_functions(sexp ctx, sexp env);
         register_decimal_bridge_functions(ctx, env);
+    }
+    {
+        extern void register_quantity_bridge_functions(sexp ctx, sexp env);
+        register_quantity_bridge_functions(ctx, env);
     }
     {
         extern void register_ad_bridge_functions(sexp ctx, sexp env);
@@ -401,26 +409,9 @@ static sexp init_context(const char *extra_module_dir) {
             "  (__ConcurrentList_1 (if (pair? args) (car args) #f)))", -1, env);
     }
 
-    /* OO string methods: "hello"->upper(), etc. */
-    sexp_load_module_file(ctx, "eval/string-oo.scm", sexp_context_env(ctx));
-
-    /* OO list/vector methods: [1,2,3]->map(...), #[1,2]->length, etc. */
-    sexp_load_module_file(ctx, "eval/collection-oo.scm", sexp_context_env(ctx));
-
-    /* Automatic differentiation: operator overloading, grad, math, SGD */
-    sexp_load_module_file(ctx, "eval/ad.scm", sexp_context_env(ctx));
-
-    /* OO DateTime/Date/TimeDelta methods */
-    sexp_load_module_file(ctx, "eval/datetime-oo.scm", sexp_context_env(ctx));
-
-    /* OO Decimal methods */
-    sexp_load_module_file(ctx, "eval/decimal-oo.scm", sexp_context_env(ctx));
-
-    /* Money wrapper (pure Scheme, uses Decimal) */
-    sexp_load_module_file(ctx, "eval/money-oo.scm", sexp_context_env(ctx));
-
-    /* Logic programming runtime */
-    sexp_load_module_file(ctx, "eval/logic.scm", sexp_context_env(ctx));
+    /* NOTE: OO files (string-oo, collection-oo, ad, datetime-oo, decimal-oo,
+     * quantity-oo, units-defs, grammar-rt, monad, logic) are already loaded
+     * by eval_standard_aliases above.  Do NOT re-load them here. */
 
     return ctx;
 }

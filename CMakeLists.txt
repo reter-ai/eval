@@ -356,6 +356,7 @@ if(BUILD_PYTHON_MODULE)
         src/_eval_rete.c
         src/_eval_datetime.c
         src/_eval_decimal.c
+        src/_eval_quantity.c
         src/_eval_ad.c
         src/eval_embedded_extract.c
         ${EMBEDDED_SCM_C}
@@ -388,6 +389,10 @@ if(BUILD_PYTHON_MODULE)
             _CRT_SECURE_NO_WARNINGS
             SEXP_USE_STRING_STREAMS=0
         )
+        if(TF_LIBRARY AND MSVC)
+            target_link_libraries(_chibi PRIVATE delayimp.lib)
+            target_link_options(_chibi PRIVATE /DELAYLOAD:tensorflow.dll)
+        endif()
     elseif(UNIX)
         target_link_libraries(_chibi PRIVATE re2c_core m ${GRAMMAR_JIT_LIBS} ${CAPNP_LIBS} ${TF_LIBS})
     endif()
@@ -430,6 +435,7 @@ if(BUILD_EVAL_STANDALONE)
         src/_eval_rete.c
         src/_eval_datetime.c
         src/_eval_decimal.c
+        src/_eval_quantity.c
         src/_eval_ad.c
     )
 
@@ -475,6 +481,12 @@ if(BUILD_EVAL_STANDALONE)
             _CRT_SECURE_NO_WARNINGS
             SEXP_USE_STRING_STREAMS=0
         )
+        # Delay-load TF so the exe starts without tensorflow.dll present;
+        # if the DLL is next to the exe or on PATH it gets loaded on first use.
+        if(TF_LIBRARY AND MSVC)
+            target_link_libraries(eval_standalone PRIVATE delayimp.lib)
+            target_link_options(eval_standalone PRIVATE /DELAYLOAD:tensorflow.dll)
+        endif()
     elseif(UNIX)
         target_link_libraries(eval_standalone PRIVATE re2c_core m pthread ${GRAMMAR_JIT_LIBS} ${CAPNP_LIBS} ${TF_LIBS})
     endif()
@@ -493,6 +505,20 @@ if(BUILD_EVAL_STANDALONE)
         target_compile_options(eval_standalone PRIVATE /W3 /wd4244 /wd4267 /wd4996)
     else()
         target_compile_options(eval_standalone PRIVATE -Wno-unused-parameter -Wno-sign-compare)
+    endif()
+
+    # Copy TensorFlow DLL next to executable so it loads at runtime
+    if(TF_LIBRARY AND WIN32)
+        get_filename_component(TF_LIB_DIR "${TF_LIBRARY}" DIRECTORY)
+        get_filename_component(TF_LIB_DIR "${TF_LIB_DIR}" DIRECTORY)  # up from lib/ to prefix/
+        set(TF_DLL "${TF_LIB_DIR}/bin/tensorflow.dll")
+        if(EXISTS "${TF_DLL}")
+            add_custom_command(TARGET eval_standalone POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${TF_DLL}" "$<TARGET_FILE_DIR:eval_standalone>"
+                COMMENT "Copying tensorflow.dll to output directory"
+            )
+        endif()
     endif()
 
     install(TARGETS eval_standalone RUNTIME DESTINATION bin)
